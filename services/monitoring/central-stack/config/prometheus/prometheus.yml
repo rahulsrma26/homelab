@@ -29,11 +29,8 @@ scrape_configs:
       node: ['1']
     static_configs:
       - targets:
-          - 192.168.management.w680    # TODO: replace with actual IPs
-          - 192.168.management.ms01
-          - 192.168.management.od01
-          - 192.168.management.od02
-          - 192.168.management.n100
+          - 192.168.management.machine-1
+          - 192.168.management.machine-2
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
