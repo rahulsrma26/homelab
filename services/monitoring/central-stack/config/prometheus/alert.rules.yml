@@ -1,0 +1,58 @@
+groups:
+  - name: proxmox-hosts
+    rules:
+      - alert: HostDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host {{ $labels.instance }} is down"
+
+      - alert: HighCPU
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%"
+
+      - alert: HighMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory on {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%"
+
+      - alert: DiskSpaceCritical
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} at {{ $value | printf \"%.0f\" }}%"
+
+      - alert: DiskSpaceFull
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} nearly full: {{ $value | printf \"%.0f\" }}%"
+
+      - alert: SmartDriveWear
+        expr: smartctl_device_percentage_used > 80
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drive wear {{ $value }}% on {{ $labels.instance }} device {{ $labels.device }}"
+
+      - alert: SmartHealthFailed
+        expr: smartctl_device_smart_status != 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SMART health FAILED on {{ $labels.instance }} device {{ $labels.device }}"

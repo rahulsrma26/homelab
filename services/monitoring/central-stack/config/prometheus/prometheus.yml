@@ -1,0 +1,46 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - /etc/prometheus/alert.rules.yml
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Proxmox API metrics via pve-exporter
+  # One exporter instance handles all nodes via relabeling
+  - job_name: 'pve-exporter'
+    scrape_interval: 60s
+    metrics_path: /pve
+    params:
+      cluster: ['1']
+      node: ['1']
+    static_configs:
+      - targets:
+          - 192.168.management.w680    # TODO: replace with actual IPs
+          - 192.168.management.ms01
+          - 192.168.management.od01
+          - 192.168.management.od02
+          - 192.168.management.n100
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: pve-exporter:9221
+
+  # proxmox-node-exporters and proxmox-smartctl-exporters are pushed via
+  # Alloy remote_write from each host — no scrape jobs needed here
