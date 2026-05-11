@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 DEPLOY_BASE="/opt/homelab/services"
 TMPDIR="/tmp/homelab-deploy-$$"
@@ -175,17 +175,19 @@ fi
 if [[ "$ACTION" =~ ^[Nn]$ ]]; then
   echo ""
   echo "Edit your .env at $DEST/.env then run:"
-  echo "  docker compose -f $DEST/docker-compose.yml up -d"
+  echo "  cd $DEST && docker compose up -d"
   exit 0
 fi
 
+cd "$DEST"
+
 echo ""
 echo "Pulling latest images..."
-docker compose -f "$DEST/docker-compose.yml" pull
+docker compose pull
 
 echo "Starting service..."
-docker compose -f "$DEST/docker-compose.yml" up -d
+docker compose up -d
 
 echo ""
 echo "Done. $SERVICE is running."
-docker compose -f "$DEST/docker-compose.yml" ps
+docker compose ps
