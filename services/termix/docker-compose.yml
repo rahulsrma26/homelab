@@ -7,8 +7,9 @@ services:
       - "8080:8080"
     environment:
       PORT: "8080"
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
     volumes:
-      - termix-data:/app/data
+      - ${DATA_DIR:-./data}:/app/data
     depends_on:
       - guacd
 
@@ -19,5 +20,3 @@ services:
     expose:
       - "4822"
 
-volumes:
-  termix-data:
