@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+VERSION="0.1.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 DEPLOY_BASE="/opt/homelab/services"
 TMPDIR="/tmp/homelab-deploy-$$"
@@ -11,8 +12,22 @@ SERVICE_ARG=""
 
 for arg in "$@"; do
   case "$arg" in
-    -y) AUTO_YES=1 ;;
-    -*) echo "Unknown flag: $arg"; exit 1 ;;
+    -y|--yes) AUTO_YES=1 ;;
+    -h|--help)
+      echo "deploy.sh v$VERSION"
+      echo ""
+      echo "Usage: deploy.sh [service] [-y] [-h]"
+      echo ""
+      echo "  service    Name of the service to deploy (e.g. monitoring, termix)"
+      echo "  -y|--yes   Auto-yes to all prompts"
+      echo "  -h|--help  Show this help"
+      echo ""
+      echo "Examples:"
+      echo "  deploy.sh                  # interactive menu"
+      echo "  deploy.sh monitoring       # select service, ask questions"
+      echo "  deploy.sh monitoring --yes # fully non-interactive"
+      exit 0 ;;
+    -*) echo "Unknown flag: $arg. Use -h for help."; exit 1 ;;
     *)  SERVICE_ARG="$arg" ;;
   esac
 done
