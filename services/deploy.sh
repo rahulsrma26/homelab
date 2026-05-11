@@ -5,6 +5,29 @@ REPO="https://github.com/rahulsrma26/homelab.git"
 DEPLOY_BASE="/opt/homelab/services"
 TMPDIR="/tmp/homelab-deploy-$$"
 
+# Parse arguments
+AUTO_YES=0
+SERVICE_ARG=""
+
+for arg in "$@"; do
+  case "$arg" in
+    -y) AUTO_YES=1 ;;
+    -*) echo "Unknown flag: $arg"; exit 1 ;;
+    *)  SERVICE_ARG="$arg" ;;
+  esac
+done
+
+# Helper: prompt or auto-yes
+confirm() {
+  local prompt="$1"
+  if [ "$AUTO_YES" = "1" ]; then
+    echo "$prompt [auto: y]"
+    return 0
+  fi
+  read -rp "$prompt [y/N]: " REPLY
+  [[ "$REPLY" =~ ^[Yy]$ ]]
+}
+
 # Cleanup on exit
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -36,22 +59,35 @@ if [ ${#SERVICES[@]} -eq 0 ]; then
   exit 1
 fi
 
-# Show menu
-echo ""
-echo "Available services:"
-for i in "${!SERVICES[@]}"; do
-  printf "  %2d) %s\n" "$((i+1))" "${SERVICES[$i]}"
-done
-echo ""
-
-read -rp "Select service [1-${#SERVICES[@]}]: " SELECTION
-
-if ! [[ "$SELECTION" =~ ^[0-9]+$ ]] || [ "$SELECTION" -lt 1 ] || [ "$SELECTION" -gt "${#SERVICES[@]}" ]; then
-  echo "Invalid selection."
-  exit 1
+# Resolve service from argument or menu
+if [ -n "$SERVICE_ARG" ]; then
+  SERVICE=""
+  for s in "${SERVICES[@]}"; do
+    if [ "$s" = "$SERVICE_ARG" ]; then
+      SERVICE="$s"
+      break
+    fi
+  done
+  if [ -z "$SERVICE" ]; then
+    echo "Service '$SERVICE_ARG' not found. Available services:"
+    for s in "${SERVICES[@]}"; do echo "  $s"; done
+    exit 1
+  fi
+else
+  echo ""
+  echo "Available services:"
+  for i in "${!SERVICES[@]}"; do
+    printf "  %2d) %s\n" "$((i+1))" "${SERVICES[$i]}"
+  done
+  echo ""
+  read -rp "Select service [1-${#SERVICES[@]}]: " SELECTION
+  if ! [[ "$SELECTION" =~ ^[0-9]+$ ]] || [ "$SELECTION" -lt 1 ] || [ "$SELECTION" -gt "${#SERVICES[@]}" ]; then
+    echo "Invalid selection."
+    exit 1
+  fi
+  SERVICE="${SERVICES[$((SELECTION-1))]}"
 fi
 
-SERVICE="${SERVICES[$((SELECTION-1))]}"
 SRC="$TMPDIR/services/$SERVICE"
 DEST="$DEPLOY_BASE/$SERVICE"
 
@@ -59,11 +95,23 @@ echo ""
 echo "Service: $SERVICE"
 echo "Target:  $DEST"
 
+# Show README if available
+if [ -f "$SRC/README.txt" ]; then
+  echo ""
+  echo "----------------------------------------"
+  cat "$SRC/README.txt"
+  echo "----------------------------------------"
+  echo ""
+  if ! confirm "Continue with deployment?"; then
+    echo "Aborted."
+    exit 0
+  fi
+fi
+
 # Existing deployment
 if [ -d "$DEST" ]; then
   echo ""
-  read -rp "Service already deployed. Update? [y/N]: " CONFIRM
-  if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+  if ! confirm "Service already deployed. Update?"; then
     echo "Aborted."
     exit 0
   fi
@@ -79,7 +127,6 @@ if [ -d "$DEST" ]; then
   fi
 
   echo "Updating files (preserving .env)..."
-  # Copy all files except .env
   find "$SRC" -type f | while read -r file; do
     relative="${file#$SRC/}"
     if [ "$relative" = ".env" ]; then
@@ -99,9 +146,22 @@ else
     cp "$DEST/.env.example" "$DEST/.env"
     echo ""
     echo ".env created from .env.example at $DEST/.env"
-    echo "Edit it now, then press Enter to continue (or Ctrl+C to abort)."
-    read -rp "Press Enter when ready: "
   fi
+fi
+
+# Start options
+echo ""
+if [ "$AUTO_YES" = "1" ]; then
+  ACTION="2"
+else
+  read -rp "Start the stack now? [Y/n]: " ACTION
+fi
+
+if [[ "$ACTION" =~ ^[Nn]$ ]]; then
+  echo ""
+  echo "Edit your .env at $DEST/.env then run:"
+  echo "  docker compose -f $DEST/docker-compose.yml up -d"
+  exit 0
 fi
 
 echo ""
