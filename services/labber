@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.2.1"
+VERSION="1.2.2"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -46,13 +46,14 @@ list_installed() {
 pick() {
     local prompt="$1"; shift; local items=("$@")
     (( ${#items[@]} > 0 )) || die "nothing to pick from"
-    echo -e "\n${W}${prompt}${N}"
-    for i in "${!items[@]}"; do printf "  %2d) %s\n" "$((i+1))" "${items[$i]}"; done; echo
+    echo -e "\n${W}${prompt}${N}" >&2
+    for i in "${!items[@]}"; do printf "  %2d) %s\n" "$((i+1))" "${items[$i]}" >&2; done
+    echo >&2
     local n
     while true; do
         read -rp "choice [1-${#items[@]}]: " n
         [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#items[@]} )) && break
-        warn "invalid choice"
+        echo -e "${Y}! invalid choice${N}" >&2
     done
     echo "${items[$((n-1))]}"
 }
