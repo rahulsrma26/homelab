@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.2.3"
+VERSION="1.3.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -232,7 +232,34 @@ labber() {
 }
 BASHRC
     ok "shell function added to $rc"
-    warn "run 'source ~/.bashrc' or open a new terminal for 'labber go' to work"
+}
+
+_install_completion_fn() {
+    local rc="${HOME}/.bashrc"
+    local marker="# labber completion"
+    if grep -qF "$marker" "$rc" 2>/dev/null; then
+        info "completion already in $rc"
+        return
+    fi
+    cat >> "$rc" <<'BASHRC'
+
+# labber completion
+_labber_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local cmd="${COMP_WORDS[1]}"
+    local svc_cmds="uninstall start stop restart rebuild shell logs status go"
+    local all_cmds="install $svc_cmds update self-install help"
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$all_cmds" -- "$cur") )
+    elif [[ $COMP_CWORD -eq 2 && " $svc_cmds " =~ " $cmd " ]]; then
+        local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
+            -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
+        COMPREPLY=( $(compgen -W "$svcs" -- "$cur") )
+    fi
+}
+complete -F _labber_complete labber
+BASHRC
+    ok "tab completion added to $rc"
 }
 
 do_self_install() {
@@ -245,6 +272,9 @@ do_self_install() {
     curl -fsSL "$LABBER_URL" -o "$LABBER_BIN" && chmod +x "$LABBER_BIN"
     ok "labber installed to $LABBER_BIN"
     _install_shell_fn
+    local ans; read -rp "Enable tab completion? [Y/n] " ans
+    [[ "$ans" =~ ^[Nn]$ ]] || _install_completion_fn
+    warn "run 'source ~/.bashrc' or open a new terminal to activate"
 }
 
 do_update() {
