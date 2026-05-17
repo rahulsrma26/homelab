@@ -33,26 +33,26 @@ labber [command] [service]
   shell     [svc]   enter a running container shell
   logs      [svc]   follow docker compose logs
   status    [svc]   show container status
-  dir       [svc]   print service directory path
+  go        [svc]   go to service directory
   update            system apt update + upgrade
   (no args)         interactive menu
 ```
 
-### cd to a service directory
+### labber go — cd to a service directory
 
 Since a subprocess can't change your shell's directory, add this function to `~/.bashrc`:
 
 ```bash
 labber() {
-  if [[ "$1" == cd ]]; then
-    cd "$(/usr/local/bin/labber dir "${@:2}")"
+  if [[ "$1" == go ]]; then
+    cd "$(/usr/local/bin/labber go "${@:2}")"
   else
     /usr/local/bin/labber "$@"
   fi
 }
 ```
 
-Then `labber cd frigate` drops you into `/opt/homelab/services/frigate/`.
+Then `labber go frigate` drops you into `/opt/homelab/services/frigate/`.
 
 ## Structure
 
