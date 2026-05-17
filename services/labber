@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.2.2"
+VERSION="1.2.3"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -202,7 +202,15 @@ do_status() {
 do_go() {
     local svc; svc=$(resolve_svc "${1:-}")
     need_svc "$svc" >/dev/null
-    svc_dir "$svc"
+    local dir; dir=$(svc_dir "$svc")
+    if [[ -t 1 ]]; then
+        # stdout is a terminal — not captured by shell function, cd won't happen
+        info "Directory: ${W}$dir${N}"
+        warn "to actually cd there, run: labber go $svc   (requires self-install + source ~/.bashrc)"
+    else
+        # stdout captured by shell function — just print the path for cd
+        echo "$dir"
+    fi
 }
 
 _install_shell_fn() {
