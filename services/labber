@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -248,7 +248,7 @@ _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local cmd="${COMP_WORDS[1]}"
     local svc_cmds="uninstall start stop restart rebuild shell logs status go"
-    local all_cmds="install $svc_cmds update self-install help"
+    local all_cmds="install $svc_cmds ls update self-install help"
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$all_cmds" -- "$cur") )
     elif [[ $COMP_CWORD -eq 2 && " $svc_cmds " =~ " $cmd " ]]; then
@@ -307,6 +307,26 @@ do_update() {
     fi
 }
 
+do_ls() {
+    local svcs; mapfile -t svcs < <(list_installed)
+    if (( ${#svcs[@]} == 0 )); then
+        warn "no services installed under $SERVICE_BASE"
+        return
+    fi
+    echo
+    for s in "${svcs[@]}"; do
+        local dir; dir=$(svc_dir "$s")
+        local running; running=$(cd "$dir" && docker compose ps -q 2>/dev/null | wc -l || echo 0)
+        running="${running// /}"
+        if (( running > 0 )); then
+            printf "  ${G}●${N} %-30s ${G}%s container(s) up${N}\n" "$s" "$running"
+        else
+            printf "  ${R}●${N} %-30s ${R}stopped${N}\n" "$s"
+        fi
+    done
+    echo
+}
+
 # ── status overview ───────────────────────────────────────────────────────────
 
 show_overview() {
@@ -335,7 +355,7 @@ show_menu() {
     show_overview
     echo
 
-    local cmds=(  install  uninstall  start  stop  restart  rebuild  shell  logs  status  go  update  self-install )
+    local cmds=(  install  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  update  self-install )
     local descs=(
         "install a service from repo"
         "stop and remove a service"
@@ -346,6 +366,7 @@ show_menu() {
         "enter a running container shell"
         "follow service logs"
         "show container status"
+        "list installed services and status"
         "go to service directory"
         "system apt update + upgrade labber"
         "install labber to /usr/local/bin"
@@ -387,6 +408,7 @@ ${W}Commands:${N}
   shell     [svc]   enter a running container shell
   logs      [svc]   follow docker compose logs
   status    [svc]   show container status
+  ls                list installed services and status
   go        [svc]   cd to service directory
   update            system apt update + upgrade + labber self-update
   self-install      install labber to /usr/local/bin + add shell function to ~/.bashrc
@@ -415,6 +437,7 @@ case "$CMD" in
     shell)     do_shell     "${1:-}" ;;
     logs)      do_logs      "${1:-}" ;;
     status)    do_status    "${1:-}" ;;
+    ls)        do_ls ;;
     go)        do_go        "${1:-}" ;;
     update)        do_update ;;
     self-install)  do_self_install ;;
