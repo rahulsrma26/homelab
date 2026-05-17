@@ -204,6 +204,28 @@ do_go() {
     svc_dir "$svc"
 }
 
+_install_shell_fn() {
+    local rc="${HOME}/.bashrc"
+    local marker="# labber shell function"
+    if grep -qF "$marker" "$rc" 2>/dev/null; then
+        info "shell function already in $rc"
+        return
+    fi
+    cat >> "$rc" <<'BASHRC'
+
+# labber shell function
+labber() {
+  if [[ "$1" == go ]]; then
+    cd "$(/usr/local/bin/labber go "${@:2}")"
+  else
+    /usr/local/bin/labber "$@"
+  fi
+}
+BASHRC
+    ok "shell function added to $rc"
+    warn "run 'source ~/.bashrc' or open a new terminal for 'labber go' to work"
+}
+
 do_self_install() {
     command -v curl &>/dev/null || die "curl is required for self-install"
     if [[ -f "$LABBER_BIN" ]]; then
@@ -212,18 +234,8 @@ do_self_install() {
     fi
     info "installing labber to $LABBER_BIN..."
     curl -fsSL "$LABBER_URL" -o "$LABBER_BIN" && chmod +x "$LABBER_BIN"
-    ok "installed — run: labber help"
-    echo
-    echo -e "${W}For 'labber go <svc>' support, add to ~/.bashrc:${N}"
-    cat <<'EOF'
-    labber() {
-      if [[ "$1" == go ]]; then
-        cd "$(/usr/local/bin/labber go "${@:2}")"
-      else
-        /usr/local/bin/labber "$@"
-      fi
-    }
-EOF
+    ok "labber installed to $LABBER_BIN"
+    _install_shell_fn
 }
 
 do_update() {
@@ -336,22 +348,14 @@ ${W}Commands:${N}
   shell     [svc]   enter a running container shell
   logs      [svc]   follow docker compose logs
   status    [svc]   show container status
-  go        [svc]   go to service directory (requires shell function, see below)
+  go        [svc]   cd to service directory
   update            system apt update + upgrade + labber self-update
-  self-install      install labber to /usr/local/bin
+  self-install      install labber to /usr/local/bin + add shell function to ~/.bashrc
   (no args)         interactive menu
 
-${W}Note — labber go requires a shell function in ~/.bashrc:${N}
-
-    labber() {
-      if [[ "\$1" == go ]]; then
-        cd "\$(/usr/local/bin/labber go "\${@:2}")"
-      else
-        /usr/local/bin/labber "\$@"
-      fi
-    }
-
-  Then: labber go frigate
+${W}Note:${N}
+  'labber go' requires the shell function installed by 'labber self-install'.
+  After install, run: source ~/.bashrc
 
 ${W}One-liner install on any LXC:${N}
   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber)

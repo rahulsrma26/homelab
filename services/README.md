@@ -6,14 +6,14 @@ Docker Compose stacks for all self-hosted services. Each service is a self-conta
 
 `labber` manages the full lifecycle of services on any LXC.
 
-**Install on any LXC:**
+**Install on any LXC** (installs binary + adds shell function to `~/.bashrc`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber \
-    -o /usr/local/bin/labber && chmod +x /usr/local/bin/labber
+bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) self-install
+source ~/.bashrc
 ```
 
-**Run interactively (no install needed):**
+**Run interactively without installing:**
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber)
@@ -33,26 +33,13 @@ labber [command] [service]
   shell     [svc]   enter a running container shell
   logs      [svc]   follow docker compose logs
   status    [svc]   show container status
-  go        [svc]   go to service directory
-  update            system apt update + upgrade
+  go        [svc]   cd to service directory (requires self-install)
+  update            system apt update + upgrade + labber self-update
+  self-install      install binary + shell function to ~/.bashrc
   (no args)         interactive menu
 ```
 
-### labber go — cd to a service directory
-
-Since a subprocess can't change your shell's directory, add this function to `~/.bashrc`:
-
-```bash
-labber() {
-  if [[ "$1" == go ]]; then
-    cd "$(/usr/local/bin/labber go "${@:2}")"
-  else
-    /usr/local/bin/labber "$@"
-  fi
-}
-```
-
-Then `labber go frigate` drops you into `/opt/homelab/services/frigate/`.
+`labber go frigate` changes your shell into `/opt/homelab/services/frigate/`. It works via a shell function that `self-install` writes to `~/.bashrc` automatically.
 
 ## Structure
 
