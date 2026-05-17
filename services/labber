@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.4.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -283,28 +283,36 @@ do_update() {
     ok "system updated"
     echo
     if [[ ! -f "$LABBER_BIN" ]]; then
-        warn "labber not installed at $LABBER_BIN — skipping self-update (run: labber self-install)"
+        warn "labber not installed at $LABBER_BIN"
+        local ans; read -rp "Install now? [Y/n] " ans
+        [[ "$ans" =~ ^[Nn]$ ]] || do_self_install
         return
     fi
     info "checking for labber update..."
     if ! command -v curl &>/dev/null; then
         warn "curl not found — skipping labber self-update"
-        return
-    fi
-    local tmp; tmp=$(mktemp /tmp/labber-update-XXXXXX)
-    if ! curl -fsSL "$LABBER_URL" -o "$tmp" 2>/dev/null; then
-        rm -f "$tmp"
-        warn "labber self-update failed (network issue?) — binary unchanged"
-        return
-    fi
-    local remote_ver; remote_ver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
-    if [[ "$remote_ver" == "$VERSION" ]]; then
-        ok "labber already on latest (v${VERSION})"
-        rm -f "$tmp"
     else
-        mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
-        ok "labber updated: v${VERSION} → v${remote_ver}"
+        local tmp; tmp=$(mktemp /tmp/labber-update-XXXXXX)
+        if ! curl -fsSL "$LABBER_URL" -o "$tmp" 2>/dev/null; then
+            rm -f "$tmp"
+            warn "labber self-update failed (network issue?) — binary unchanged"
+        else
+            local remote_ver; remote_ver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
+            if [[ "$remote_ver" == "$VERSION" ]]; then
+                ok "labber already on latest (v${VERSION})"
+                rm -f "$tmp"
+            else
+                mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
+                ok "labber updated: v${VERSION} → v${remote_ver}"
+            fi
+        fi
     fi
+    echo
+    info "checking shell integration..."
+    _install_shell_fn
+    local rc="${HOME}/.bashrc"
+    grep -qF "# labber completion" "$rc" 2>/dev/null && _install_completion_fn || true
+    warn "run 'source ~/.bashrc' to apply any changes"
 }
 
 do_ls() {
