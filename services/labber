@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.1.1"
+VERSION="1.2.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -235,15 +235,24 @@ do_update() {
         warn "labber not installed at $LABBER_BIN — skipping self-update (run: labber self-install)"
         return
     fi
-    info "updating labber..."
+    info "checking for labber update..."
     if ! command -v curl &>/dev/null; then
         warn "curl not found — skipping labber self-update"
         return
     fi
-    if curl -fsSL "$LABBER_URL" -o "$LABBER_BIN" && chmod +x "$LABBER_BIN"; then
-        ok "labber updated to latest"
-    else
+    local tmp; tmp=$(mktemp /tmp/labber-update-XXXXXX)
+    if ! curl -fsSL "$LABBER_URL" -o "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
         warn "labber self-update failed (network issue?) — binary unchanged"
+        return
+    fi
+    local remote_ver; remote_ver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
+    if [[ "$remote_ver" == "$VERSION" ]]; then
+        ok "labber already on latest (v${VERSION})"
+        rm -f "$tmp"
+    else
+        mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
+        ok "labber updated: v${VERSION} → v${remote_ver}"
     fi
 }
 
