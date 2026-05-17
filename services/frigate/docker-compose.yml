@@ -21,5 +21,6 @@ services:
       - "${RTSP_PORT:-8554}:8554"
       - "${WEBRTC_PORT:-8555}:8555/tcp"
       - "${WEBRTC_PORT:-8555}:8555/udp"
+    env_file: .env
     environment:
       FRIGATE_RTSP_PASSWORD: "${FRIGATE_RTSP_PASSWORD:-changeme}"
