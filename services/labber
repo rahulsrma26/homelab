@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.1"
+VERSION="1.4.2"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -291,22 +291,22 @@ do_update() {
     info "checking for labber update..."
     if ! command -v curl &>/dev/null; then
         warn "curl not found — skipping labber self-update"
-    else
-        local tmp; tmp=$(mktemp /tmp/labber-update-XXXXXX)
-        if ! curl -fsSL "$LABBER_URL" -o "$tmp" 2>/dev/null; then
-            rm -f "$tmp"
-            warn "labber self-update failed (network issue?) — binary unchanged"
-        else
-            local remote_ver; remote_ver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
-            if [[ "$remote_ver" == "$VERSION" ]]; then
-                ok "labber already on latest (v${VERSION})"
-                rm -f "$tmp"
-            else
-                mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
-                ok "labber updated: v${VERSION} → v${remote_ver}"
-            fi
-        fi
+        return
     fi
+    local tmp; tmp=$(mktemp /tmp/labber-update-XXXXXX)
+    if ! curl -fsSL "$LABBER_URL" -o "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        warn "labber self-update failed (network issue?) — binary unchanged"
+        return
+    fi
+    local remote_ver; remote_ver=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
+    if [[ "$remote_ver" == "$VERSION" ]]; then
+        ok "labber already on latest (v${VERSION})"
+        rm -f "$tmp"
+        return
+    fi
+    mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
+    ok "labber updated: v${VERSION} → v${remote_ver}"
     echo
     info "checking shell integration..."
     _install_shell_fn
