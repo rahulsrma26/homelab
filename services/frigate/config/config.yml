@@ -1,0 +1,30 @@
+mqtt:
+  enabled: false
+
+detectors:
+  ov:
+    type: openvino
+    device: GPU
+
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+
+ffmpeg:
+  hwaccel_args: preset-vaapi
+
+cameras:
+  {}
+  # example_camera:
+  #   ffmpeg:
+  #     inputs:
+  #       - path: rtsp://<user>:<password>@<camera-ip>/stream
+  #         roles:
+  #           - detect
+  #           - record
+  #   detect:
+  #     width: 1280
+  #     height: 720
