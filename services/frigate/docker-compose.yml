@@ -15,12 +15,13 @@ services:
       - type: tmpfs
         target: /tmp/cache
         tmpfs:
-          size: 1000000000
+          size: 500000000
     ports:
       - "${HTTP_PORT:-8971}:8971"
       - "${RTSP_PORT:-8554}:8554"
       - "${WEBRTC_PORT:-8555}:8555/tcp"
       - "${WEBRTC_PORT:-8555}:8555/udp"
+      - "5000:5000" # Internal unauthenticated access for Home Assistant. Expose carefully.
     env_file: .env
     environment:
       FRIGATE_RTSP_PASSWORD: "${FRIGATE_RTSP_PASSWORD:-changeme}"
