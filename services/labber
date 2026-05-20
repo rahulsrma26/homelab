@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.2"
+VERSION="1.4.3"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -10,8 +10,8 @@ SERVICE_BASE="/opt/homelab/services"
 
 # ── colours ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
-    R='\033[0;31m' G='\033[0;32m' Y='\033[1;33m'
-    B='\033[0;34m' C='\033[0;36m' W='\033[1m' N='\033[0m'
+    R=$'\033[0;31m' G=$'\033[0;32m' Y=$'\033[1;33m'
+    B=$'\033[0;34m' C=$'\033[0;36m' W=$'\033[1m' N=$'\033[0m'
 else
     R='' G='' Y='' B='' C='' W='' N=''
 fi
@@ -332,7 +332,6 @@ do_ls() {
             printf "  ${R}●${N} %-30s ${R}stopped${N}\n" "$s"
         fi
     done
-    echo
 }
 
 # ── status overview ───────────────────────────────────────────────────────────
