@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.3"
+VERSION="1.4.4"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -156,7 +156,7 @@ do_restart() {
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
     info "restarting $svc..."
-    (cd "$dir" && docker compose restart)
+    (cd "$dir" && docker compose up -d --force-recreate)
     ok "done"
 }
 
