@@ -3,14 +3,14 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda13
     container_name: llama-cpp
     restart: unless-stopped
-    command: --server -m /models/${MODEL_FILE} --host 0.0.0.0 --port 8080
+    command: -hf ${MODEL} --host 0.0.0.0 --port 8080
       --ctx-size ${CONTEXT_SIZE:-4096}
       --n-gpu-layers ${GPU_LAYERS:-99}
       --parallel 1
       --threads ${THREADS:-6}
-      --flash-attn 1
+      --flash-attn on
       --models-max 1
-      --kv-offload 1
+      --kv-offload
       --cache-type-k ${CACHE_TYPE_K:-q8_0}
       --cache-type-v ${CACHE_TYPE_V:-q8_0}
       --cache-ram ${CACHE_RAM:-2048}
@@ -18,10 +18,17 @@ services:
       --top-p ${TOP_P:-0.85}
       --top-k ${TOP_K:-20}
       --min-p ${MIN_P:-0.0}
+      --presence-penalty ${P_PENALTY:-1.0}
+      --repeat-penalty ${R_PENALTY:-1.0}
+      --spec-type draft-mtp
+      --spec-draft-n-max 6
       --jinja
       --cont-batching
       --kv-unified
       --no-mmap
+    environment:
+      LLAMA_CACHE: /models
+      HF_TOKEN: ${HF_TOKEN:-}
     ports:
       - "${PORT:-8080}:8080"
     volumes:
@@ -33,4 +40,3 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    profiles: [server]
