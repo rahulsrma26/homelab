@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.6"
+VERSION="1.4.7"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -307,7 +307,7 @@ do_update() {
         rm -f "$tmp"
         return
     fi
-    mv "$tmp" "$LABBER_BIN" && chmod +x "$LABBER_BIN"
+    mv -f "$tmp" "$LABBER_BIN" && chmod 755 "$LABBER_BIN"
     ok "labber updated: v${VERSION} → v${remote_ver}"
     echo
     info "checking shell integration..."
