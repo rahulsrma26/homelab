@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.9"
+VERSION="1.4.10"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -238,10 +238,13 @@ BASHRC
 
 _install_completion_fn() {
     local rc="${HOME}/.bashrc"
-    local marker="# labber completion"
-    if grep -qF "$marker" "$rc" 2>/dev/null; then
-        info "completion already in $rc"
-        return
+    local start_marker="# labber completion"
+    local end_marker="complete -F _labber_complete labber"
+    # Remove old block so we always install the latest version
+    if grep -qF "$start_marker" "$rc" 2>/dev/null; then
+        local tmp; tmp=$(mktemp)
+        awk "/^${start_marker}$/{skip=1} skip && /^${end_marker}$/{skip=0; next} !skip" "$rc" > "$tmp"
+        mv "$tmp" "$rc"
     fi
     cat >> "$rc" <<'BASHRC'
 
@@ -261,7 +264,7 @@ _labber_complete() {
 }
 complete -F _labber_complete labber
 BASHRC
-    ok "tab completion added to $rc"
+    ok "tab completion updated in $rc"
 }
 
 do_self_install() {
@@ -315,8 +318,7 @@ do_update() {
     echo
     info "checking shell integration..."
     _install_shell_fn
-    local rc="${HOME}/.bashrc"
-    grep -qF "# labber completion" "$rc" 2>/dev/null && _install_completion_fn || true
+    _install_completion_fn
     warn "run 'source ~/.bashrc' to apply any changes"
 }
 
