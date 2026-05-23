@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.7"
+VERSION="1.4.8"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -250,7 +250,7 @@ _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local cmd="${COMP_WORDS[1]}"
     local svc_cmds="uninstall start stop restart rebuild shell logs status go"
-    local all_cmds="install $svc_cmds ls update self-install help"
+    local all_cmds="install $svc_cmds ls clean update self-install help"
     if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$all_cmds" -- "$cur") )
     elif [[ $COMP_CWORD -eq 2 && " $svc_cmds " =~ " $cmd " ]]; then
@@ -317,6 +317,15 @@ do_update() {
     warn "run 'source ~/.bashrc' to apply any changes"
 }
 
+do_clean() {
+    check_deps
+    warn "this will remove ALL unused containers, images, networks, and volumes"
+    local ans; read -rp "Confirm [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
+    docker system prune -af --volumes
+    ok "docker cleaned"
+}
+
 do_ls() {
     local svcs; mapfile -t svcs < <(list_installed)
     if (( ${#svcs[@]} == 0 )); then
@@ -364,7 +373,7 @@ show_menu() {
     show_overview
     echo
 
-    local cmds=(  install  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  update  self-install )
+    local cmds=(  install  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  clean  update  self-install )
     local descs=(
         "install a service from repo"
         "stop and remove a service"
@@ -377,6 +386,7 @@ show_menu() {
         "show container status"
         "list installed services and status"
         "go to service directory"
+        "remove all unused containers, images, volumes"
         "system apt update + upgrade labber"
         "install labber to /usr/local/bin"
     )
@@ -419,6 +429,7 @@ ${W}Commands:${N}
   status    [svc]   show container status
   ls                list installed services and status
   go        [svc]   cd to service directory
+  clean            remove all unused containers, images, networks, and volumes
   update            system apt update + upgrade + labber self-update
   self-install      install labber to /usr/local/bin + add shell function to ~/.bashrc
   (no args)         interactive menu
@@ -448,6 +459,7 @@ case "$CMD" in
     status)    do_status    "${1:-}" ;;
     ls)        do_ls ;;
     go)        do_go        "${1:-}" ;;
+    clean)    do_clean ;;
     update)        do_update ;;
     self-install)  do_self_install ;;
     help|-h|--help) usage ;;
