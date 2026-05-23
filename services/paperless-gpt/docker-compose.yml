@@ -1,0 +1,10 @@
+services:
+  paperless-gpt:
+    image: icereed/paperless-gpt:latest
+    container_name: paperless-gpt
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3002}:8080"
+    env_file: .env
+    volumes:
+      - ./prompts:/app/prompts
