@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.8"
+VERSION="1.4.9"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -280,8 +280,11 @@ do_self_install() {
 }
 
 do_update() {
+    local sudo_cmd=""
+    (( EUID == 0 )) || sudo_cmd="sudo"
+
     info "running system update..."
-    apt update && apt upgrade -y
+    $sudo_cmd apt update && $sudo_cmd apt upgrade -y
     ok "system updated"
     echo
     if [[ ! -f "$LABBER_BIN" ]]; then
@@ -307,7 +310,7 @@ do_update() {
         rm -f "$tmp"
         return
     fi
-    mv -f "$tmp" "$LABBER_BIN" && chmod 755 "$LABBER_BIN"
+    $sudo_cmd mv -f "$tmp" "$LABBER_BIN" && $sudo_cmd chmod 755 "$LABBER_BIN"
     ok "labber updated: v${VERSION} → v${remote_ver}"
     echo
     info "checking shell integration..."
