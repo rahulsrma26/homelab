@@ -32,7 +32,7 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     volumes:
-      - ${MODELS_DIR:-./models}:/models
+      - ${MODELS_DIR:-/opt/generated/models}:/models
     deploy:
       resources:
         reservations:
