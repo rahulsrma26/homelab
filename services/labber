@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="1.4.10"
+VERSION="2.0.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -251,15 +251,16 @@ _install_completion_fn() {
 # labber completion
 _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local cmd="${COMP_WORDS[1]}"
+    local arg1="${COMP_WORDS[1]}"
     local svc_cmds="uninstall start stop restart rebuild shell logs status go"
-    local all_cmds="install $svc_cmds ls clean update self-install help"
+    local global_cmds="install ls clean update help"
+    local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
+        -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
     if [[ $COMP_CWORD -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "$all_cmds" -- "$cur") )
-    elif [[ $COMP_CWORD -eq 2 && " $svc_cmds " =~ " $cmd " ]]; then
-        local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
-            -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
-        COMPREPLY=( $(compgen -W "$svcs" -- "$cur") )
+        COMPREPLY=( $(compgen -W "$global_cmds $svcs" -- "$cur") )
+    elif [[ $COMP_CWORD -eq 2 && ! " $global_cmds " =~ " $arg1 " ]]; then
+        # labber <svc> <cmd>: complete with service commands
+        COMPREPLY=( $(compgen -W "$svc_cmds" -- "$cur") )
     fi
 }
 complete -F _labber_complete labber
@@ -378,9 +379,9 @@ show_menu() {
     show_overview
     echo
 
-    local cmds=(  install  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  clean  update  self-install )
+    local cmds=(  deploy  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  clean  update )
     local descs=(
-        "install a service from repo"
+        "deploy a service from repo"
         "stop and remove a service"
         "start service containers"
         "stop service containers"
@@ -393,7 +394,6 @@ show_menu() {
         "go to service directory"
         "remove all unused containers, images, volumes"
         "system apt update + upgrade labber"
-        "install labber to /usr/local/bin"
     )
 
     echo -e "${W}commands:${N}"
@@ -410,6 +410,7 @@ show_menu() {
         warn "invalid choice"
     done
     local chosen="${cmds[$((n-1))]}"
+    [[ "$chosen" == "deploy" ]] && { do_install ""; return; }
     "do_${chosen//-/_}" ""
 }
 
@@ -420,27 +421,26 @@ usage() {
 ${W}labber v${VERSION}${N} — homelab service manager
 
 ${W}Usage:${N}
-  labber [command] [service]
+  labber [svc] <command>
 
 ${W}Commands:${N}
-  install   [svc]   install a service from the repo
-  uninstall [svc]   stop and remove a service
-  start     [svc]   docker compose start
-  stop      [svc]   docker compose stop
-  restart   [svc]   docker compose restart
-  rebuild   [svc]   full rebuild: down + system prune + pull + up
-  shell     [svc]   enter a running container shell
-  logs      [svc]   follow docker compose logs
-  status    [svc]   show container status
+  [svc] uninstall   stop and remove a service
+  [svc] start       docker compose start
+  [svc] stop        docker compose stop
+  [svc] restart     docker compose restart
+  [svc] rebuild     full rebuild: down + system prune + pull + up
+  [svc] shell       enter a running container shell
+  [svc] logs        follow docker compose logs
+  [svc] status      show container status
+  [svc] go          cd to service directory
   ls                list installed services and status
-  go        [svc]   cd to service directory
-  clean            remove all unused containers, images, networks, and volumes
+  clean             remove all unused containers, images, networks, and volumes
   update            system apt update + upgrade + labber self-update
-  self-install      install labber to /usr/local/bin + add shell function to ~/.bashrc
+  install           install labber to /usr/local/bin + shell function
   (no args)         interactive menu
 
 ${W}Note:${N}
-  'labber go' requires the shell function installed by 'labber self-install'.
+  'labber go' requires the shell function installed by 'labber install'.
   After install, run: source ~/.bashrc
 
 ${W}One-liner install on any LXC:${N}
@@ -450,32 +450,32 @@ EOF
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+SVC="${1:-}"; shift 2>/dev/null || true
 CMD="${1:-}"; shift 2>/dev/null || true
 
+# Global commands have no service prefix — detect when SVC slot holds a global cmd
+_GLOBAL_CMDS="install ls clean update help -h --help"
+if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
+    _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
+elif [[ -z "$CMD" ]]; then
+    CMD="$SVC"; SVC=""
+fi
+
 case "$CMD" in
-    install)   do_install   "${1:-}" ;;
-    uninstall) do_uninstall "${1:-}" ;;
-    start)     do_start     "${1:-}" ;;
-    stop)      do_stop      "${1:-}" ;;
-    restart)   do_restart   "${1:-}" ;;
-    rebuild)   do_rebuild   "${1:-}" ;;
-    shell)     do_shell     "${1:-}" ;;
-    logs)      do_logs      "${1:-}" ;;
-    status)    do_status    "${1:-}" ;;
+    install)   do_self_install ;;
+    uninstall) do_uninstall "$SVC" ;;
+    start)     do_start     "$SVC" ;;
+    stop)      do_stop      "$SVC" ;;
+    restart)   do_restart   "$SVC" ;;
+    rebuild)   do_rebuild   "$SVC" ;;
+    shell)     do_shell     "$SVC" ;;
+    logs)      do_logs      "$SVC" ;;
+    status)    do_status    "$SVC" ;;
     ls)        do_ls ;;
-    go)        do_go        "${1:-}" ;;
-    clean)    do_clean ;;
-    update)        do_update ;;
-    self-install)  do_self_install ;;
+    go)        do_go        "$SVC" ;;
+    clean)     do_clean ;;
+    update)    do_update ;;
     help|-h|--help) usage ;;
-    "")
-        if [[ ! -f "$LABBER_BIN" ]]; then
-            warn "labber is not installed permanently"
-            read -rp "Install to $LABBER_BIN now? [Y/n] " _ans
-            [[ "$_ans" =~ ^[Nn]$ ]] || do_self_install
-            echo
-        fi
-        show_menu
-        ;;
+    "")        show_menu ;;
     *) die "unknown command '$CMD' — run: labber help" ;;
 esac

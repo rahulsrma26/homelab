@@ -9,7 +9,7 @@ Docker Compose stacks for all self-hosted services. Each service is a self-conta
 **Install on any LXC** (installs binary + adds shell function to `~/.bashrc`):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) self-install
+bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) install
 source ~/.bashrc
 ```
 
@@ -22,24 +22,27 @@ bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/hea
 ### Commands
 
 ```
-labber [command] [service]
+labber [svc] <command>
 
-  install   [svc]   install a service from the repo
-  uninstall [svc]   stop and remove a service
-  start     [svc]   docker compose start
-  stop      [svc]   docker compose stop
-  restart   [svc]   docker compose restart
-  rebuild   [svc]   full rebuild: down + system prune + pull + up
-  shell     [svc]   enter a running container shell
-  logs      [svc]   follow docker compose logs
-  status    [svc]   show container status
-  go        [svc]   cd to service directory (requires self-install)
+  [svc] uninstall   stop and remove a service
+  [svc] start       docker compose start
+  [svc] stop        docker compose stop
+  [svc] restart     docker compose restart
+  [svc] rebuild     full rebuild: down + system prune + pull + up
+  [svc] shell       enter a running container shell
+  [svc] logs        follow docker compose logs
+  [svc] status      show container status
+  [svc] go          cd to service directory (requires install)
+  ls                list installed services and status
+  clean             remove all unused containers, images, networks, volumes
   update            system apt update + upgrade + labber self-update
-  self-install      install binary + shell function to ~/.bashrc
-  (no args)         interactive menu
+  install           install labber binary + shell function to ~/.bashrc
+  (no args)         interactive menu (includes service deploy)
 ```
 
-`labber go frigate` changes your shell into `/opt/homelab/services/frigate/`. It works via a shell function that `self-install` writes to `~/.bashrc` automatically.
+`labber frigate logs` follows logs for the frigate service.
+`labber paperless-ngx restart` recreates paperless-ngx containers.
+`labber go frigate` changes your shell into `/opt/homelab/services/frigate/` — works via a shell function that `labber install` writes to `~/.bashrc`.
 
 ## Structure
 
