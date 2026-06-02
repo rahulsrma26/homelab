@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.0.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -206,7 +206,7 @@ do_go() {
     if [[ -t 1 ]]; then
         # stdout is a terminal — not captured by shell function, cd won't happen
         info "Directory: ${W}$dir${N}"
-        warn "to actually cd there, run: labber go $svc   (requires self-install + source ~/.bashrc)"
+        warn "to actually cd there, run: labber $svc go   (requires self-install + source ~/.bashrc)"
     else
         # stdout captured by shell function — just print the path for cd
         echo "$dir"
@@ -217,23 +217,25 @@ _install_shell_fn() {
     local target_home="$HOME"
     [[ -n "${SUDO_USER:-}" ]] && target_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
     local rc="$target_home/.bashrc"
-    local marker="# labber shell function"
-    if grep -qF "$marker" "$rc" 2>/dev/null; then
-        info "shell function already in $rc"
-        return
+    local start_marker="# labber shell function"
+    local end_marker="^}"
+    if grep -qF "$start_marker" "$rc" 2>/dev/null; then
+        local tmp; tmp=$(mktemp)
+        awk "/^${start_marker}$/{skip=1} skip && /^}$/{skip=0; next} !skip" "$rc" > "$tmp"
+        mv "$tmp" "$rc"
     fi
     cat >> "$rc" <<'BASHRC'
 
 # labber shell function
 labber() {
-  if [[ "$1" == go ]]; then
-    cd "$(/usr/local/bin/labber go "${@:2}")"
+  if [[ "$2" == go ]]; then
+    cd "$(/usr/local/bin/labber "$1" go)"
   else
     /usr/local/bin/labber "$@"
   fi
 }
 BASHRC
-    ok "shell function added to $rc"
+    ok "shell function updated in $rc"
 }
 
 _install_completion_fn() {
@@ -440,7 +442,7 @@ ${W}Commands:${N}
   (no args)         interactive menu
 
 ${W}Note:${N}
-  'labber go' requires the shell function installed by 'labber install'.
+  'labber <svc> go' requires the shell function installed by 'labber install'.
   After install, run: source ~/.bashrc
 
 ${W}One-liner install on any LXC:${N}
