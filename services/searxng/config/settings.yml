@@ -18,5 +18,5 @@ ui:
 
 search:
   safe_search: 0
-  autocomplete: false
+  autocomplete: ""
   default_lang: "en"
