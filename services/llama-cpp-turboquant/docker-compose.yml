@@ -4,6 +4,43 @@ services:
     image: llama-cpp-turboquant
     container_name: llama-cpp-turboquant
     restart: unless-stopped
+    # command: /build/build/bin/llama-bench
+    #   -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:MXFP4_MOE
+    #   -ngl 99
+    #   -t 6
+    #   -p 4096
+    #   -n 64
+    #   -b 1024
+    #   -ub 1024
+    #   --n-cpu-moe 17
+    #   -ctk turbo4
+    #   -ctv turbo2
+    command: llama-server
+      -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:MXFP4_MOE
+      --reasoning off
+      --alias qwen3.6-35b-a3b-mtp
+      --ctx-size 65536
+      --batch-size 512
+      --ubatch-size 512
+      --n-gpu-layers 99
+      --no-mmap
+      --parallel 1
+      --models-max 1
+      --mlock
+      --threads 6
+      --temp 0.7
+      --top-p 0.95
+      --top-k 20
+      --min-p 0.0
+      --presence-penalty 0.0
+      --repeat-penalty 1.0
+      -ctk turbo4
+      -ctv turbo2
+      --jinja
+      --cache-reuse 256
+      --n-cpu-moe 18
+      --host 0.0.0.0
+      --port 8080
     # command: /build/bin/llama-bench
     #   -hf barozp/Qwen3.6-28B-REAP20-A3B-GGUF:Q4_K_M
     #   -ngl 99
@@ -15,29 +52,29 @@ services:
     #   --n-cpu-moe 6
     #   -ctk turbo4
     #   -ctv turbo2
-    command: llama-server
-      -hf barozp/Qwen3.6-28B-REAP20-A3B-GGUF:Q4_K_M
-      --alias qwen3.6-28b-reap
-      --ctx-size 64000
-      --batch-size 2048
-      --ubatch-size 1024
-      --n-gpu-layers 99
-      --no-mmap
-      --mlock
-      --threads 8
-      --temp 0.7
-      --top-p 0.95
-      --top-k 20
-      --min-p 0.0
-      --presence-penalty 0.0
-      --repeat-penalty 1.0
-      -ctk turbo4
-      -ctv turbo2
-      --jinja
-      --cache-reuse 256
-      --n-cpu-moe 6
-      --host 0.0.0.0
-      --port 8080
+    # command: llama-server
+    #   -hf barozp/Qwen3.6-28B-REAP20-A3B-GGUF:Q4_K_M
+    #   --alias qwen3.6-28b-reap
+    #   --ctx-size 64000
+    #   --batch-size 2048
+    #   --ubatch-size 1024
+    #   --n-gpu-layers 99
+    #   --no-mmap
+    #   --mlock
+    #   --threads 8
+    #   --temp 0.7
+    #   --top-p 0.95
+    #   --top-k 20
+    #   --min-p 0.0
+    #   --presence-penalty 0.0
+    #   --repeat-penalty 1.0
+    #   -ctk turbo4
+    #   -ctv turbo2
+    #   --jinja
+    #   --cache-reuse 256
+    #   --n-cpu-moe 6
+    #   --host 0.0.0.0
+    #   --port 8080
     environment:
       LLAMA_CACHE: /models
       HF_TOKEN: ""
