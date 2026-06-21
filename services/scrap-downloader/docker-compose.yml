@@ -30,13 +30,14 @@ services:
     depends_on:
       - gluetun
     volumes:
-      - ${DOWNLOAD_DIR:-./downloads}:/data/downloads
-      - ${PLUGINS_DIR:-./plugins_data}:/data/plugins
-      - ${DB_PATH:-./scrap_downloader.db}:/data/scrap_downloader.db
+      - ${DATA_DIR:-./data}:/data
+      - ${DOWNLOAD_DIR:-./downloads}:/downloads
+      - ${PLUGINS_DIR:-./plugins}:/plugins
     environment:
       - APP_PASSWORD=${APP_PASSWORD}
       - STORAGE_SECRET=${STORAGE_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-60}
     logging:
       driver: "json-file"
       options:
