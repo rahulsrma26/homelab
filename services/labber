@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.0.1"
+VERSION="2.0.2"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -272,12 +272,14 @@ BASHRC
 
 do_self_install() {
     command -v curl &>/dev/null || die "curl is required for self-install"
+    local sudo_cmd=""
+    (( EUID == 0 )) || sudo_cmd="sudo"
     if [[ -f "$LABBER_BIN" ]]; then
         local ans; read -rp "labber already installed at $LABBER_BIN. Overwrite? [y/N] " ans
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
     fi
     info "installing labber to $LABBER_BIN..."
-    curl -fsSL "$LABBER_URL" -o "$LABBER_BIN" && chmod 755 "$LABBER_BIN"
+    curl -fsSL "$LABBER_URL" | $sudo_cmd tee "$LABBER_BIN" > /dev/null && $sudo_cmd chmod 755 "$LABBER_BIN"
     ok "labber installed to $LABBER_BIN"
     _install_shell_fn
     local ans; read -rp "Enable tab completion? [Y/n] " ans
