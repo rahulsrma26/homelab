@@ -1,0 +1,44 @@
+services:
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: scrap-downloader-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=Netherlands
+      - WIREGUARD_MTU=1420
+    ports:
+      - "${PORT:-8899}:8080"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  scrap-downloader:
+    image: welcometors/scrap_downloader:latest
+    container_name: scrap-downloader
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    volumes:
+      - ${DOWNLOAD_DIR:-./downloads}:/data/downloads
+      - ${PLUGINS_DIR:-./plugins_data}:/data/plugins
+      - ${DB_PATH:-./scrap_downloader.db}:/data/scrap_downloader.db
+    environment:
+      - APP_PASSWORD=${APP_PASSWORD}
+      - STORAGE_SECRET=${STORAGE_SECRET}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
