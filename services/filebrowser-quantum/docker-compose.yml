@@ -1,0 +1,11 @@
+services:
+  filebrowser:
+    image: gtstef/filebrowser:stable
+    container_name: filebrowser-quantum
+    restart: unless-stopped
+    volumes:
+      - ${MEDIA_DIR:-/mnt/media}:/srv/media
+      - ${EXTRA_DIR:-/mnt/extra}:/srv/extra
+      - ${DATA_DIR:-./data}:/home/filebrowser/data
+    ports:
+      - "${PORT:-8448}:80"
