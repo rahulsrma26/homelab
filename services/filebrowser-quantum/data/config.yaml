@@ -1,5 +1,5 @@
 server:
-  cacheDir: /home/filebrowser/data/tmp # using the data volume so it can persist across restarts
+  cacheDir: /srv/extra/tmp/filebrowser-cache # using the data volume so it can persist across restarts
   sources:
     - path: /srv/media
       config:
