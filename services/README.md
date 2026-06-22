@@ -9,7 +9,7 @@ Docker Compose stacks for all self-hosted services. Each service is a self-conta
 **Install on any LXC** (installs binary + adds shell function to `~/.bashrc`):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) install
+curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber | bash -s install
 source ~/.bashrc
 ```
 
