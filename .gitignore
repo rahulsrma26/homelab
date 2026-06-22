@@ -2,3 +2,7 @@
 *.env
 !*.env.example
 personal/
+.obsidian/
+tmp/
+.venv/
+__pycache__/
