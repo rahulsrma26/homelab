@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.0.3"
+VERSION="2.0.5"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -27,6 +27,19 @@ check_deps() {
     local miss=()
     for cmd in docker git; do command -v "$cmd" &>/dev/null || miss+=("$cmd"); done
     (( ${#miss[@]} == 0 )) || die "missing: ${miss[*]}"
+}
+
+check_svc_writable() {
+    if (( EUID == 0 )); then
+        warn "running as root — service files will be owned by root"
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            warn "ownership will be fixed to ${SUDO_USER} after install"
+        else
+            warn "consider running as a regular user instead"
+        fi
+    elif [[ -d "$SERVICE_BASE" && ! -w "$SERVICE_BASE" ]]; then
+        die "$SERVICE_BASE is not writable by $(whoami) — fix with: sudo chown -R $(whoami):$(whoami) $SERVICE_BASE"
+    fi
 }
 
 svc_dir() { echo "$SERVICE_BASE/$1"; }
@@ -70,8 +83,9 @@ resolve_svc() {
 
 do_install() {
     check_deps
+    check_svc_writable
     local tmpdir="/tmp/homelab-deploy-$$"
-    trap 'rm -rf "$tmpdir"' EXIT
+    trap 'rm -rf "${tmpdir:-}"' EXIT
 
     info "fetching service list from repo..."
     git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
@@ -115,6 +129,11 @@ do_install() {
         echo -e "${W}--------------${N}"; echo
     fi
 
+    if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then
+        chown -R "$SUDO_USER:$SUDO_USER" "$dest"
+        ok "ownership of $dest set to $SUDO_USER"
+    fi
+
     info "pulling images and starting $svc..."
     (cd "$dest" && docker compose pull && docker compose up -d)
     ok "$svc is running"
@@ -123,6 +142,7 @@ do_install() {
 
 do_uninstall() {
     check_deps
+    check_svc_writable
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
     warn "will stop '$svc' and delete $dir"
