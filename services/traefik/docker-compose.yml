@@ -25,6 +25,8 @@ services:
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
+    environment:
+      - DOCKER_API_VERSION=1.41
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
