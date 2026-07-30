@@ -26,7 +26,6 @@ services:
       # Security headers
       - traefik.http.middlewares.ipp-headers.headers.frameDeny=true
       - traefik.http.middlewares.ipp-headers.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.ipp-headers.headers.browserXssFilter=true
       - traefik.http.middlewares.ipp-headers.headers.referrerPolicy=strict-origin-when-cross-origin
       # Rate limiting
       - traefik.http.middlewares.ipp-rate-limit.ratelimit.average=100
