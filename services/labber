@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.0.5"
+VERSION="2.0.6"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -37,7 +37,13 @@ check_svc_writable() {
         else
             warn "consider running as a regular user instead"
         fi
-    elif [[ -d "$SERVICE_BASE" && ! -w "$SERVICE_BASE" ]]; then
+        mkdir -p "$SERVICE_BASE"
+    elif [[ ! -d "$SERVICE_BASE" ]]; then
+        # Directory doesn't exist — try to create it with sudo
+        info "creating $SERVICE_BASE..."
+        sudo mkdir -p "$SERVICE_BASE" && sudo chown "$(whoami):$(whoami)" "$SERVICE_BASE" \
+            || die "could not create $SERVICE_BASE — run: sudo mkdir -p $SERVICE_BASE && sudo chown $(whoami):$(whoami) $SERVICE_BASE"
+    elif [[ ! -w "$SERVICE_BASE" ]]; then
         die "$SERVICE_BASE is not writable by $(whoami) — fix with: sudo chown -R $(whoami):$(whoami) $SERVICE_BASE"
     fi
 }
