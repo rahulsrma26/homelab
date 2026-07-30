@@ -1,0 +1,50 @@
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: traefik-socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CONTAINERS=1
+      - SERVICES=0
+      - TASKS=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - INFO=0
+      - EVENTS=1
+    networks:
+      - socket-proxy
+    security_opt:
+      - no-new-privileges:true
+
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --providers.docker.endpoint=tcp://traefik-socket-proxy:2375
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.forwardedheaders.trustedips=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - "127.0.0.1:80:80"
+    networks:
+      - proxy
+      - socket-proxy
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    name: proxy
+    external: false
+  socket-proxy:
+    name: traefik-socket-proxy
+    internal: true
