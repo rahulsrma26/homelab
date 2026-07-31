@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.0.6"
+VERSION="2.1.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -199,6 +199,36 @@ do_rebuild() {
     (cd "$dir" && docker compose ps)
 }
 
+do_svc_upgrade() {
+    check_deps
+    check_svc_writable
+    local svc; svc=$(resolve_svc "${1:-}")
+    local dir; dir=$(need_svc "$svc")
+    local tmpdir="/tmp/homelab-deploy-$$"
+    local env_backup="/tmp/.labber-env-backup-$$"
+    trap 'rm -rf "${tmpdir:-}" "${env_backup:-}"' EXIT
+
+    info "fetching latest '$svc' from repo..."
+    git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
+    git -C "$tmpdir" sparse-checkout set services/
+
+    local src="$tmpdir/services/$svc"
+    [[ -d "$src" ]] || die "service '$svc' not found in repo"
+
+    # preserve .env, overwrite everything else
+    [[ -f "$dir/.env" ]] && cp "$dir/.env" "$env_backup"
+    cp -r "$src/." "$dir/"
+    [[ -f "$env_backup" ]] && mv "$env_backup" "$dir/.env"
+
+    info "rebuilding '$svc': down → prune → pull → up"
+    (cd "$dir" && docker compose down)
+    docker system prune -f
+    (cd "$dir" && docker compose pull)
+    (cd "$dir" && docker compose up -d)
+    ok "'$svc' updated and running"
+    (cd "$dir" && docker compose ps)
+}
+
 do_shell() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
@@ -280,7 +310,7 @@ _install_completion_fn() {
 _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local arg1="${COMP_WORDS[1]}"
-    local svc_cmds="uninstall start stop restart rebuild shell logs status go"
+    local svc_cmds="uninstall start stop restart rebuild update shell logs status go"
     local global_cmds="install ls clean update help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
@@ -459,6 +489,7 @@ ${W}Commands:${N}
   [svc] stop        docker compose stop
   [svc] restart     docker compose restart
   [svc] rebuild     full rebuild: down + system prune + pull + up
+  [svc] update      pull latest from repo + full rebuild (preserves .env)
   [svc] shell       enter a running container shell
   [svc] logs        follow docker compose logs
   [svc] status      show container status
@@ -504,7 +535,9 @@ case "$CMD" in
     ls)        do_ls ;;
     go)        do_go        "$SVC" ;;
     clean)     do_clean ;;
-    update)    do_update ;;
+    update)
+        if [[ -n "$SVC" ]]; then do_svc_upgrade "$SVC"; else do_update; fi
+        ;;
     help|-h|--help) usage ;;
     "")        show_menu ;;
     *) die "unknown command '$CMD' — run: labber help" ;;
