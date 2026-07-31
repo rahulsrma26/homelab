@@ -8,6 +8,16 @@ services:
     environment:
       - IMMICH_URL=${IMMICH_URL}
       - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - |
+        CONFIG={
+          "ipp": {
+            "allowDownload": 1,
+            "maxZoomQuality": "fullsize",
+            "gallery": {
+              "showDownloadZip": true
+            }
+          }
+        }
     read_only: true
     tmpfs:
       - /tmp
