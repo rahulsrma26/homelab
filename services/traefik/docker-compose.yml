@@ -29,6 +29,8 @@ services:
       - DOCKER_HOST=tcp://traefik-socket-proxy:2375
       - DOCKER_API_VERSION=1.41
     command:
+      - --global.checkNewVersion=false
+      - --global.sendAnonymousUsage=false
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxy
@@ -41,6 +43,10 @@ services:
     networks:
       - proxy
       - socket-proxy
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
 
