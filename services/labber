@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.1.0"
+VERSION="2.2.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -311,7 +311,7 @@ _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local arg1="${COMP_WORDS[1]}"
     local svc_cmds="uninstall start stop restart rebuild update shell logs status go"
-    local global_cmds="install ls clean update help"
+    local global_cmds="install ls clean update tool help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -381,6 +381,35 @@ do_update() {
     _install_shell_fn
     _install_completion_fn
     warn "run 'source ~/.bashrc' to apply any changes"
+}
+
+do_tool() {
+    local tool="${1:-}"
+    [[ -n "$tool" ]] || die "usage: labber tool <name>  |  labber tool ls"
+
+    local tmpdir="/tmp/homelab-tools-$$"
+    trap 'rm -rf "${tmpdir:-}"' EXIT
+
+    git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
+    git -C "$tmpdir" sparse-checkout set tools/
+
+    if [[ "$tool" == "ls" || "$tool" == "list" ]]; then
+        local available
+        mapfile -t available < <(find "$tmpdir/tools" -maxdepth 1 -name "*.sh" \
+            -exec basename {} .sh \; | sort)
+        (( ${#available[@]} > 0 )) || { warn "no tools found in repo"; return; }
+        echo
+        echo -e "${W}available tools:${N}"
+        for t in "${available[@]}"; do printf "  %s\n" "$t"; done
+        return
+    fi
+
+    local script="$tmpdir/tools/${tool}.sh"
+    [[ -f "$script" ]] || die "tool '$tool' not found — run: labber tool ls"
+
+    info "installing $tool..."
+    bash "$script"
+    ok "$tool installed"
 }
 
 do_clean() {
@@ -496,6 +525,8 @@ ${W}Commands:${N}
   [svc] go          cd to service directory
   ls                list installed services and status
   clean             remove all unused containers, images, networks, and volumes
+  tool <name>       install a tool from the tools/ directory in the repo
+  tool ls           list available tools
   update            system apt update + upgrade + labber self-update
   install           install labber to /usr/local/bin + shell function
   (no args)         interactive menu
@@ -515,7 +546,7 @@ SVC="${1:-}"; shift 2>/dev/null || true
 CMD="${1:-}"; shift 2>/dev/null || true
 
 # Global commands have no service prefix — detect when SVC slot holds a global cmd
-_GLOBAL_CMDS="install ls clean update help -h --help"
+_GLOBAL_CMDS="install ls clean update tool help -h --help"
 if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
     _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
 elif [[ -z "$CMD" ]]; then
@@ -535,6 +566,7 @@ case "$CMD" in
     ls)        do_ls ;;
     go)        do_go        "$SVC" ;;
     clean)     do_clean ;;
+    tool)      do_tool      "$SVC" ;;
     update)
         if [[ -n "$SVC" ]]; then do_svc_upgrade "$SVC"; else do_update; fi
         ;;
