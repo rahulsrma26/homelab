@@ -11,5 +11,8 @@ help:
 labber:
 	git add services/labber && git add services/README.md && git commit -m "labber: update" && git push origin main
 
+tools:
+	git add tools && git commit -m "tools: update" && git push origin main
+
 $(SERVICES):
 	git add services/$@ && git commit -m "$@: update" && git push origin main
