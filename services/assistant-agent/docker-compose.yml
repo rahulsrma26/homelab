@@ -9,11 +9,7 @@ services:
     restart: unless-stopped
     command: >-
       -hf ${MAIN_MODEL}
-      --hf-mmproj ${MMPROJ_MODEL}
-      -hfd ${DRAFT_MODEL}
       --alias ${MODEL_ALIAS:-gemma-4-12b-it}
-      --spec-type draft-mtp
-      --spec-draft-n-max ${SPEC_DRAFT_N:-3}
       --n-gpu-layers 999
       --flash-attn on
       --parallel 1
@@ -24,7 +20,7 @@ services:
       --ctx-size ${CTX_SIZE:-128000}
       --jinja
       --reasoning off
-      --no-mmap
+      --load-mode none
       --host 0.0.0.0
       --port 5050
     environment:
@@ -51,11 +47,12 @@ services:
     restart: unless-stopped
     environment:
       - WYOMING_LANGUAGES=${STT_LANGUAGE:-en}
-      - STT_OPENAI_URL=http://assistant-llama:5050/v1
       - STT_BACKEND=OPENAI
+      - STT_OPENAI_URL=http://assistant-llama:5050/v1
+      - STT_OPENAI_KEY=sk-dummy
+      - STT_MODELS=${MODEL_ALIAS:-gemma-4-12b-it}
+      - STT_PROMPT=${STT_PROMPT}
       - STT_TEMPERATURE=0
-      - STT_OPENAI_MODEL=${MODEL_ALIAS:-gemma-4-12b-it}
-      - STT_OPENAI_PROMPT=${STT_PROMPT}
     ports:
       - "${WYOMING_PORT:-10300}:10300"
     depends_on:
