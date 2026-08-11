@@ -8,7 +8,7 @@ services:
     container_name: assistant-llama
     restart: unless-stopped
     command: >-
-      -hf ${MAIN_MODEL}
+      --model /models/${MAIN_MODEL}
       --mmproj /models/${MMPROJ_FILE}
       --alias ${MODEL_ALIAS:-gemma-4-12b-it}
       --n-gpu-layers 999
@@ -18,7 +18,7 @@ services:
       --ubatch-size 256
       --cache-type-k q8_0
       --cache-type-v q8_0
-      --ctx-size ${CTX_SIZE:-128000}
+      --ctx-size ${CTX_SIZE:-16384}
       --jinja
       --reasoning off
       --load-mode none
