@@ -1,0 +1,62 @@
+services:
+
+  # ── LLM + STT backend ────────────────────────────────────────────────────────
+  # Gemma 4 with mmproj enables /v1/audio/transcriptions for STT.
+  # reasoning=off is required — otherwise Gemma wraps STT output in thinking tokens.
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda13
+    container_name: assistant-llama
+    restart: unless-stopped
+    command: >-
+      -hf ${MAIN_MODEL}
+      --hf-mmproj ${MMPROJ_MODEL}
+      -hfd ${DRAFT_MODEL}
+      --alias ${MODEL_ALIAS:-gemma-4-12b-it}
+      --spec-type draft-mtp
+      --spec-draft-n-max ${SPEC_DRAFT_N:-3}
+      --n-gpu-layers 999
+      --flash-attn on
+      --parallel 1
+      --batch-size 256
+      --ubatch-size 256
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --ctx-size ${CTX_SIZE:-128000}
+      --jinja
+      --reasoning off
+      --no-mmap
+      --host 0.0.0.0
+      --port 5050
+    environment:
+      LLAMA_CACHE: /models
+      HF_TOKEN: ${HF_TOKEN:-}
+    ports:
+      - "${LLAMA_PORT:-5050}:5050"
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ── Wyoming OpenAI bridge ─────────────────────────────────────────────────────
+  # Translates Home Assistant's Wyoming protocol into OpenAI /v1/audio/transcriptions
+  # calls against the llama.cpp server above. No GPU needed here.
+  wyoming-openai:
+    image: ghcr.io/roryeckel/wyoming_openai:latest
+    container_name: assistant-wyoming
+    restart: unless-stopped
+    environment:
+      - WYOMING_LANGUAGES=${STT_LANGUAGE:-en}
+      - STT_OPENAI_URL=http://assistant-llama:5050/v1
+      - STT_BACKEND=OPENAI
+      - STT_TEMPERATURE=0
+      - STT_OPENAI_MODEL=${MODEL_ALIAS:-gemma-4-12b-it}
+      - STT_OPENAI_PROMPT=${STT_PROMPT}
+    ports:
+      - "${WYOMING_PORT:-15050}:10300"
+    depends_on:
+      - llama-cpp
