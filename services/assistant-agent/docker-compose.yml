@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     command: >-
       -hf ${MAIN_MODEL}
+      --mmproj /models/${MMPROJ_FILE}
       --alias ${MODEL_ALIAS:-gemma-4-12b-it}
       --n-gpu-layers 999
       --flash-attn on
