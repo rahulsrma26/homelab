@@ -57,6 +57,6 @@ services:
       - STT_OPENAI_MODEL=${MODEL_ALIAS:-gemma-4-12b-it}
       - STT_OPENAI_PROMPT=${STT_PROMPT}
     ports:
-      - "${WYOMING_PORT:-15050}:10300"
+      - "${WYOMING_PORT:-10300}:10300"
     depends_on:
       - llama-cpp
