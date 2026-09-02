@@ -7,23 +7,21 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda13
     container_name: assistant-llama
     restart: unless-stopped
-    command: >-
-      --model /models/${MAIN_MODEL}
-      --mmproj /models/${MMPROJ_FILE}
+    command: -hf ${MODEL} --host 0.0.0.0 --port 5050
       --alias ${MODEL_ALIAS:-gemma-4-12b-it}
       --n-gpu-layers 999
       --flash-attn on
       --parallel 1
-      --batch-size 256
-      --ubatch-size 256
+      --batch-size ${BATCH_SIZE:-1024}
+      --ubatch-size ${UBATCH_SIZE:-1024}
       --cache-type-k q8_0
       --cache-type-v q8_0
-      --ctx-size ${CTX_SIZE:-16384}
+      --ctx-size ${CONTEXT_SIZE:-131072}
       --jinja
       --reasoning off
-      --load-mode none
-      --host 0.0.0.0
-      --port 5050
+      --threads ${THREADS:-6}
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
     environment:
       LLAMA_CACHE: /models
       HF_TOKEN: ${HF_TOKEN:-}
