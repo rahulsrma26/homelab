@@ -1,0 +1,20 @@
+services:
+  metube:
+    image: ghcr.io/alexta69/metube
+    container_name: metube
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8083}:8081"
+    volumes:
+      - ${DOWNLOAD_DIR:-./downloads}:/downloads
+    environment:
+      - DOWNLOAD_DIR=/downloads
+      - TEMP_DIR=/downloads/.tmp
+      - DELETE_FILE_ON_TRASHCAN=false
+      - DEFAULT_THEME=${DEFAULT_THEME:-auto}
+      - YTDL_OPTIONS=${YTDL_OPTIONS:-}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
