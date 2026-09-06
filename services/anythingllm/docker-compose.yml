@@ -1,0 +1,22 @@
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    # SYS_ADMIN is required for headless Chrome used in document scraping
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      - STORAGE_DIR=/app/server/storage
+    ports:
+      - "${PORT:-3004}:3001"
+    volumes:
+      - ./storage:/app/server/storage
+      - type: bind
+        source: ./.env
+        target: /app/server/.env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
