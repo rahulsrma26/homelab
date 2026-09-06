@@ -12,7 +12,6 @@ services:
       - TEMP_DIR=/downloads/.tmp
       - DELETE_FILE_ON_TRASHCAN=false
       - DEFAULT_THEME=${DEFAULT_THEME:-auto}
-      - YTDL_OPTIONS=${YTDL_OPTIONS:-}
     logging:
       driver: "json-file"
       options:
