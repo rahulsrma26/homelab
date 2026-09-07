@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.2.0"
+VERSION="2.3.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -151,12 +151,24 @@ do_uninstall() {
     check_svc_writable
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
-    warn "will stop '$svc' and delete $dir"
-    local ans; read -rp "Confirm [y/N] " ans
+
+    warn "uninstalling '$svc' from $dir"
+    local ans; read -rp "Stop and remove containers + images? [y/N] " ans
     [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
-    (cd "$dir" && docker compose down)
-    rm -rf "$dir"
-    ok "'$svc' removed"
+
+    info "stopping '$svc' and removing containers + images..."
+    (cd "$dir" && docker compose down --rmi all --remove-orphans)
+    ok "containers and images removed"
+
+    read -rp "Delete service directory $dir? (removes config, data, .env) [y/N] " ans
+    if [[ "$ans" =~ ^[Yy]$ ]]; then
+        rm -rf "$dir"
+        ok "service directory deleted"
+    else
+        info "service directory kept at $dir"
+    fi
+
+    ok "'$svc' uninstalled"
 }
 
 do_start() {
