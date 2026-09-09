@@ -20,3 +20,6 @@ search:
   safe_search: 0
   autocomplete: ""
   default_lang: "en"
+  formats:
+    - html
+    - json
