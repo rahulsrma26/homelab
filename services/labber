@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.4.1"
+VERSION="2.5.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -145,6 +145,413 @@ place_bin() {
     rm -f "$src"
 }
 
+# ── .env placeholders ─────────────────────────────────────────────────────────
+# Placeholder values used in .env.example:
+#   _changeme_          you must provide it (e.g. an API token from another app)
+#   _changeme_min_N_    any value of at least N characters; autofill: N random letters/digits
+#   _changeme_hex_N_    exactly N hex characters;           autofill: random hex
+#   _changeme_b64_N_    base64 of N random bytes;            autofill: random
+#   _changeme_md5_      same as _changeme_hex_32_
+#   _changeme_sha256_   same as _changeme_hex_64_
+#   _changeme_uuid_     a UUID;                              autofill: random UUID
+#   changeme, <...>     older style — you must provide it
+
+# N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'
+rand_chars() {
+    local out=""
+    while (( ${#out} < $1 )); do
+        out+=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "$2")
+    done
+    echo "${out:0:$1}"
+}
+
+rand_uuid() {
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
+    else uuidgen | tr 'A-Z' 'a-z'; fi
+}
+
+# placeholder rule for a value: prints "<kind> <length>", or nothing if not a placeholder
+placeholder_rule() {
+    local v="$1"
+    case "$v" in
+        _changeme_|changeme) echo "manual 0" ;;
+        _changeme_md5_)      echo "hex 32" ;;
+        _changeme_sha256_)   echo "hex 64" ;;
+        _changeme_uuid_)     echo "uuid 36" ;;
+        *)
+            if [[ "$v" =~ ^_changeme_(min|hex|b64)_([0-9]+)_$ ]]; then
+                echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+            elif [[ "$v" =~ \<[^\>]+\> ]]; then
+                echo "manual 0"
+            fi
+            ;;
+    esac
+}
+
+rule_desc() {
+    case "$1" in
+        manual) echo "required" ;;
+        min)    echo "at least $2 characters" ;;
+        hex)    echo "$2 hex characters" ;;
+        b64)    echo "base64 of $2 random bytes" ;;
+        uuid)   echo "UUID" ;;
+    esac
+}
+
+rule_generate() {
+    case "$1" in
+        min)  rand_chars "$2" 'A-Za-z0-9' ;;
+        hex)  rand_chars "$2" 'a-f0-9' ;;
+        b64)  head -c "$2" /dev/urandom | base64 | tr -d '\n' ;;
+        uuid) rand_uuid ;;
+    esac
+}
+
+# is a typed value acceptable for the rule?
+rule_valid() {
+    local kind="$1" len="$2" v="$3"
+    [[ -n "$v" ]] || return 1
+    case "$kind" in
+        min)  (( ${#v} >= len )) ;;
+        hex)  [[ "$v" =~ ^[0-9a-fA-F]+$ ]] && (( ${#v} == len )) ;;
+        uuid) [[ "$v" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] ;;
+        *)    return 0 ;;
+    esac
+}
+
+# value of KEY in an env file, the way compose reads it: quotes removed, and for
+# unquoted values a trailing " # comment" dropped. Tolerates Windows line endings.
+env_get() {
+    local file="$1" key="$2" line
+    line=$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | tail -1) || return 0
+    line="${line%$'\r'}"
+    line="${line#*=}"
+    if [[ "$line" =~ ^\"([^\"]*)\" || "$line" =~ ^\'([^\']*)\' ]]; then
+        line="${BASH_REMATCH[1]}"
+    else
+        [[ "$line" =~ ^(.*[^[:space:]])?[[:space:]]+#.*$ ]] && line="${BASH_REMATCH[1]}"
+        line="${line%"${line##*[![:space:]]}"}"
+    fi
+    echo "$line"
+}
+
+# set KEY=value in an env file (rewritten in place, keeps owner/permissions).
+# Values with spaces or special characters are single-quoted so compose takes them
+# literally. A trailing " # comment" on the line is kept.
+env_set() {
+    local file="$1" key="$2" val="$3"
+    if [[ ! "$val" =~ ^[A-Za-z0-9_./:@+=,-]*$ ]]; then
+        if [[ "$val" != *"'"* ]]; then
+            val="'$val'"
+        else
+            warn "$key contains both ' and special characters — check how it was written in $file"
+        fi
+    fi
+    local tmp; tmp=$(mktemp)
+    K="$key" V="$val" awk '
+        !done && $0 ~ "^[[:space:]]*" ENVIRON["K"] "=" {
+            sub(/\r$/, "")
+            comment = ""
+            if (match($0, /[ \t]+#.*$/)) comment = substr($0, RSTART)
+            print ENVIRON["K"] "=" ENVIRON["V"] comment
+            done = 1; next
+        }
+        { print }
+    ' "$file" > "$tmp"
+    cat "$tmp" > "$file"
+    rm -f "$tmp"
+}
+
+# prompts need a person at the keyboard (not cron, not a pipe)
+interactive() { [[ -t 0 ]]; }
+
+# keys in .env.example that .env doesn't have yet are appended (with their placeholder)
+sync_env_keys() {
+    local dir="$1" line key added=()
+    [[ -f "$dir/.env.example" && -f "$dir/.env" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+        key="${BASH_REMATCH[1]}"
+        grep -qE "^[[:space:]]*${key}=" "$dir/.env" && continue
+        [[ -s "$dir/.env" && -n "$(tail -c1 "$dir/.env")" ]] && echo >> "$dir/.env"
+        echo "$line" >> "$dir/.env"
+        added+=("$key")
+    done < "$dir/.env.example"
+    (( ${#added[@]} == 0 )) || info "added new settings from .env.example: ${added[*]}"
+}
+
+# keys in .env whose value is still a placeholder: prints "KEY kind len" per line
+env_placeholders() {
+    local file="$1" key val rule
+    [[ -f "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+        key="${BASH_REMATCH[1]}"; val=$(env_get "$file" "$key")
+        rule=$(placeholder_rule "$val")
+        [[ -z "$rule" ]] || echo "$key $rule"
+    done < "$file"
+}
+
+# walk through every placeholder in .env: generate it, or let the user type it
+fill_env_placeholders() {
+    local env="$1" items
+    mapfile -t items < <(env_placeholders "$env")
+    (( ${#items[@]} > 0 )) || return 0
+    if ! interactive; then
+        warn "$env has ${#items[@]} unset value(s) — run labber interactively to fill them"
+        return 0
+    fi
+
+    local auto_n=0 it
+    for it in "${items[@]}"; do [[ "${it#* }" != manual* ]] && auto_n=$((auto_n + 1)); done
+    echo; info "${#items[@]} setting(s) in $env need a value"
+
+    local autofill="n" ans
+    if (( auto_n > 0 )); then
+        read -rp "Generate the $auto_n secret(s) that can be generated? [Y/n] " ans
+        [[ "$ans" =~ ^[Nn]$ ]] || autofill="y"
+    fi
+
+    local key kind len val
+    for it in "${items[@]}"; do
+        read -r key kind len <<< "$it"
+        if [[ "$kind" != manual && "$autofill" == y ]]; then
+            env_set "$env" "$key" "$(rule_generate "$kind" "$len")"
+            ok "$key generated ($(rule_desc "$kind" "$len"))"
+            continue
+        fi
+        # show templates like https://joplin.<your-domain> as a hint; bare tokens add nothing
+        local hint="" cur; cur=$(env_get "$env" "$key")
+        [[ "$cur" == *"<"*">"* ]] && hint=" — format: $cur"
+        while true; do
+            if [[ "$kind" == manual ]]; then
+                read -rp "  $key ($(rule_desc "$kind" "$len")$hint), Enter to skip: " val
+                [[ -n "$val" ]] || { warn "$key left unset"; break; }
+            else
+                read -rsp "  $key ($(rule_desc "$kind" "$len")), Enter to generate: " val; echo
+                [[ -n "$val" ]] || val=$(rule_generate "$kind" "$len")
+            fi
+            if rule_valid "$kind" "$len" "$val"; then env_set "$env" "$key" "$val"; ok "$key set"; break; fi
+            warn "needs $(rule_desc "$kind" "$len") — try again"
+        done
+    done
+}
+
+# before starting: refuse quietly-broken configs unless the user insists
+confirm_env_complete() {
+    local env="$1" left
+    left=$(env_placeholders "$env" | awk '{print $1}' | tr '\n' ' ')
+    [[ -n "$left" ]] || return 0
+    warn "still unset in $env: $left"
+    interactive || return 1
+    local ans; read -rp "Start anyway? [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+# ── compose inspection ────────────────────────────────────────────────────────
+
+# fully resolved compose config (variables from .env substituted)
+compose_cfg() { (cd "$1" && docker compose config 2>/dev/null) || true; }
+
+compose_project() { awk '/^name:/ { print $2; exit }' <<< "$1"; }
+
+# host paths of bind mounts in a resolved config
+cfg_bind_sources() {
+    awk '
+        /^[[:space:]]*- type: bind[[:space:]]*$/ { b = 1; next }
+        b && /^[[:space:]]*source:/ { sub(/^[[:space:]]*source:[[:space:]]*/, ""); gsub(/^"|"$/, ""); print; b = 0; next }
+        /^[[:space:]]*- / { b = 0 }
+    ' <<< "$1" | sort -u
+}
+
+# host ports published in a resolved config
+cfg_published_ports() {
+    awk '/^[[:space:]]*published:/ { gsub(/"/, "", $2); if ($2 ~ /^[0-9]+$/) print $2 }' <<< "$1" | sort -un
+}
+
+# uid:gid that service data should belong to: PUID/PGID or UID/GID from .env,
+# else the person running labber
+data_owner() {
+    local env="$1/.env" user uid gid
+    uid=$(env_get "$env" PUID); [[ -n "$uid" ]] || uid=$(env_get "$env" UID)
+    gid=$(env_get "$env" PGID); [[ -n "$gid" ]] || gid=$(env_get "$env" GID)
+    user="${SUDO_USER:-$(id -un)}"
+    [[ "$uid" =~ ^[0-9]+$ ]] || uid=$(id -u "$user")
+    [[ "$gid" =~ ^[0-9]+$ ]] || gid=$(id -g "$user")
+    echo "$uid:$gid"
+}
+
+# create missing bind-mount folders owned by the service's user. Left to Docker,
+# they'd be created as root and the container couldn't write to them.
+# Existing paths are never touched; sources that look like files are only reported.
+ensure_bind_dirs() {
+    local dir="$1" cfg="$2" owner src top sudo_cmd=""
+    owner=$(data_owner "$dir")
+    (( EUID == 0 )) || sudo_cmd="sudo"
+    while IFS= read -r src; do
+        [[ -n "$src" && ! -e "$src" ]] || continue
+        # device nodes, sockets and kernel paths (e.g. /dev/dri/renderD128 on a host
+        # without a GPU) must never be created as folders
+        case "$src" in
+            /dev/*|/proc/*|/sys/*|/run/*|/var/run/*)
+                warn "bind mount $src is missing on this host (not creating system paths)"
+                continue ;;
+        esac
+        if [[ "$(basename "$src")" == *.* ]]; then
+            warn "bind mount $src is missing (looks like a file — not creating it)"
+            continue
+        fi
+        # topmost folder that doesn't exist yet, so new parents get the right owner too
+        top="$src"
+        while [[ ! -e "$(dirname "$top")" ]]; do top=$(dirname "$top"); done
+        if mkdir -p "$src" 2>/dev/null || { [[ -n "$sudo_cmd" ]] && sudo mkdir -p "$src"; }; then
+            if [[ "$owner" == "$(id -u):$(id -g)" && -O "$top" ]] || $sudo_cmd chown -R "$owner" "$top"; then
+                ok "created $src (owner $owner)"
+            else
+                warn "created $src but could not set its owner to $owner"
+            fi
+        else
+            warn "could not create $src"
+        fi
+    done < <(cfg_bind_sources "$cfg")
+}
+
+# who is already using a host port, ignoring this project's own containers.
+# Prints "container <name>" or "a process on this host", or nothing if free.
+port_user() {
+    local port="$1" project="$2" line proj name ports
+    while IFS=$'\t' read -r proj name ports; do
+        [[ "$proj" == "$project" ]] && continue
+        if [[ "$ports" =~ :${port}-\> ]]; then echo "container $name"; return; fi
+    done < <(docker ps --format '{{.Label "com.docker.compose.project"}}\t{{.Names}}\t{{.Ports}}' 2>/dev/null)
+    command -v ss &>/dev/null || return 0
+    # ports this project already publishes show up in ss too (docker-proxy) — skip those
+    if docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Ports}}' 2>/dev/null \
+        | grep -qE ":${port}->"; then
+        return
+    fi
+    if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; then
+        echo "a process on this host"
+    fi
+}
+
+# warn about published ports that are already taken; returns 1 if the user aborts
+check_ports() {
+    local cfg="$1" project port who conflicts=()
+    project=$(compose_project "$cfg")
+    while IFS= read -r port; do
+        [[ -n "$port" ]] || continue
+        who=$(port_user "$port" "$project")
+        [[ -z "$who" ]] || conflicts+=("$port (in use by $who)")
+    done < <(cfg_published_ports "$cfg")
+    (( ${#conflicts[@]} == 0 )) && return 0
+    warn "port conflict:"
+    printf "    %s\n" "${conflicts[@]}" >&2
+    warn "change the port in .env, or stop whatever is using it"
+    interactive || return 1
+    local ans; read -rp "Start anyway? [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]]
+}
+
+# everything to check before (re)starting a service; returns 1 if the user aborts.
+# --no-fill: the caller has just been through the .env prompts, don't repeat them
+preflight() {
+    local dir="$1" fill="${2:-}" cfg
+    sync_env_keys "$dir"
+    if [[ -f "$dir/.env" && "$fill" != --no-fill ]]; then fill_env_placeholders "$dir/.env"; fi
+    [[ ! -f "$dir/.env" ]] || confirm_env_complete "$dir/.env" || return 1
+    cfg=$(compose_cfg "$dir")
+    [[ -n "$cfg" ]] || { warn "invalid compose config — see: cd $dir && docker compose config"; return 1; }
+    check_ports "$cfg" || return 1
+    ensure_bind_dirs "$dir" "$cfg"
+}
+
+# ── update checks ─────────────────────────────────────────────────────────────
+
+UPDATES_FILE="$SERVICE_BASE/.labber-updates"
+
+# does any pulled image of this service have a newer version in its registry?
+# prints yes / no / unknown (unknown: no buildx, offline, or only local images)
+image_update_status() {
+    local dir="$1" img remote local_digests result="unknown"
+    command -v docker &>/dev/null && docker buildx version &>/dev/null || { echo unknown; return; }
+    while IFS= read -r img; do
+        [[ -n "$img" ]] || continue
+        local_digests=$(docker image inspect --format '{{join .RepoDigests " "}}' "$img" 2>/dev/null) || continue
+        [[ -n "$local_digests" ]] || continue          # built locally, nothing to compare
+        remote=$(docker buildx imagetools inspect "$img" 2>/dev/null | awk '/^Digest:/ { print $2; exit }') || true
+        [[ -n "$remote" ]] || continue
+        if [[ " $local_digests " == *"@$remote "* ]]; then
+            [[ "$result" == yes ]] || result="no"
+        else
+            result="yes"
+        fi
+    done < <(cd "$dir" && docker compose config --images 2>/dev/null | sort -u)
+    echo "$result"
+}
+
+# do the repo's files for this service differ from the installed copy?
+config_update_status() {
+    local src="$1" dest="$2" f
+    [[ -d "$src" ]] || { echo unknown; return; }
+    while IFS= read -r f; do
+        cmp -s "$src/$f" "$dest/$f" || { echo yes; return; }
+    done < <(cd "$src" && find . -type f | sed 's|^\./||')
+    echo no
+}
+
+do_check_updates() {
+    check_deps
+    local svcs; mapfile -t svcs < <(list_installed)
+    (( ${#svcs[@]} > 0 )) || { warn "no services installed under $SERVICE_BASE"; return; }
+
+    info "fetching repo..."
+    local tmpdir; tmpdir=$(clone_repo_dir services/)
+    trap "rm -rf '$tmpdir'" EXIT
+
+    local now; now=$(date +%s)
+    local out="" s img cfg
+    echo
+    for s in "${svcs[@]}"; do
+        printf "  %-30s " "$s"
+        img=$(image_update_status "$(svc_dir "$s")")
+        cfg=$(config_update_status "$tmpdir/services/$s" "$(svc_dir "$s")")
+        out+="$s"$'\t'"$img"$'\t'"$cfg"$'\t'"$now"$'\n'
+        update_label "$img" "$cfg"; echo
+    done
+    printf "%s" "$out" > "$UPDATES_FILE" 2>/dev/null || warn "could not write $UPDATES_FILE"
+    echo
+    info "apply with: labber <svc> update   (config + images)  or  labber <svc> rebuild   (images only)"
+}
+
+# after a rebuild/update the cached "update available" flags are stale: record
+# the new state for this service (empty argument = keep the cached value)
+mark_updated() {
+    local svc="$1" img="$2" cfg="$3"
+    [[ -f "$UPDATES_FILE" && -w "$UPDATES_FILE" ]] || return 0
+    local tmp; tmp=$(mktemp)
+    awk -F'\t' -v OFS='\t' -v s="$svc" -v i="$img" -v c="$cfg" '
+        $1 == s { if (i != "") $2 = i; if (c != "") $3 = c }
+        { print }
+    ' "$UPDATES_FILE" > "$tmp"
+    cat "$tmp" > "$UPDATES_FILE"
+    rm -f "$tmp"
+}
+
+# coloured summary for an image/config update pair
+update_label() {
+    local img="$1" cfg="$2" parts=()
+    [[ "$img" == yes ]] && parts+=("${Y}new image${N}")
+    [[ "$cfg" == yes ]] && parts+=("${Y}repo config changed${N}")
+    if (( ${#parts[@]} > 0 )); then
+        echo -ne "${parts[0]}"; (( ${#parts[@]} < 2 )) || echo -ne ", ${parts[1]}"
+    elif [[ "$img" == unknown && "$cfg" == unknown ]]; then
+        echo -ne "update status unknown"
+    else
+        echo -ne "${G}up to date${N}"
+    fi
+}
+
 # ── commands ──────────────────────────────────────────────────────────────────
 
 do_install() {
@@ -165,6 +572,7 @@ do_install() {
     [[ -d "$src" ]] || die "service '$svc' not found in repo"
 
     local dest; dest=$(svc_dir "$svc")
+    local new_env=0
 
     if [[ -d "$dest" ]]; then
         warn "'$svc' already installed at $dest"
@@ -176,9 +584,7 @@ do_install() {
         cp -r "$src/." "$dest/"
         if [[ -f "$dest/.env.example" && ! -f "$dest/.env" ]]; then
             cp "$dest/.env.example" "$dest/.env"
-            warn ".env created from .env.example — edit it before starting"
-            warn "  ${W}nano $dest/.env${N}"
-            read -rp "Press Enter when ready, or Ctrl+C to abort... "
+            new_env=1
         fi
     fi
 
@@ -189,13 +595,24 @@ do_install() {
         echo -e "${W}--------------${N}"; echo
     fi
 
+    if (( new_env )); then
+        info ".env created from .env.example"
+        fill_env_placeholders "$dest/.env"
+        warn "review the other settings (ports, paths, URLs) before starting:"
+        warn "  ${W}nano $dest/.env${N}"
+        read -rp "Press Enter when ready, or Ctrl+C to abort... "
+    fi
+
     if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then
         chown -R "$SUDO_USER:$SUDO_USER" "$dest"
         ok "ownership of $dest set to $SUDO_USER"
     fi
 
+    local pf_opt=""; if (( new_env )); then pf_opt="--no-fill"; fi
+    preflight "$dest" $pf_opt || { info "not started — fix the above, then run: labber $svc start"; return; }
     info "pulling/building images and starting $svc..."
     compose_refresh "$dest"
+    mark_updated "$svc" no no
     ok "$svc is running"
     (cd "$dest" && docker compose ps)
 }
@@ -241,6 +658,7 @@ do_start() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
+    preflight "$dir" || { info "aborted"; return; }
     info "starting $svc..."
     # up -d (not start): recreates containers if they were removed while stopped
     (cd "$dir" && docker compose up -d)
@@ -269,8 +687,10 @@ do_rebuild() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
+    preflight "$dir" || { info "aborted"; return; }
     info "rebuilding '$svc': pull/build → down → up → prune dangling images"
     compose_refresh "$dir"
+    mark_updated "$svc" no ""
     ok "'$svc' rebuilt and running"
     (cd "$dir" && docker compose ps)
 }
@@ -290,8 +710,10 @@ do_svc_upgrade() {
 
     copy_svc_files "$src" "$dir"
 
+    preflight "$dir" || { info "files updated but not restarted — run: labber $svc start"; return; }
     info "rebuilding '$svc': pull/build → down → up → prune dangling images"
     compose_refresh "$dir"
+    mark_updated "$svc" no no
     ok "'$svc' updated and running"
     (cd "$dir" && docker compose ps)
 }
@@ -396,7 +818,7 @@ _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local arg1="${COMP_WORDS[1]}"
     local svc_cmds="install uninstall start stop restart rebuild update shell logs status go"
-    local global_cmds="install ls clean update tool help"
+    local global_cmds="install deploy ls check-updates clean update tool help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -504,42 +926,75 @@ do_clean() {
 }
 
 do_ls() {
-    local svcs; mapfile -t svcs < <(list_installed)
-    if (( ${#svcs[@]} == 0 )); then
-        warn "no services installed under $SERVICE_BASE"
-        return
-    fi
     echo
-    for s in "${svcs[@]}"; do
-        local dir; dir=$(svc_dir "$s")
-        local running; running=$(cd "$dir" && docker compose ps -q 2>/dev/null | wc -l || echo 0)
-        running="${running// /}"
-        if (( running > 0 )); then
-            printf "  ${G}●${N} %-30s ${G}%s container(s) up${N}\n" "$s" "$running"
-        else
-            printf "  ${R}●${N} %-30s ${R}stopped${N}\n" "$s"
-        fi
-    done
+    show_overview
 }
 
 # ── status overview ───────────────────────────────────────────────────────────
 
+# one line per service: containers up, health problems, published ports, and
+# update status from the last `labber check-updates`
+#   ● jellyfin        1/1 up   :8096         up to date
+#   ● librechat       3/4 up   :3080,:3003   1 unhealthy   new image
 show_overview() {
     local svcs; mapfile -t svcs < <(list_installed)
     if (( ${#svcs[@]} == 0 )); then
         echo -e "  ${Y}no services installed${N}"
         return
     fi
+
+    local s state health ports total up bad restarting port_list dot problems upd checked=""
     for s in "${svcs[@]}"; do
-        local dir; dir=$(svc_dir "$s")
-        local running; running=$(cd "$dir" && docker compose ps -q 2>/dev/null | wc -l || echo 0)
-        running="${running// /}"
-        if (( running > 0 )); then
-            printf "  ${G}●${N} %-30s %s container(s) up\n" "$s" "$running"
-        else
-            printf "  ${R}●${N} %-30s stopped\n" "$s"
+        total=0 up=0 bad=0 restarting=0 finished=0 port_list=""
+        local code
+        while IFS='|' read -r state health code ports; do
+            [[ -n "$state" ]] || continue
+            # one-shot containers (init/migration jobs) that finished cleanly aren't "down"
+            if [[ "$state" == exited && "$code" == 0 ]]; then finished=$((finished + 1)); continue; fi
+            total=$((total + 1))
+            [[ "$state" == running ]] && up=$((up + 1))
+            [[ "$state" == restarting ]] && restarting=$((restarting + 1))
+            [[ "$health" == unhealthy ]] && bad=$((bad + 1))
+            port_list+=" $(grep -oE '[0-9]+->' <<< "$ports" | tr -d '>-' | tr '\n' ' ' || true)"
+        done < <(cd "$(svc_dir "$s")" && docker compose ps -a --format '{{.State}}|{{.Health}}|{{.ExitCode}}|{{.Ports}}' 2>/dev/null || true)
+
+        port_list=$(tr ' ' '\n' <<< "$port_list" | grep -E '^[0-9]+$' | sort -un | sed 's/^/:/' | paste -sd, - || true)
+
+        problems=""
+        (( bad == 0 ))        || problems+="${R}${bad} unhealthy${N} "
+        (( restarting == 0 )) || problems+="${R}${restarting} restarting${N} "
+
+        # colour kept separate from the text so printf's column widths line up
+        local col
+        # a stopped service's containers often exit with code 0 too, so they count here
+        if (( total + finished == 0 )); then col="$R"; state="not created"
+        elif (( up == 0 ));  then col="$R"; state="stopped"
+        elif (( up < total || bad > 0 || restarting > 0 )); then col="$Y"; state="${up}/${total} up"
+        else col="$G"; state="${up}/${total} up"
         fi
+        dot="${col}●${N}"
+
+        upd=""
+        if [[ -f "$UPDATES_FILE" ]]; then
+            local line; line=$(awk -F'\t' -v s="$s" '$1 == s' "$UPDATES_FILE")
+            if [[ -n "$line" ]]; then
+                local img cfg ts
+                IFS=$'\t' read -r _ img cfg ts <<< "$line"
+                upd=$(update_label "$img" "$cfg")
+                checked="$ts"
+            fi
+        fi
+
+        printf "  %b %-28s %b%-12s%b %-18s %b%b\n" "$dot" "$s" "$col" "$state" "$N" "${port_list:--}" "$problems" "$upd"
     done
+
+    echo
+    if [[ -n "$checked" ]]; then
+        local days=$(( ( $(date +%s) - checked ) / 86400 ))
+        echo -e "  update info from $( (( days == 0 )) && echo today || echo "$days day(s) ago") — refresh: ${W}labber check-updates${N}"
+    else
+        echo -e "  check for updates: ${W}labber check-updates${N}"
+    fi
 }
 
 # ── interactive menu ──────────────────────────────────────────────────────────
@@ -550,7 +1005,7 @@ show_menu() {
     show_overview
     echo
 
-    local cmds=(  deploy  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  go  clean  update )
+    local cmds=(  deploy  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  check-updates  go  clean  update )
     local descs=(
         "deploy a service from repo"
         "stop and remove a service"
@@ -562,6 +1017,7 @@ show_menu() {
         "follow service logs"
         "show container status"
         "list installed services and status"
+        "check which services have updates"
         "go to service directory"
         "remove all unused containers, images, volumes"
         "system apt update + upgrade labber"
@@ -606,7 +1062,8 @@ ${W}Commands:${N}
   [svc] logs        follow docker compose logs
   [svc] status      show container status
   [svc] go          cd to service directory
-  ls                list installed services and status
+  ls                list services: containers up, health, ports, updates
+  check-updates     check images and repo config for updates (cron-able)
   clean             remove all unused containers, images, networks, and volumes
   tool <name>       install a tool from the tools/ directory in the repo
   tool ls           list available tools
@@ -614,6 +1071,18 @@ ${W}Commands:${N}
   install           install labber to /usr/local/bin + shell function
   <svc>             show a service's status and commands
   (no args)         interactive menu
+
+${W}.env placeholders${N} (in .env.example — filled in on install/update/start):
+  _changeme_           you provide it       _changeme_hex_N_   N random hex characters
+  _changeme_min_N_     ≥ N characters       _changeme_b64_N_   base64 of N random bytes
+  _changeme_md5_       = _changeme_hex_32_  _changeme_sha256_  = _changeme_hex_64_
+  _changeme_uuid_      a random UUID        changeme, <...>    older style — you provide it
+
+${W}Before every start${N} labber also checks for port conflicts and creates missing
+bind-mount folders owned by PUID/PGID (or UID/GID) from .env, else by you.
+
+${W}Weekly update check${N} (add with: crontab -e):
+  0 6 * * 1  /usr/local/bin/labber check-updates >/dev/null 2>&1
 
 ${W}Note:${N}
   'labber <svc> go' requires the shell function installed by 'labber install'.
@@ -630,7 +1099,7 @@ SVC="${1:-}"; shift 2>/dev/null || true
 CMD="${1:-}"; shift 2>/dev/null || true
 
 # Global commands have no service prefix — detect when SVC slot holds a global cmd
-_GLOBAL_CMDS="install ls clean update tool help -h --help"
+_GLOBAL_CMDS="install deploy ls check-updates clean update tool help -h --help"
 if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
     _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
 elif [[ -z "$CMD" ]]; then
@@ -658,6 +1127,7 @@ case "$CMD" in
     logs)      do_logs      "$SVC" ;;
     status)    do_status    "$SVC" ;;
     ls)        do_ls ;;
+    check-updates) do_check_updates ;;
     go)        do_go        "$SVC" ;;
     clean)     do_clean ;;
     tool)      do_tool      "$SVC" ;;
