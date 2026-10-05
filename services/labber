@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.5.0"
+VERSION="2.5.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -77,9 +77,18 @@ pick() {
     echo "${items[$((n-1))]}"
 }
 
+# service names are paths under $SERVICE_BASE: no "..", no leading slash or dot,
+# so nothing built from them (cd, cp, rm -rf) can point outside it
+valid_svc_name() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$ && "$1" != *..* ]]
+}
+
 # resolve service: use CLI arg if given, else interactive pick from installed
 resolve_svc() {
-    if [[ -n "${1:-}" ]]; then echo "$1"; return; fi
+    if [[ -n "${1:-}" ]]; then
+        valid_svc_name "$1" || die "invalid service name '$1'"
+        echo "$1"; return
+    fi
     local svcs; mapfile -t svcs < <(list_installed)
     (( ${#svcs[@]} > 0 )) || die "no services installed under $SERVICE_BASE"
     pick "Select service:" "${svcs[@]}"
@@ -112,6 +121,18 @@ copy_svc_files() {
     if [[ -f "$dest/.env.labber-bak" ]]; then mv -f "$dest/.env.labber-bak" "$dest/.env"; fi
 }
 
+# under sudo, files labber copies end up owned by root: hand them back to the
+# person who ran sudo. Only the files that came from the repo — never service
+# data, which may deliberately belong to another user (postgres runs as 999).
+give_back_files() {
+    local src="$1" dest="$2" f
+    (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]] || return 0
+    while IFS= read -r f; do
+        chown -h "$SUDO_USER:" "$dest/$f" 2>/dev/null || true
+    done < <(cd "$src" && find . -mindepth 1 | sed 's|^\./||')
+    chown "$SUDO_USER:" "$dest" 2>/dev/null || true
+}
+
 # fetch new images (and rebuild locally built ones) while the old containers keep
 # running, then swap them over. If a pull or build fails the service stays up.
 #   - pull --ignore-buildable: images built from a local Dockerfile can't be pulled
@@ -119,7 +140,13 @@ copy_svc_files() {
 #   - image prune: only dangling images — never touches other services' containers
 compose_refresh() {
     local dir="$1"
-    (cd "$dir" && docker compose pull --ignore-buildable)
+    # older compose releases don't know --ignore-buildable; fall back to not
+    # failing on images that can only be built
+    if docker compose pull --help 2>/dev/null | grep -q -- '--ignore-buildable'; then
+        (cd "$dir" && docker compose pull --ignore-buildable)
+    else
+        (cd "$dir" && docker compose pull --ignore-pull-failures)
+    fi
     # only build when something is built locally (avoids a "No services to build" warning)
     if grep -qE '^[[:space:]]+build:' "$dir/docker-compose.yml"; then
         (cd "$dir" && docker compose build --pull)
@@ -568,11 +595,12 @@ do_install() {
     )
 
     local svc="${1:-}"; [[ -n "$svc" ]] || svc=$(pick "Select service to install:" "${avail[@]}")
+    valid_svc_name "$svc" || die "invalid service name '$svc'"
     local src="$tmpdir/services/$svc"
     [[ -d "$src" ]] || die "service '$svc' not found in repo"
 
     local dest; dest=$(svc_dir "$svc")
-    local new_env=0
+    local new_env=0 fresh=0
 
     if [[ -d "$dest" ]]; then
         warn "'$svc' already installed at $dest"
@@ -580,6 +608,7 @@ do_install() {
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
         copy_svc_files "$src" "$dest"
     else
+        fresh=1
         mkdir -p "$dest"
         cp -r "$src/." "$dest/"
         if [[ -f "$dest/.env.example" && ! -f "$dest/.env" ]]; then
@@ -600,11 +629,18 @@ do_install() {
         fill_env_placeholders "$dest/.env"
         warn "review the other settings (ports, paths, URLs) before starting:"
         warn "  ${W}nano $dest/.env${N}"
-        read -rp "Press Enter when ready, or Ctrl+C to abort... "
+        if interactive; then read -rp "Press Enter when ready, or Ctrl+C to abort... "; fi
     fi
 
     if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then
-        chown -R "$SUDO_USER:$SUDO_USER" "$dest"
+        # fresh install: nothing but labber's files yet, so the whole folder is safe to
+        # chown. Reinstall: only the repo files — a recursive chown would also hit
+        # container data owned by other users and break it (e.g. postgres, mongo)
+        if (( fresh )); then
+            chown -R "$SUDO_USER:" "$dest"
+        else
+            give_back_files "$src" "$dest"
+        fi
         ok "ownership of $dest set to $SUDO_USER"
     fi
 
@@ -645,7 +681,12 @@ do_uninstall() {
 
     read -rp "Delete service directory $dir? (removes config, data, .env) [y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-        rm -rf "$dir"
+        # container data is often owned by other users (e.g. uid 999), which a
+        # normal user can't delete — retry those with sudo
+        if ! rm -rf "$dir" 2>/dev/null; then
+            warn "some files belong to other users (container data) — removing with sudo"
+            sudo rm -rf -- "$dir"
+        fi
         ok "service directory deleted"
     else
         info "service directory kept at $dir"
@@ -709,6 +750,7 @@ do_svc_upgrade() {
     [[ -d "$src" ]] || die "service '$svc' not found in repo"
 
     copy_svc_files "$src" "$dir"
+    give_back_files "$src" "$dir"
 
     preflight "$dir" || { info "files updated but not restarted — run: labber $svc start"; return; }
     info "rebuilding '$svc': pull/build → down → up → prune dangling images"
@@ -790,6 +832,11 @@ _strip_rc_block() {
     rm -f "$tmp"
 }
 
+# under sudo, a .bashrc that labber had to create would belong to root
+_fix_rc_owner() {
+    if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then chown "$SUDO_USER:" "$1" 2>/dev/null || true; fi
+}
+
 _install_shell_fn() {
     local rc; rc="$(target_home)/.bashrc"
     _strip_rc_block "$rc" "# labber shell function" '^}$'
@@ -804,6 +851,7 @@ labber() {
   fi
 }
 BASHRC
+    _fix_rc_owner "$rc"
     ok "shell function updated in $rc"
 }
 
@@ -830,6 +878,7 @@ _labber_complete() {
 }
 complete -F _labber_complete labber
 BASHRC
+    _fix_rc_owner "$rc"
     ok "tab completion updated in $rc"
 }
 
@@ -886,7 +935,8 @@ do_update() {
     echo
     info "checking shell integration..."
     _install_shell_fn
-    _install_completion_fn
+    # refresh completion only if it was enabled at install time
+    if grep -qxF "# labber completion" "$(target_home)/.bashrc" 2>/dev/null; then _install_completion_fn; fi
     warn "run 'source ~/.bashrc' to apply any changes"
 }
 
