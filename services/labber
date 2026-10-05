@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.3.0"
+VERSION="2.4.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -85,17 +85,75 @@ resolve_svc() {
     pick "Select service:" "${svcs[@]}"
 }
 
+# sparse-clone one top-level repo directory into a fresh temp dir; prints the path.
+# The caller sets the cleanup trap with the path expanded, e.g.
+#   trap "rm -rf '$tmpdir'" EXIT
+# (a trap that refers to a function-local variable runs after the function has
+# returned, when the variable no longer exists, so it would delete nothing)
+clone_repo_dir() {
+    local tmpdir; tmpdir=$(mktemp -d /tmp/homelab-deploy-XXXXXX)
+    # set -e doesn't apply inside $(...), so fail explicitly
+    if ! git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir" \
+        || ! git -C "$tmpdir" sparse-checkout set "$1"; then
+        rm -rf "$tmpdir"
+        echo -e "${R}error: could not fetch $REPO${N}" >&2
+        return 1
+    fi
+    echo "$tmpdir"
+}
+
+# copy a service's files from the repo over the installed copy, keeping .env.
+# The backup sits next to .env (same owner and permissions) rather than in /tmp,
+# and is left behind if anything fails, so the .env is never lost.
+copy_svc_files() {
+    local src="$1" dest="$2"
+    [[ -f "$dest/.env" ]] && cp -p "$dest/.env" "$dest/.env.labber-bak"
+    cp -r "$src/." "$dest/"
+    if [[ -f "$dest/.env.labber-bak" ]]; then mv -f "$dest/.env.labber-bak" "$dest/.env"; fi
+}
+
+# fetch new images (and rebuild locally built ones) while the old containers keep
+# running, then swap them over. If a pull or build fails the service stays up.
+#   - pull --ignore-buildable: images built from a local Dockerfile can't be pulled
+#   - build --pull: rebuild local images on a fresh base image
+#   - image prune: only dangling images — never touches other services' containers
+compose_refresh() {
+    local dir="$1"
+    (cd "$dir" && docker compose pull --ignore-buildable)
+    # only build when something is built locally (avoids a "No services to build" warning)
+    if grep -qE '^[[:space:]]+build:' "$dir/docker-compose.yml"; then
+        (cd "$dir" && docker compose build --pull)
+    fi
+    (cd "$dir" && docker compose down --remove-orphans)
+    (cd "$dir" && docker compose up -d)
+    docker image prune -f >/dev/null
+}
+
+# home directory of the person running labber (their own home, even under sudo)
+target_home() {
+    if [[ -n "${SUDO_USER:-}" ]]; then getent passwd "$SUDO_USER" | cut -d: -f6; else echo "$HOME"; fi
+}
+
+# put a downloaded labber at $LABBER_BIN without overwriting the running file in
+# place: copy next to it, then rename. A running labber keeps reading the old file.
+place_bin() {
+    local src="$1" sudo_cmd=""
+    (( EUID == 0 )) || sudo_cmd="sudo"
+    $sudo_cmd cp "$src" "$LABBER_BIN.new"
+    $sudo_cmd chmod 755 "$LABBER_BIN.new"
+    $sudo_cmd mv -f "$LABBER_BIN.new" "$LABBER_BIN"
+    rm -f "$src"
+}
+
 # ── commands ──────────────────────────────────────────────────────────────────
 
 do_install() {
     check_deps
     check_svc_writable
-    local tmpdir="/tmp/homelab-deploy-$$"
-    trap 'rm -rf "${tmpdir:-}"' EXIT
 
     info "fetching service list from repo..."
-    git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
-    git -C "$tmpdir" sparse-checkout set services/
+    local tmpdir; tmpdir=$(clone_repo_dir services/)
+    trap "rm -rf '$tmpdir'" EXIT
 
     local avail; mapfile -t avail < <(
         find "$tmpdir/services" -maxdepth 3 -name "docker-compose.yml" -exec dirname {} \; \
@@ -112,11 +170,7 @@ do_install() {
         warn "'$svc' already installed at $dest"
         local ans; read -rp "Reinstall? (overwrites config files, preserves .env) [y/N] " ans
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
-        (cd "$dest" && docker compose down 2>/dev/null || true)
-        # back up .env, overwrite everything, restore .env
-        [[ -f "$dest/.env" ]] && cp "$dest/.env" "/tmp/.labber-env-backup-$$"
-        cp -r "$src/." "$dest/"
-        [[ -f "/tmp/.labber-env-backup-$$" ]] && mv "/tmp/.labber-env-backup-$$" "$dest/.env"
+        copy_svc_files "$src" "$dest"
     else
         mkdir -p "$dest"
         cp -r "$src/." "$dest/"
@@ -140,8 +194,8 @@ do_install() {
         ok "ownership of $dest set to $SUDO_USER"
     fi
 
-    info "pulling images and starting $svc..."
-    (cd "$dest" && docker compose pull && docker compose up -d)
+    info "pulling/building images and starting $svc..."
+    compose_refresh "$dest"
     ok "$svc is running"
     (cd "$dest" && docker compose ps)
 }
@@ -156,9 +210,21 @@ do_uninstall() {
     local ans; read -rp "Stop and remove containers + images? [y/N] " ans
     [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
 
-    info "stopping '$svc' and removing containers + images..."
-    (cd "$dir" && docker compose down --rmi all --remove-orphans)
-    ok "containers and images removed"
+    # list images first (needs the compose file), remove containers, then remove
+    # images one by one: `down --rmi all` aborts the whole uninstall if another
+    # service still uses one of the images (e.g. a shared mongo/redis)
+    local images; mapfile -t images < <(cd "$dir" && docker compose config --images 2>/dev/null | sort -u)
+    info "stopping '$svc' and removing containers..."
+    (cd "$dir" && docker compose down --remove-orphans)
+    ok "containers removed"
+    local img
+    for img in "${images[@]}"; do
+        if docker image rm "$img" >/dev/null 2>&1; then
+            ok "removed image $img"
+        else
+            warn "kept image $img (still used by another container, or not present)"
+        fi
+    done
 
     read -rp "Delete service directory $dir? (removes config, data, .env) [y/N] " ans
     if [[ "$ans" =~ ^[Yy]$ ]]; then
@@ -176,7 +242,8 @@ do_start() {
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
     info "starting $svc..."
-    (cd "$dir" && docker compose start)
+    # up -d (not start): recreates containers if they were removed while stopped
+    (cd "$dir" && docker compose up -d)
     ok "done"
 }
 
@@ -202,11 +269,8 @@ do_rebuild() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
-    info "rebuilding '$svc': down → system prune → pull → up"
-    (cd "$dir" && docker compose down)
-    docker system prune -f
-    (cd "$dir" && docker compose pull)
-    (cd "$dir" && docker compose up -d)
+    info "rebuilding '$svc': pull/build → down → up → prune dangling images"
+    compose_refresh "$dir"
     ok "'$svc' rebuilt and running"
     (cd "$dir" && docker compose ps)
 }
@@ -216,27 +280,18 @@ do_svc_upgrade() {
     check_svc_writable
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
-    local tmpdir="/tmp/homelab-deploy-$$"
-    local env_backup="/tmp/.labber-env-backup-$$"
-    trap 'rm -rf "${tmpdir:-}" "${env_backup:-}"' EXIT
 
     info "fetching latest '$svc' from repo..."
-    git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
-    git -C "$tmpdir" sparse-checkout set services/
+    local tmpdir; tmpdir=$(clone_repo_dir services/)
+    trap "rm -rf '$tmpdir'" EXIT
 
     local src="$tmpdir/services/$svc"
     [[ -d "$src" ]] || die "service '$svc' not found in repo"
 
-    # preserve .env, overwrite everything else
-    [[ -f "$dir/.env" ]] && cp "$dir/.env" "$env_backup"
-    cp -r "$src/." "$dir/"
-    [[ -f "$env_backup" ]] && mv "$env_backup" "$dir/.env"
+    copy_svc_files "$src" "$dir"
 
-    info "rebuilding '$svc': down → prune → pull → up"
-    (cd "$dir" && docker compose down)
-    docker system prune -f
-    (cd "$dir" && docker compose pull)
-    (cd "$dir" && docker compose up -d)
+    info "rebuilding '$svc': pull/build → down → up → prune dangling images"
+    compose_refresh "$dir"
     ok "'$svc' updated and running"
     (cd "$dir" && docker compose ps)
 }
@@ -250,7 +305,13 @@ do_shell() {
     local ctr="${ctrs[0]}"
     (( ${#ctrs[@]} > 1 )) && ctr=$(pick "Select container:" "${ctrs[@]}")
     info "entering $ctr..."
-    docker exec -it "$ctr" /bin/bash 2>/dev/null || docker exec -it "$ctr" /bin/sh
+    # pick the shell up front: falling back on bash's exit code would open a
+    # second shell whenever the last command in the bash session failed
+    if docker exec "$ctr" sh -c 'command -v bash' >/dev/null 2>&1; then
+        docker exec -it "$ctr" bash
+    else
+        docker exec -it "$ctr" sh
+    fi
 }
 
 do_logs() {
@@ -267,6 +328,13 @@ do_status() {
     (cd "$dir" && docker compose ps)
 }
 
+# `labber <svc>` with no command: show its status and what can be done with it
+do_svc_info() {
+    do_status "$1"
+    echo
+    echo -e "${W}commands:${N} labber $1 <install|uninstall|start|stop|restart|rebuild|update|shell|logs|status|go>"
+}
+
 do_go() {
     local svc; svc=$(resolve_svc "${1:-}")
     need_svc "$svc" >/dev/null
@@ -281,17 +349,28 @@ do_go() {
     fi
 }
 
+# remove a labber-managed block from a .bashrc: from the line equal to $2 up to
+# the first line matching regex $3. Blank lines directly before the block go too,
+# so reinstalling doesn't pile up empty lines. The file is rewritten in place
+# (not replaced) so it keeps its owner and permissions, even under sudo.
+_strip_rc_block() {
+    local rc="$1" start="$2" end_re="$3"
+    grep -qxF "$start" "$rc" 2>/dev/null || return 0
+    local tmp; tmp=$(mktemp)
+    awk -v start="$start" -v end_re="$end_re" '
+        skip         { if ($0 ~ end_re) skip = 0; next }
+        $0 == start  { blank = 0; skip = 1; next }
+        /^[ \t]*$/   { blank++; next }
+                     { while (blank > 0) { print ""; blank-- } print }
+        END          { while (blank > 0) { print ""; blank-- } }
+    ' "$rc" > "$tmp"
+    cat "$tmp" > "$rc"
+    rm -f "$tmp"
+}
+
 _install_shell_fn() {
-    local target_home="$HOME"
-    [[ -n "${SUDO_USER:-}" ]] && target_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
-    local rc="$target_home/.bashrc"
-    local start_marker="# labber shell function"
-    local end_marker="^}"
-    if grep -qF "$start_marker" "$rc" 2>/dev/null; then
-        local tmp; tmp=$(mktemp)
-        awk "/^${start_marker}$/{skip=1} skip && /^}$/{skip=0; next} !skip" "$rc" > "$tmp"
-        mv "$tmp" "$rc"
-    fi
+    local rc; rc="$(target_home)/.bashrc"
+    _strip_rc_block "$rc" "# labber shell function" '^}$'
     cat >> "$rc" <<'BASHRC'
 
 # labber shell function
@@ -307,22 +386,16 @@ BASHRC
 }
 
 _install_completion_fn() {
-    local rc="${HOME}/.bashrc"
-    local start_marker="# labber completion"
-    local end_marker="complete -F _labber_complete labber"
-    # Remove old block so we always install the latest version
-    if grep -qF "$start_marker" "$rc" 2>/dev/null; then
-        local tmp; tmp=$(mktemp)
-        awk "/^${start_marker}$/{skip=1} skip && /^${end_marker}$/{skip=0; next} !skip" "$rc" > "$tmp"
-        mv "$tmp" "$rc"
-    fi
+    local rc; rc="$(target_home)/.bashrc"
+    # remove the old block so we always install the latest version
+    _strip_rc_block "$rc" "# labber completion" '^complete -F _labber_complete labber$'
     cat >> "$rc" <<'BASHRC'
 
 # labber completion
 _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local arg1="${COMP_WORDS[1]}"
-    local svc_cmds="uninstall start stop restart rebuild update shell logs status go"
+    local svc_cmds="install uninstall start stop restart rebuild update shell logs status go"
     local global_cmds="install ls clean update tool help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
@@ -340,14 +413,14 @@ BASHRC
 
 do_self_install() {
     command -v curl &>/dev/null || die "curl is required for self-install"
-    local sudo_cmd=""
-    (( EUID == 0 )) || sudo_cmd="sudo"
     if [[ -f "$LABBER_BIN" ]]; then
         local ans; read -rp "labber already installed at $LABBER_BIN. Overwrite? [y/N] " ans
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
     fi
     info "installing labber to $LABBER_BIN..."
-    curl -fsSL "$LABBER_URL" | $sudo_cmd tee "$LABBER_BIN" > /dev/null && $sudo_cmd chmod 755 "$LABBER_BIN"
+    local tmp; tmp=$(mktemp /tmp/labber-install-XXXXXX)
+    curl -fsSL "$LABBER_URL" -o "$tmp" || { rm -f "$tmp"; die "download failed: $LABBER_URL"; }
+    place_bin "$tmp"
     ok "labber installed to $LABBER_BIN"
     _install_shell_fn
     local ans; read -rp "Enable tab completion? [Y/n] " ans
@@ -386,7 +459,7 @@ do_update() {
         rm -f "$tmp"
         return
     fi
-    $sudo_cmd mv -f "$tmp" "$LABBER_BIN" && $sudo_cmd chmod 755 "$LABBER_BIN"
+    place_bin "$tmp"
     ok "labber updated: v${VERSION} → v${remote_ver}"
     echo
     info "checking shell integration..."
@@ -399,11 +472,8 @@ do_tool() {
     local tool="${1:-}"
     [[ -n "$tool" ]] || die "usage: labber tool <name>  |  labber tool ls"
 
-    local tmpdir="/tmp/homelab-tools-$$"
-    trap 'rm -rf "${tmpdir:-}"' EXIT
-
-    git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir"
-    git -C "$tmpdir" sparse-checkout set tools/
+    local tmpdir; tmpdir=$(clone_repo_dir tools/)
+    trap "rm -rf '$tmpdir'" EXIT
 
     if [[ "$tool" == "ls" || "$tool" == "list" ]]; then
         local available
@@ -486,8 +556,8 @@ show_menu() {
         "stop and remove a service"
         "start service containers"
         "stop service containers"
-        "restart service containers"
-        "full rebuild: down + prune + pull + up"
+        "recreate service containers"
+        "pull/build new images, then recreate containers"
         "enter a running container shell"
         "follow service logs"
         "show container status"
@@ -525,12 +595,13 @@ ${W}Usage:${N}
   labber [svc] <command>
 
 ${W}Commands:${N}
+  [svc] install     deploy a service from the repo (also: deploy)
   [svc] uninstall   stop and remove a service
-  [svc] start       docker compose start
+  [svc] start       start containers (docker compose up -d)
   [svc] stop        docker compose stop
-  [svc] restart     docker compose restart
-  [svc] rebuild     full rebuild: down + system prune + pull + up
-  [svc] update      pull latest from repo + full rebuild (preserves .env)
+  [svc] restart     recreate containers (docker compose up -d --force-recreate)
+  [svc] rebuild     pull/build new images, then recreate containers
+  [svc] update      pull latest config from repo + rebuild (preserves .env)
   [svc] shell       enter a running container shell
   [svc] logs        follow docker compose logs
   [svc] status      show container status
@@ -541,6 +612,7 @@ ${W}Commands:${N}
   tool ls           list available tools
   update            system apt update + upgrade + labber self-update
   install           install labber to /usr/local/bin + shell function
+  <svc>             show a service's status and commands
   (no args)         interactive menu
 
 ${W}Note:${N}
@@ -548,7 +620,7 @@ ${W}Note:${N}
   After install, run: source ~/.bashrc
 
 ${W}One-liner install on any LXC:${N}
-  bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber)
+  bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) install
 EOF
 }
 
@@ -562,11 +634,21 @@ _GLOBAL_CMDS="install ls clean update tool help -h --help"
 if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
     _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
 elif [[ -z "$CMD" ]]; then
-    CMD="$SVC"; SVC=""
+    # `labber <svc>` alone → that service's status; otherwise treat it as a command
+    if [[ -n "$SVC" && -f "$(svc_dir "$SVC")/docker-compose.yml" ]]; then
+        CMD="info"
+    else
+        CMD="$SVC"; SVC=""
+    fi
 fi
 
 case "$CMD" in
-    install)   do_self_install ;;
+    install|deploy)
+        # `labber install` installs labber itself; `labber <svc> install` deploys a
+        # service; `labber deploy` picks a service to deploy
+        if [[ -n "$SVC" || "$CMD" == deploy ]]; then do_install "$SVC"; else do_self_install; fi
+        ;;
+    info)      do_svc_info  "$SVC" ;;
     uninstall) do_uninstall "$SVC" ;;
     start)     do_start     "$SVC" ;;
     stop)      do_stop      "$SVC" ;;
