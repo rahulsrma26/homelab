@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.6.1"
+VERSION="2.6.2"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1883,7 +1883,9 @@ labber_main() {
     esac
 }
 
-# run only when executed (including `bash <(curl …)`), not when sourced by the tests
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# run unless sourced (the tests source labber to call its functions). `return` only
+# works when sourced, so this covers every way of running it: `labber`, `bash labber`,
+# `bash <(curl …)` and `curl … | bash -s …` (where BASH_SOURCE and $0 differ)
+if ! (return 0 2>/dev/null); then
     labber_main "$@"
 fi
