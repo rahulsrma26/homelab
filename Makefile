@@ -14,6 +14,9 @@ labber:
 tool:
 	git add tools && git commit -m "tools: update" && git push origin main
 
+test:
+	git add tests && git commit -m "tests: update" && git push origin main
+
 # labber tests — see tests/labber/README.md
 test-labber-unit:
 	tests/labber/run-unit.sh
