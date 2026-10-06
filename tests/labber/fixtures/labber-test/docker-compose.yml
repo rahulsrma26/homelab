@@ -1,0 +1,23 @@
+# Test service for labber's integration tests — installed only by tests/labber/run-vm.sh,
+# which copies it into a temporary repo. It exercises:
+#   - .env placeholders (generated + typed), a published port, a bind-mount data folder
+#   - a locally built image (pull must skip it, build must build it)
+#   - a one-shot container that exits 0 (must not count as "down" in `labber ls`)
+services:
+  web:
+    image: busybox:1.37
+    command: ["httpd", "-f", "-p", "80", "-h", "/www"]
+    restart: unless-stopped
+    ports:
+      - "${PORT}:80"
+    volumes:
+      - ./data/www:/www
+    environment:
+      - SECRET=${SECRET}
+      - PASSWORD=${PASSWORD}
+
+  job:
+    build: ./job
+    image: labber-test-job
+    environment:
+      - API_TOKEN=${API_TOKEN}

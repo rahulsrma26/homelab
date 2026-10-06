@@ -2,6 +2,7 @@
 *.env
 !*.env.example
 personal/
+internal/
 .obsidian/
 tmp/
 .venv/
