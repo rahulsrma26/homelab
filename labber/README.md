@@ -73,7 +73,7 @@ labber [svc] <command>
   [svc] stop        docker compose stop
   [svc] restart     recreate containers (docker compose up -d --force-recreate)
   [svc] rebuild     pull/build new images, then recreate containers
-  [svc] update      pull latest config from repo + rebuild (preserves .env)
+  [svc] update      pull latest config from repo + rebuild (keeps .env and files you edited)
   [svc] shell       enter a running container shell
   [svc] logs        follow docker compose logs
   [svc] status      show container status
@@ -98,6 +98,8 @@ On every `install`, `start`, `rebuild` and `update`:
 - **`.env` values** — keys new in `.env.example` are added to `.env`; placeholders (below) are asked for or generated. If anything is still unset, labber lists it and asks before starting.
 - **Ports** — warns if a published port is already used by another container or process.
 - **Data folders** — creates missing bind-mount folders owned by `PUID`/`PGID` (or `UID`/`GID`) from `.env`, otherwise by you. Without this, Docker creates them as root and many containers can't write to them. Existing paths are never changed.
+
+**Config files you edited** (frigate's cameras, Prometheus targets…) are never overwritten by `update`. labber remembers each repo file as it installed it (`.labber-base` in the service folder): a file you changed stays as it is, and if the repo changed it too, the repo's version is put next to it as `<file>.labber-new` to compare. Your edits also don't show up as "repo config changed" in `labber ls`. A reinstall (`labber <svc> install` again) does take the repo's version, and keeps yours as `<file>.labber-bak`. `.env.example` and `README.txt` are always replaced (you edit `.env`, which is never touched). If a service has `.env.example` but no `.env`, it's created from it.
 
 Updates pull new images **before** stopping the old containers, so a failed pull or build leaves the service running. Locally built images are built, not pulled.
 

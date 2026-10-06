@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="4.0.0"
+VERSION="4.0.1"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -126,14 +126,76 @@ clone_repo_dir() {
     echo "$tmpdir"
 }
 
+# ── repo files vs your edits ──
+# Some repo files are meant to be edited after install (frigate's cameras, prometheus
+# targets). Each service folder keeps .labber-base: the sha256 of every repo file as
+# labber last installed it. Comparing against it tells your edits apart from repo
+# changes, so `update` never overwrites an edited file.
+
+BASE_FILE=".labber-base"
+
+# repo files of a service (relative paths), sorted
+repo_files() { (cd "$1" && find . -type f | sed 's|^\./||' | sort); }
+
+file_sum() { sha256sum < "$1" | cut -c1-64; }
+
+# the sha256 file $2 had when labber last installed it into $1 (empty if unknown)
+base_sum() { awk -v f="$2" 'substr($0, 67) == f { print substr($0, 1, 64); exit }' "$1/$BASE_FILE" 2>/dev/null || true; }
+
+# remember the repo files of $1 as installed into $2
+record_base() {
+    local src="$1" dest="$2" f
+    while IFS= read -r f; do printf '%s  %s\n' "$(file_sum "$src/$f")" "$f"; done < <(repo_files "$src") > "$dest/$BASE_FILE"
+    give_back "$dest/$BASE_FILE"
+}
+
+# was installed file $2 (relative to $1) changed since labber put it there?
+# Without a record (installed before labber kept one) any difference counts as an edit.
+locally_edited() {
+    local dest="$1" f="$2" b; b=$(base_sum "$dest" "$f")
+    if [[ -n "$b" ]]; then [[ "$(file_sum "$dest/$f")" != "$b" ]]; else return 0; fi
+}
+
+# under sudo, hand a file labber created back to the person who ran sudo
+give_back() { if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then chown "$SUDO_USER:" "$1" 2>/dev/null || true; fi; }
+
 # copy a service's files from the repo over the installed copy, keeping .env.
-# The backup sits next to .env (same owner and permissions) rather than in /tmp,
+#   update    (default) a file you edited stays as it is; when the repo changed it
+#             too, the repo's version is saved next to it as <file>.labber-new
+#   reinstall the repo's version wins; a file you edited is saved as <file>.labber-bak
+# .env.example and README.txt are labber's own (you edit .env): always replaced.
+# The .env backup sits next to .env (same owner and permissions) rather than in /tmp,
 # and is left behind if anything fails, so the .env is never lost.
 copy_svc_files() {
-    local src="$1" dest="$2"
+    local src="$1" dest="$2" mode="${3:-update}" f b kept=() saved=()
     [[ -f "$dest/.env" ]] && cp -p "$dest/.env" "$dest/.env.labber-bak"
-    cp -r "$src/." "$dest/"
+    while IFS= read -r f; do
+        mkdir -p "$(dirname "$dest/$f")"
+        if [[ ! -e "$dest/$f" ]] || cmp -s "$src/$f" "$dest/$f" \
+            || [[ "$f" == .env.example || "$f" == README.txt ]] || ! locally_edited "$dest" "$f"; then
+            cp "$src/$f" "$dest/$f"
+        elif [[ "$mode" == reinstall ]]; then
+            cp -p "$dest/$f" "$dest/$f.labber-bak"; give_back "$dest/$f.labber-bak"
+            cp "$src/$f" "$dest/$f"; saved+=("$f")
+        else
+            # edited here; only worth a note when the repo has moved on since
+            b=$(base_sum "$dest" "$f")
+            if [[ -z "$b" || "$(file_sum "$src/$f")" != "$b" ]]; then
+                cp "$src/$f" "$dest/$f.labber-new"; give_back "$dest/$f.labber-new"; kept+=("$f")
+            fi
+        fi
+    done < <(repo_files "$src")
     if [[ -f "$dest/.env.labber-bak" ]]; then mv -f "$dest/.env.labber-bak" "$dest/.env"; fi
+    record_base "$src" "$dest"
+    if (( ${#kept[@]} )); then
+        warn "kept your edits — the repo changed these too; its version is next to each as .labber-new:"
+        printf "    %s\n" "${kept[@]}" >&2
+        warn "compare with: diff $dest/<file> $dest/<file>.labber-new"
+    fi
+    if (( ${#saved[@]} )); then
+        warn "replaced your edited files with the repo's — yours are saved as .labber-bak:"
+        printf "    %s\n" "${saved[@]}" >&2
+    fi
 }
 
 # under sudo, files labber copies end up owned by root: hand them back to the
@@ -192,21 +254,24 @@ labber_version_of() { grep -m1 '^VERSION=' "$1/labber" | cut -d'"' -f2; }
 # install the labber folder $1 (script + files/) as $LABBER_LIB, linked from
 # $LABBER_BIN. The old folder is moved aside, not overwritten: a running labber keeps
 # reading its (now deleted) script. The link replaces whatever was at $LABBER_BIN —
-# before 4.0 that was the script itself.
+# before 4.0 that was the script itself. Every step is checked (set -e doesn't apply
+# inside setup's steps): on failure the old install stays, and it returns 1.
 labber_place() {
     local src="$1" s=""
     (( EUID == 0 )) || s="sudo"
-    $s rm -rf "$LABBER_LIB.new" "$LABBER_LIB.old" < /dev/null
-    $s mkdir -p "$LABBER_LIB.new" < /dev/null
-    $s cp -R "$src/." "$LABBER_LIB.new/" < /dev/null
-    $s chown -R root:root "$LABBER_LIB.new" < /dev/null
-    $s chmod -R u=rwX,go=rX "$LABBER_LIB.new" < /dev/null
-    $s chmod 755 "$LABBER_LIB.new/labber" < /dev/null
-    if [[ -e "$LABBER_LIB" ]]; then $s mv "$LABBER_LIB" "$LABBER_LIB.old" < /dev/null; fi
-    $s mv "$LABBER_LIB.new" "$LABBER_LIB" < /dev/null
-    $s ln -sfn "$LABBER_LIB/labber" "$LABBER_BIN.new" < /dev/null
-    $s mv -f "$LABBER_BIN.new" "$LABBER_BIN" < /dev/null
-    $s rm -rf "$LABBER_LIB.old" < /dev/null
+    $s rm -rf "$LABBER_LIB.new" "$LABBER_LIB.old" < /dev/null || return 1
+    if ! { $s mkdir -p "$LABBER_LIB.new" && $s cp -R "$src/." "$LABBER_LIB.new/" \
+        && $s chown -R root:root "$LABBER_LIB.new" && $s chmod -R u=rwX,go=rX "$LABBER_LIB.new" \
+        && $s chmod 755 "$LABBER_LIB.new/labber" && [[ -d "$LABBER_LIB.new/files" ]]; } < /dev/null; then
+        $s rm -rf "$LABBER_LIB.new" < /dev/null; return 1
+    fi
+    if [[ -e "$LABBER_LIB" ]]; then $s mv "$LABBER_LIB" "$LABBER_LIB.old" < /dev/null || return 1; fi
+    if ! $s mv "$LABBER_LIB.new" "$LABBER_LIB" < /dev/null; then
+        if [[ -e "$LABBER_LIB.old" ]]; then $s mv "$LABBER_LIB.old" "$LABBER_LIB" < /dev/null; fi
+        return 1
+    fi
+    { $s ln -sfn "$LABBER_LIB/labber" "$LABBER_BIN.new" && $s mv -f "$LABBER_BIN.new" "$LABBER_BIN"; } < /dev/null || return 1
+    $s rm -rf "$LABBER_LIB.old" < /dev/null || true
 }
 
 # setup run as `bash <(curl …)` has no files/ next to it: download them for this run
@@ -244,12 +309,14 @@ labber_file() {
 
 TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate)\(([^}]*)\)[[:space:]]*)?\}\}'
 
-# N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'
+# N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'.
+# Fails (instead of looping forever) on a set that yields nothing.
 rand_chars() {
-    local out=""
-    while (( ${#out} < $1 )); do
-        out+=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "$2")
+    local out="" i
+    for (( i = 0; i < 100 && ${#out} < $1; i++ )); do
+        out+=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "$2" 2>/dev/null || true)
     done
+    (( ${#out} >= $1 )) || return 1
     echo "${out:0:$1}"
 }
 
@@ -279,8 +346,14 @@ tpl_fill() {
     printf '%s' "$out$s"
 }
 
-# generate(...) specs: is it one we know?
-gen_known() { [[ "$1" =~ ^(hex[0-9]+|base64_[0-9]+|uuid|\[.+\],[0-9]+)$ ]]; }
+# generate(...) specs: is it one we know? Lengths must be > 0, and a [set] must be one
+# tr accepts and that has printable characters in it (a typo like [z-a] is caught here)
+gen_known() {
+    [[ "$1" =~ ^(hex([0-9]+)|base64_([0-9]+)|uuid|\[(.+)\],([0-9]+))$ ]] || return 1
+    local n="${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[5]}" set="${BASH_REMATCH[4]}"
+    [[ "$1" == uuid ]] || (( 10#$n > 0 )) || return 1
+    [[ -z "$set" ]] || [[ -n "$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "$set" 2>/dev/null | LC_ALL=C tr -dc '[:graph:]' | head -c 1)" ]]
+}
 
 gen_desc() {
     case "$1" in
@@ -331,7 +404,8 @@ env_get() {
 
 # set KEY=value in an env file (rewritten in place, keeps owner/permissions).
 # Values with spaces or special characters are single-quoted so compose takes them
-# literally. A trailing " # comment" on the line is kept.
+# literally. A trailing " # comment" on the line is kept. A key that appears more
+# than once is set everywhere (compose uses the last one, env_get reads the last one).
 env_set() {
     local file="$1" key="$2" val="$3"
     if [[ ! "$val" =~ ^[A-Za-z0-9_./:@+=,-]*$ ]]; then
@@ -343,12 +417,12 @@ env_set() {
     fi
     local tmp; tmp=$(mktemp)
     K="$key" V="$val" awk '
-        !done && $0 ~ "^[[:space:]]*" ENVIRON["K"] "=" {
+        $0 ~ "^[[:space:]]*" ENVIRON["K"] "=" {
             sub(/\r$/, "")
             comment = ""
             if (match($0, /[ \t]+#.*$/)) comment = substr($0, RSTART)
             print ENVIRON["K"] "=" ENVIRON["V"] comment
-            done = 1; next
+            next
         }
         { print }
     ' "$file" > "$tmp"
@@ -359,10 +433,17 @@ env_set() {
 # prompts need a person at the keyboard (not cron, not a pipe)
 interactive() { [[ -t 0 ]]; }
 
-# keys in .env.example that .env doesn't have yet are appended (with their placeholder)
+# keys in .env.example that .env doesn't have yet are appended (with their placeholder).
+# No .env at all (the repo added .env.example after install, or it was deleted): it's
+# created from .env.example, like on a fresh install.
 sync_env_keys() {
     local dir="$1" line key added=()
-    [[ -f "$dir/.env.example" && -f "$dir/.env" ]] || return 0
+    [[ -f "$dir/.env.example" ]] || return 0
+    if [[ ! -f "$dir/.env" ]]; then
+        cp "$dir/.env.example" "$dir/.env"; give_back "$dir/.env"
+        info ".env created from .env.example"
+        return 0
+    fi
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
         key="${BASH_REMATCH[1]}"
@@ -421,7 +502,8 @@ fill_env_placeholders() {
             generate)
                 if ! gen_known "${arg[$n]}"; then warn "$n: unknown generator '${arg[$n]}' — left unset"; continue; fi
                 if [[ "$autofill" == y ]]; then
-                    value[$n]=$(gen_value "${arg[$n]}"); ok "$n generated ($(gen_desc "${arg[$n]}"))"; continue
+                    value[$n]=$(gen_value "${arg[$n]}") || { warn "$n: couldn't generate — left unset"; continue; }
+                    ok "$n generated ($(gen_desc "${arg[$n]}"))"; continue
                 fi
                 while true; do
                     read -rsp "  $n ($(gen_desc "${arg[$n]}")), Enter to generate: " v; echo
@@ -603,13 +685,20 @@ image_update_status() {
     echo "$result"
 }
 
-# do the repo's files for this service differ from the installed copy?
+# has the repo changed this service since labber installed it? Compared with what
+# was installed (.labber-base), so your own edits don't count as an update; services
+# installed before labber kept that record are compared with the files as they are
 config_update_status() {
-    local src="$1" dest="$2" f
+    local src="$1" dest="$2" f b
     [[ -d "$src" ]] || { echo unknown; return; }
     while IFS= read -r f; do
-        cmp -s "$src/$f" "$dest/$f" || { echo yes; return; }
-    done < <(cd "$src" && find . -type f | sed 's|^\./||')
+        if [[ -f "$dest/$BASE_FILE" ]]; then
+            b=$(base_sum "$dest" "$f")
+            [[ -n "$b" && "$(file_sum "$src/$f")" == "$b" ]] || { echo yes; return; }
+        else
+            cmp -s "$src/$f" "$dest/$f" || { echo yes; return; }
+        fi
+    done < <(repo_files "$src")
     echo no
 }
 
@@ -690,13 +779,14 @@ do_install() {
 
     if [[ -d "$dest" ]]; then
         warn "'$svc' already installed at $dest"
-        local ans; read -rp "Reinstall? (overwrites config files, preserves .env) [y/N] " ans
+        local ans; read -rp "Reinstall? (repo config replaces yours — edited files are kept as .labber-bak; .env stays) [y/N] " ans || true
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
-        copy_svc_files "$src" "$dest"
+        copy_svc_files "$src" "$dest" reinstall
     else
         fresh=1
         mkdir -p "$dest"
         cp -r "$src/." "$dest/"
+        record_base "$src" "$dest"
         if [[ -f "$dest/.env.example" && ! -f "$dest/.env" ]]; then
             cp "$dest/.env.example" "$dest/.env"
             new_env=1
@@ -746,16 +836,23 @@ do_uninstall() {
     local dir; dir=$(need_svc "$svc")
 
     warn "uninstalling '$svc' from $dir"
-    local ans; read -rp "Stop and remove containers + images? [y/N] " ans
+    local ans; read -rp "Stop and remove containers + images? [y/N] " ans || true
     [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
 
     # list images first (needs the compose file), remove containers, then remove
     # images one by one: `down --rmi all` aborts the whole uninstall if another
     # service still uses one of the images (e.g. a shared mongo/redis)
     local images; mapfile -t images < <(cd "$dir" && docker compose config --images 2>/dev/null | sort -u)
+    # the compose project; if the config is broken (bad .env, edited compose file) it
+    # can't be read — compose's default then is the folder name
     local project; project=$(compose_project "$(compose_cfg "$dir")")
+    [[ -n "$project" ]] || project=$(basename "$dir" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
     info "stopping '$svc' and removing containers..."
-    (cd "$dir" && docker compose down --remove-orphans)
+    if ! (cd "$dir" && docker compose down --remove-orphans); then
+        warn "docker compose couldn't read the service — removing its containers by project label ($project)"
+        docker ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r docker rm -f >/dev/null
+        mapfile -t images < <(docker images --filter "label=com.docker.compose.project=$project" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null)
+    fi
     ok "containers removed"
     local img
     for img in "${images[@]}"; do
@@ -766,7 +863,7 @@ do_uninstall() {
         fi
     done
 
-    read -rp "Delete service directory $dir? (removes config, data, .env, and its Docker volumes) [y/N] " ans
+    ans=""; read -rp "Delete service directory $dir? (removes config, data, .env, and its Docker volumes) [y/N] " ans || true
     if [[ "$ans" =~ ^[Yy]$ ]]; then
         # named volumes hold data too (e.g. grafana-data) — compose leaves them behind
         if [[ -n "$project" ]]; then
@@ -998,17 +1095,21 @@ BASHRC
 
 do_self_install() {
     command -v curl &>/dev/null || die "curl is required for self-install"
-    if [[ -f "$LABBER_BIN" ]]; then
-        local ans; read -rp "labber already installed at $LABBER_BIN. Overwrite? [y/N] " ans
+    # piped (`curl … | bash -s install`) there's no one to ask: installing is what was
+    # asked for, with tab completion
+    local ans
+    if [[ -f "$LABBER_BIN" ]] && interactive; then
+        read -rp "labber already installed at $LABBER_BIN. Overwrite? [y/N] " ans || true
         [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
     fi
     info "installing labber to $LABBER_LIB..."
     local tmp dir; tmp=$(mktemp -d /tmp/labber-install-XXXXXX)
     dir=$(labber_download "$tmp") || { rm -rf "$tmp"; die "download failed: $LABBER_URL"; }
-    labber_place "$dir"; rm -rf "$tmp"
+    labber_place "$dir" || { rm -rf "$tmp"; die "could not install labber to $LABBER_LIB"; }
+    rm -rf "$tmp"
     ok "labber installed to $LABBER_LIB, linked from $LABBER_BIN"
     _install_shell_fn
-    local ans; read -rp "Enable tab completion? [Y/n] " ans
+    ans=""; if interactive; then read -rp "Enable tab completion? [Y/n] " ans || true; fi
     [[ "$ans" =~ ^[Nn]$ ]] || _install_completion_fn
     warn "run 'source ~/.bashrc' or open a new terminal to activate"
 }
@@ -1017,13 +1118,20 @@ do_update() {
     local sudo_cmd=""
     (( EUID == 0 )) || sudo_cmd="sudo"
 
+    # same as setup's update step: never stops at a config-file prompt (keeps yours).
+    # A failure (e.g. unattended-upgrades holding the lock) doesn't skip labber's own update.
     info "running system update..."
-    $sudo_cmd apt update < /dev/null && $sudo_cmd apt upgrade -y < /dev/null
-    ok "system updated"
+    if $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get update -q < /dev/null \
+        && $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get -y -q \
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade < /dev/null; then
+        ok "system updated"
+    else
+        warn "system update failed (another apt running? try again in a few minutes) — continuing with labber"
+    fi
     echo
     if [[ ! -f "$LABBER_BIN" ]]; then
         warn "labber not installed at $LABBER_BIN"
-        local ans; read -rp "Install now? [Y/n] " ans
+        local ans=""; if interactive; then read -rp "Install now? [Y/n] " ans || true; fi
         [[ "$ans" =~ ^[Nn]$ ]] || do_self_install
         return
     fi
@@ -1045,7 +1153,8 @@ do_update() {
         rm -rf "$tmp"
         return
     fi
-    labber_place "$dir"; rm -rf "$tmp"
+    labber_place "$dir" || { rm -rf "$tmp"; warn "could not install the new labber — v${VERSION} unchanged"; return; }
+    rm -rf "$tmp"
     ok "labber updated: v${VERSION} → v${remote_ver}"
     echo
     info "checking shell integration..."
@@ -1084,7 +1193,7 @@ do_tool() {
 do_clean() {
     check_deps
     warn "this will remove ALL unused containers, images, networks, and volumes"
-    local ans; read -rp "Confirm [y/N] " ans
+    local ans; read -rp "Confirm [y/N] " ans || true
     [[ "$ans" =~ ^[Yy]$ ]] || { info "aborted"; return; }
     docker system prune -af --volumes
     ok "docker cleaned"
@@ -1579,7 +1688,8 @@ st_labber_status() {
 st_labber_run() {
     local tmp dir; tmp=$(mktemp -d /tmp/labber-install-XXXXXX)
     dir=$(labber_download "$tmp") || { rm -rf "$tmp"; warn "download failed: $LABBER_URL"; return 1; }
-    labber_place "$dir"; rm -rf "$tmp"
+    labber_place "$dir" || { rm -rf "$tmp"; warn "could not install labber to $LABBER_LIB"; return 1; }
+    rm -rf "$tmp"
     ok "labber installed to $LABBER_LIB, linked from $LABBER_BIN"
     mkdir -p "$SERVICE_BASE"
     # Docker hosts: check for service updates daily (the health check turns the
@@ -2330,7 +2440,7 @@ ${W}Commands:${N}
   [svc] stop        docker compose stop
   [svc] restart     recreate containers (docker compose up -d --force-recreate)
   [svc] rebuild     pull/build new images, then recreate containers
-  [svc] update      pull latest config from repo + rebuild (preserves .env)
+  [svc] update      pull latest config from repo + rebuild (keeps .env and files you edited)
   [svc] shell       enter a running container shell
   [svc] logs        follow docker compose logs
   [svc] status      show container status
