@@ -365,6 +365,13 @@ EOF
     run bash "$LABBER" help
     [ "$status" -eq 0 ]
     [[ "$output" == *"labber v"* ]]
+    # regression: `curl … | bash -s …` (documented install) once did nothing — piped,
+    # BASH_SOURCE and $0 differ
+    run bash -c "cat '$LABBER' | bash -s help"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"labber v"* ]]
+    run bash -c "bash <(cat '$LABBER') help"
+    [[ "$output" == *"labber v"* ]]
     run bash "$LABBER" nonsense
     [ "$status" -eq 1 ]
     [[ "$output" == *"unknown command"* ]]
