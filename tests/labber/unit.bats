@@ -744,3 +744,21 @@ make_bundle() {
     [ -f "$LABBER_LIB/labber" ] && [ -d "$LABBER_LIB/files" ]
     [ ! -e "$LABBER_LIB.new" ] && [ ! -e "$LABBER_LIB.old" ]
 }
+
+@test "check-updates results stay writable for the services folder's owner, even after a run as root" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    id labbertest >/dev/null 2>&1 || useradd -M labbertest
+    # (bats' temp dir isn't reachable for other users)
+    SERVICE_BASE=$(mktemp -d /tmp/labber-svc-XXXXXX); UPDATES_FILE="$SERVICE_BASE/.labber-updates"
+    chown labbertest: "$SERVICE_BASE"; chmod 755 "$SERVICE_BASE"
+    # as root (sudo labber check-updates): the file goes to the folder's owner
+    printf 'svc\tyes\tno\t1\n' | write_updates_file
+    [ "$(stat -c %U "$UPDATES_FILE")" = labbertest ]
+    # an old root-owned file (from before this fix) can still be replaced by the owner
+    chown root: "$UPDATES_FILE"
+    runuser -u labbertest -- bash -c "source '$LABBER'; SERVICE_BASE='$SERVICE_BASE' UPDATES_FILE='$UPDATES_FILE'; mark_updated svc no no"
+    [ "$(cat "$UPDATES_FILE")" = "$(printf 'svc\tno\tno\t1')" ]
+    [ "$(stat -c %U "$UPDATES_FILE")" = labbertest ]
+    [ -z "$(ls -A "$SERVICE_BASE" | grep -v '^\.labber-updates$' || true)" ]    # no temp files left
+    rm -rf "$SERVICE_BASE"
+}
