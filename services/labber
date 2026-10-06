@@ -3,10 +3,12 @@
 set -euo pipefail
 
 VERSION="2.6.1"
-REPO="https://github.com/rahulsrma26/homelab.git"
-LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
+# The LABBER_* environment variables are for tests only: they point labber at a
+# local copy of the repo and a separate services folder. Leave them unset normally.
+REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
+LABBER_URL="${LABBER_URL:-https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber}"
 LABBER_BIN="/usr/local/bin/labber"
-SERVICE_BASE="/opt/homelab/services"
+SERVICE_BASE="${LABBER_SERVICE_BASE:-/opt/homelab/services}"
 
 # ── colours ───────────────────────────────────────────────────────────────────
 if [[ -t 1 ]]; then
@@ -447,10 +449,12 @@ ensure_bind_dirs() {
 # Prints "container <name>" or "a process on this host", or nothing if free.
 port_user() {
     local port="$1" project="$2" line proj name ports
-    while IFS=$'\t' read -r proj name ports; do
-        [[ "$proj" == "$project" ]] && continue
+    # "|" not tab: read collapses whitespace separators, so a container without a
+    # compose project (empty first field) would shift every field by one
+    while IFS='|' read -r proj name ports; do
+        [[ -n "$project" && "$proj" == "$project" ]] && continue
         if [[ "$ports" =~ :${port}-\> ]]; then echo "container $name"; return; fi
-    done < <(docker ps --format '{{.Label "com.docker.compose.project"}}\t{{.Names}}\t{{.Ports}}' 2>/dev/null)
+    done < <(docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Names}}|{{.Ports}}' 2>/dev/null)
     command -v ss &>/dev/null || return 0
     # ports this project already publishes show up in ss too (docker-proxy) — skip those
     if docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Ports}}' 2>/dev/null \
@@ -1831,47 +1835,55 @@ EOF
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
-SVC="${1:-}"; shift 2>/dev/null || true
-CMD="${1:-}"; shift 2>/dev/null || true
+labber_main() {
+    local SVC CMD _tmp
+    SVC="${1:-}"; shift 2>/dev/null || true
+    CMD="${1:-}"; shift 2>/dev/null || true
 
-# Global commands have no service prefix — detect when SVC slot holds a global cmd
-_GLOBAL_CMDS="install deploy setup ls check-updates clean update tool help -h --help"
-if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
-    _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
-elif [[ -z "$CMD" ]]; then
-    # `labber <svc>` alone → that service's status; otherwise treat it as a command
-    if [[ -n "$SVC" && -f "$(svc_dir "$SVC")/docker-compose.yml" ]]; then
-        CMD="info"
-    else
-        CMD="$SVC"; SVC=""
+    # Global commands have no service prefix — detect when SVC slot holds a global cmd
+    _GLOBAL_CMDS="install deploy setup ls check-updates clean update tool help -h --help"
+    if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
+        _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
+    elif [[ -z "$CMD" ]]; then
+        # `labber <svc>` alone → that service's status; otherwise treat it as a command
+        if [[ -n "$SVC" && -f "$(svc_dir "$SVC")/docker-compose.yml" ]]; then
+            CMD="info"
+        else
+            CMD="$SVC"; SVC=""
+        fi
     fi
-fi
 
-case "$CMD" in
-    install|deploy)
-        # `labber install` installs labber itself; `labber <svc> install` deploys a
-        # service; `labber deploy` picks a service to deploy
-        if [[ -n "$SVC" || "$CMD" == deploy ]]; then do_install "$SVC"; else do_self_install; fi
-        ;;
-    info)      do_svc_info  "$SVC" ;;
-    uninstall) do_uninstall "$SVC" ;;
-    start)     do_start     "$SVC" ;;
-    stop)      do_stop      "$SVC" ;;
-    restart)   do_restart   "$SVC" ;;
-    rebuild)   do_rebuild   "$SVC" ;;
-    shell)     do_shell     "$SVC" ;;
-    logs)      do_logs      "$SVC" ;;
-    status)    do_status    "$SVC" ;;
-    ls)        do_ls ;;
-    check-updates) do_check_updates ;;
-    setup)     do_setup     "$SVC" ;;
-    go)        do_go        "$SVC" ;;
-    clean)     do_clean ;;
-    tool)      do_tool      "$SVC" ;;
-    update)
-        if [[ -n "$SVC" ]]; then do_svc_upgrade "$SVC"; else do_update; fi
-        ;;
-    help|-h|--help) usage ;;
-    "")        show_menu ;;
-    *) die "unknown command '$CMD' — run: labber help" ;;
-esac
+    case "$CMD" in
+        install|deploy)
+            # `labber install` installs labber itself; `labber <svc> install` deploys a
+            # service; `labber deploy` picks a service to deploy
+            if [[ -n "$SVC" || "$CMD" == deploy ]]; then do_install "$SVC"; else do_self_install; fi
+            ;;
+        info)      do_svc_info  "$SVC" ;;
+        uninstall) do_uninstall "$SVC" ;;
+        start)     do_start     "$SVC" ;;
+        stop)      do_stop      "$SVC" ;;
+        restart)   do_restart   "$SVC" ;;
+        rebuild)   do_rebuild   "$SVC" ;;
+        shell)     do_shell     "$SVC" ;;
+        logs)      do_logs      "$SVC" ;;
+        status)    do_status    "$SVC" ;;
+        ls)        do_ls ;;
+        check-updates) do_check_updates ;;
+        setup)     do_setup     "$SVC" ;;
+        go)        do_go        "$SVC" ;;
+        clean)     do_clean ;;
+        tool)      do_tool      "$SVC" ;;
+        update)
+            if [[ -n "$SVC" ]]; then do_svc_upgrade "$SVC"; else do_update; fi
+            ;;
+        help|-h|--help) usage ;;
+        "")        show_menu ;;
+        *) die "unknown command '$CMD' — run: labber help" ;;
+    esac
+}
+
+# run only when executed (including `bash <(curl …)`), not when sourced by the tests
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    labber_main "$@"
+fi
