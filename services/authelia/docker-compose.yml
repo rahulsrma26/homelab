@@ -1,0 +1,36 @@
+services:
+  authelia:
+    image: authelia/authelia:latest
+    container_name: authelia
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    environment:
+      - AUTHELIA_JWT_SECRET=${AUTHELIA_JWT_SECRET}
+      - AUTHELIA_SESSION_SECRET=${AUTHELIA_SESSION_SECRET}
+      - AUTHELIA_STORAGE_ENCRYPTION_KEY=${AUTHELIA_STORAGE_ENCRYPTION_KEY}
+    volumes:
+      - ./config/authelia:/config
+      - authelia-data:/data
+    depends_on:
+      - lldap
+
+  lldap:
+    image: lldap/lldap:stable
+    container_name: lldap
+    restart: unless-stopped
+    ports:
+      - "17170:17170"
+    expose:
+      - "3890"
+    environment:
+      - LLDAP_JWT_SECRET=${LLDAP_JWT_SECRET}
+      - LLDAP_LDAP_USER_PASS=${LLDAP_ADMIN_PASSWORD}
+      - LLDAP_LDAP_BASE_DN=${LLDAP_BASE_DN}
+      - LLDAP_SMTP_OPTIONS__ENABLE_PASSWORD_RESET=false
+    volumes:
+      - lldap-data:/data
+
+volumes:
+  authelia-data:
+  lldap-data:

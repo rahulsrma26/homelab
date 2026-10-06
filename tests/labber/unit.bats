@@ -3,7 +3,7 @@
 # Run with: tests/labber/run-unit.sh   (or: make test-labber-unit)
 
 setup() {
-    LABBER="${LABBER:-$BATS_TEST_DIRNAME/../../services/labber}"
+    LABBER="${LABBER:-$BATS_TEST_DIRNAME/../../labber/labber}"
     # shellcheck disable=SC1090
     source "$LABBER"
     set +u    # labber runs with -u; bats' own internals don't
@@ -462,6 +462,9 @@ EOF
     grep -qE '^labber_restart_required_services [0-9]+$' "$f"
     grep -qE '^labber_security_updates_pending [0-9]+$' "$f"
     grep -q 'Post-Invoke' /etc/apt/apt.conf.d/99labber-health-check
+    # the services folder is filled in, no @NAME@ left
+    grep -qF "updates=\"$SERVICE_BASE/.labber-updates\"" "$HEALTH_BIN"
+    ! grep -q '@[A-Z_]*@' "$HEALTH_BIN"
     # nothing to report → no output
     printf 'labber_reboot_required 0\nlabber_restart_required_services 0\nlabber_security_updates_pending 0\n' > "$f"
     [ -z "$(/etc/update-motd.d/95-labber-health)" ]
@@ -496,6 +499,7 @@ EOF
     grep -q 'set_collectors = \["stat", "filesystem", "systemd", "textfile"\]' "$c"
     grep -q 'mount_points_exclude = "\^/\.+"' "$c"
     grep -q 'replacement  = "lxc"' "$c"
+    ! grep -q '@[A-Z_]*@' "$c"
 }
 
 @test "completion: zsh gets bashcompinit, bash doesn't" {
@@ -564,4 +568,84 @@ EOF
     run bash "$LABBER" ../etc status
     [ "$status" -eq 1 ]
     [[ "$output" == *"invalid service name"* ]]
+}
+
+# ── labber's own files and install ────────────────────────────────────────────
+
+# a tarball like GitHub's (<repo>-main/labber/…) of the labber under test → $1
+make_bundle() {
+    local b="$T/bundle"; rm -rf "$b"; mkdir -p "$b/homelab-main"
+    cp -R "$(dirname "$LABBER")" "$b/homelab-main/labber"
+    if [ -n "${2:-}" ]; then sed -i "s/^VERSION=.*/VERSION=\"$2\"/" "$b/homelab-main/labber/labber"; fi
+    tar -czf "$1" -C "$b" homelab-main
+}
+
+@test "labber_file fills in @NAME@ values literally" {
+    LABBER_FILES="$T/files"; mkdir -p "$LABBER_FILES"
+    printf 'a = "@A@"\nb = "@B@" and "@A@"\nc = "@C@"\n' > "$LABBER_FILES/t.conf"
+    run labber_file t.conf A='x&y\1' B='^/(dev|proc)($|/)' C='"q"'
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = 'a = "x&y\1"' ]
+    [ "${lines[1]}" = 'b = "^/(dev|proc)($|/)" and "x&y\1"' ]
+    [ "${lines[2]}" = 'c = ""q""' ]
+    run labber_file missing.conf
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"labber file missing"* ]]
+}
+
+@test "labber finds its files/ next to itself, and has none when piped" {
+    [ "$LABBER_FILES" = "$(cd "$(dirname "$LABBER")" && pwd -P)/files" ]
+    [ -f "$LABBER_FILES/alloy/base.alloy" ]
+    run bash -c "source <(cat '$LABBER'); echo \"[\$LABBER_FILES]\""
+    [ "$output" = "[]" ]
+}
+
+@test "every @NAME@ in labber's files is one labber fills in" {
+    # base.alloy: the names st_alloy_run passes; health-check.sh: SERVICE_BASE
+    run grep -oh '@[A-Z_]*@' "$LABBER_FILES/alloy/base.alloy"
+    [ "$(printf '%s\n' "${lines[@]}" | sort -u | tr '\n' ' ')" = "@COLLECTORS@ @FS_EXCLUDE@ @LOKI@ @METRICS_DIR@ @PROMETHEUS@ @VIRT@ " ]
+    run grep -oh '@[A-Z_]*@' "$LABBER_FILES/health-check.sh"
+    [ "$output" = "@SERVICE_BASE@" ]
+    ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh"
+}
+
+@test "download + place: installs the folder, links the command, replaces a pre-4.0 file" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    command -v curl >/dev/null || skip "needs curl"
+    make_bundle "$T/labber.tar.gz" 9.9.9
+    LABBER_URL="file://$T/labber.tar.gz" LABBER_LIB="$T/lib/labber" LABBER_BIN="$T/bin/labber"
+    mkdir -p "$T/lib" "$T/bin" "$T/dl"
+    printf '#!/bin/bash\nVERSION="3.0.0"\n' > "$LABBER_BIN"     # the old single-file install
+    dir=$(labber_download "$T/dl")
+    [ "$(labber_version_of "$dir")" = 9.9.9 ]
+    labber_place "$dir"
+    [ -L "$LABBER_BIN" ]
+    [ "$(readlink "$LABBER_BIN")" = "$LABBER_LIB/labber" ]
+    [ -x "$LABBER_LIB/labber" ] && [ -f "$LABBER_LIB/files/alloy/base.alloy" ]
+    [ "$(stat -c '%U %a' "$LABBER_LIB/labber")" = "root 755" ]
+    [ "$(stat -c '%a' "$LABBER_LIB/files/health-check.sh")" = "644" ]
+    run bash "$LABBER_BIN" help
+    [[ "$output" == *"labber v9.9.9"* ]]
+    # placing again (an update) swaps the folder and leaves nothing behind
+    labber_place "$dir"
+    [ -f "$LABBER_LIB/labber" ]
+    [ ! -e "$LABBER_LIB.new" ] && [ ! -e "$LABBER_LIB.old" ] && [ ! -e "$LABBER_BIN.new" ]
+    # a bad download is an error, not a half install
+    LABBER_URL="file://$T/nothing.tar.gz"
+    run labber_download "$(mktemp -d)"
+    [ "$status" -ne 0 ]
+}
+
+@test "the forwarder at services/labber runs the new labber" {
+    command -v curl >/dev/null || skip "needs curl"
+    make_bundle "$T/labber.tar.gz"
+    fwd="$(dirname "$LABBER")/../services/labber"
+    run env LABBER_URL="file://$T/labber.tar.gz" bash "$fwd" help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"labber v$VERSION"* ]]
+    # old labbers self-update from it: it must carry a version line, and a newer one
+    grep -qE '^VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$fwd"
+    run env LABBER_URL="file://$T/nothing.tar.gz" bash "$fwd" help
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"could not download labber"* ]]
 }

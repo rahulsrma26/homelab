@@ -17,7 +17,7 @@ make test-labber-unit
 tests/labber/run-unit.sh -f placeholder
 ```
 
-Covers the logic without Docker or network: `.env` templates (`{{ name }}`, `default()`, `generate()`) and parsing, compose-config parsing, service-name checks, data-folder ownership, `.bashrc` blocks, update-status cache, and the generated `ifupdown`/`netplan` static-IP configs (never applied).
+Covers the logic without Docker or network: labber's files (`@NAME@` filling, finding `files/`, download + install, the forwarder), `.env` templates (`{{ name }}`, `default()`, `generate()`) and parsing, compose-config parsing, service-name checks, data-folder ownership, `.bashrc` blocks, update-status cache, and the generated `ifupdown`/`netplan` static-IP configs (never applied). It then checks `labber/files/alloy/*.alloy`, and the VM, LXC and Docker-host configs `setup` generates from them, with the real `alloy` binary.
 
 ## Integration tests
 
@@ -32,15 +32,15 @@ LABBER_TEST_HOST=user@vm LABBER_TEST_KEY=~/.ssh/key make test-labber-vm NETWORK=
 | Variable | Points labber at |
 |---|---|
 | `LABBER_REPO` | the snapshot, instead of GitHub |
-| `LABBER_URL` | the labber under test, instead of GitHub |
+| `LABBER_URL` | a tarball of the labber under test (like GitHub's), instead of GitHub |
 | `LABBER_SERVICE_BASE` | a scratch folder, instead of `/opt/homelab/services` |
 
 So real services on the VM are never touched. The tests run in order:
 
 - `integration.bats` — the service lifecycle: install, ls, stop/start, port conflict, unset values, rebuild, check-updates, update, uninstall; then a re-run of `labber setup` must find nothing to do.
-- `commands.bats` — everything else: status, restart, logs, shell, reinstall, deploy (alias and picker), update of a service missing from the repo, labber self-install and self-update, `go`, tab completion, `tool`, the menu, uninstall keeping the folder, and `clean`.
+- `commands.bats` — everything else: status, restart, logs, shell, reinstall, deploy (alias and picker), update of a service missing from the repo, labber self-install and self-update, the upgrade from a pre-4.0 labber through the forwarder, `go`, tab completion, `tool`, the menu, uninstall keeping the folder, and `clean`.
 
-`commands.bats` replaces `/usr/local/bin/labber` on the VM with the labber under test, and its `clean` test prunes **all** unused Docker data on the VM.
+Both suites install the labber under test on the VM (`/usr/local/lib/labber`, linked from `/usr/local/bin/labber`). `commands.bats` also checks the upgrade from the last pre-4.0 labber (taken from git history): its `labber update` installs the forwarder at `services/labber`, which moves to the new layout on its next run. Its `clean` test prunes **all** unused Docker data on the VM.
 
 **VM requirements:** Debian, already through `labber setup` (Docker, the user in the `docker` group), and passwordless sudo for the test user:
 

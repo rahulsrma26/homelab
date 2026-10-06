@@ -16,6 +16,13 @@ route:
         severity: warning
       repeat_interval: 6h
       receiver: 'telegram'
+    # notes such as "update available": once, then a reminder weekly
+    - match:
+        severity: info
+      group_by: ['alertname']
+      group_wait: 5m
+      repeat_interval: 168h
+      receiver: 'telegram'
 
 inhibit_rules:
   - source_match:

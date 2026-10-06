@@ -1,6 +1,9 @@
 server:
-  cacheDir: /srv/extra/tmp/filebrowser-cache # using the data volume so it can persist across restarts
+  cacheDir: /cache # using the data volume so it can persist across restarts
   sources:
+    - path: /srv/zpool
+      config:
+        defaultEnabled: true
     - path: /srv/media
       config:
         defaultEnabled: true

@@ -5,7 +5,7 @@
 # Expects (set by run-vm.sh):
 #   LABBER               path to the labber under test
 #   LABBER_REPO          file:// URL of a git snapshot of the working tree (+ labber-test fixture)
-#   LABBER_URL           file:// URL of the labber under test (for self-install)
+#   LABBER_URL           file:// URL of a tarball of the labber under test (for self-install)
 #   LABBER_SERVICE_BASE  a scratch services folder, so real services are never touched
 #   passwordless sudo for the test user (setup and root-owned data cleanup need it)
 
@@ -18,6 +18,9 @@ setup_file() {
     if [ -d "$SVC_DIR" ]; then (cd "$SVC_DIR" && docker compose down --remove-orphans >/dev/null 2>&1) || true; fi
     sudo -n rm -rf "$LABBER_SERVICE_BASE"
     mkdir -p "$LABBER_SERVICE_BASE"
+    # the labber under test is the installed one (setup checks for it), installed the
+    # way labber installs itself
+    sudo -n bash -c 'source "$1"; labber_place "$(dirname "$1")"' _ "$LABBER" < /dev/null
 }
 
 teardown_file() {

@@ -1,0 +1,99 @@
+// managed by labber setup — same layout as services/monitoring/utils/install-exporters.sh
+// (labber fills in the values marked with @…@; docker.alloy is appended on Docker hosts)
+logging {
+  level = "info"
+}
+
+// ── Metrics ──
+
+prometheus.exporter.unix "local" {
+  // only what's useful — the defaults send ~1600 series, mostly noise
+  set_collectors = ["@COLLECTORS@"]
+  textfile {
+    directory = "@METRICS_DIR@"
+  }
+  systemd {
+    unit_include = ".+\\.service"
+  }
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tmpfs|tracefs|ramfs|fuse\\..*)$"
+    mount_points_exclude = "@FS_EXCLUDE@"
+  }
+  netdev {
+    device_exclude = "^(lo|veth.*|br-.*|docker[0-9]+|virbr.*|tailscale[0-9]*)$"
+  }
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.local.targets
+  forward_to      = [prometheus.relabel.node.receiver]
+  scrape_interval = "15s"
+}
+
+prometheus.relabel "node" {
+  forward_to = [prometheus.remote_write.central.receiver]
+  // systemd: keep only the "failed" state (alerts use it); the other four states are noise
+  rule {
+    source_labels = ["__name__", "state"]
+    regex         = "node_systemd_unit_state;(active|inactive|activating|deactivating)"
+    action        = "drop"
+  }
+  // per-collector bookkeeping
+  rule {
+    source_labels = ["__name__"]
+    regex         = "node_scrape_collector_.*"
+    action        = "drop"
+  }
+  rule {
+    target_label = "job"
+    replacement  = "guest-node-exporters"
+  }
+  rule {
+    target_label = "kind"
+    replacement  = "@VIRT@"
+  }
+  rule {
+    target_label = "host"
+    replacement  = constants.hostname
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = "@PROMETHEUS@/api/v1/write"
+  }
+}
+
+// ── Logs ──
+
+loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "local" {
+  forward_to    = [loki.write.central.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  labels = {
+    host = constants.hostname,
+    job  = "journal",
+  }
+  max_age = "24h"
+}
+
+loki.write "central" {
+  endpoint {
+    url = "@LOKI@/loki/api/v1/push"
+  }
+}

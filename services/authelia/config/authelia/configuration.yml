@@ -1,0 +1,43 @@
+server:
+  host: 0.0.0.0
+  port: 9091
+
+log:
+  level: info
+
+authentication_backend:
+  ldap:
+    address: ldap://lldap:3890
+    base_dn: ${LLDAP_BASE_DN}
+    username_attribute: uid
+    additional_users_dn: ou=people
+    users_filter: (&({username_attribute}={input})(objectclass=person))
+    additional_groups_dn: ou=groups
+    groups_filter: (member={dn})
+    group_name_attribute: cn
+    mail_attribute: mail
+    display_name_attribute: displayName
+    user: cn=admin,ou=people,${LLDAP_BASE_DN}
+    password: ${LLDAP_ADMIN_PASSWORD}
+
+session:
+  name: authelia_session
+  domain: ${AUTHELIA_SESSION_DOMAIN}
+  expiration: 3600
+  inactivity: 300
+  remember_me: 1M
+
+storage:
+  local:
+    path: /data/db.sqlite3
+
+notifier:
+  disable_startup_check: false
+  filesystem:
+    filename: /config/notification.txt
+
+access_control:
+  default_policy: two_factor
+
+totp:
+  issuer: ${AUTHELIA_SESSION_DOMAIN}

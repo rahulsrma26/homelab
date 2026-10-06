@@ -16,6 +16,8 @@ services:
       - VERSION=1
     networks:
       - socket-proxy
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
 
@@ -40,6 +42,7 @@ services:
       - --accesslog=true
     ports:
       - "127.0.0.1:80:80"
+    read_only: true
     networks:
       - proxy
       - socket-proxy

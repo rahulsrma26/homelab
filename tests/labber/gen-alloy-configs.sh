@@ -4,7 +4,7 @@
 set -euo pipefail
 out="$1"
 # shellcheck disable=SC1090
-source "${LABBER:-/repo/services/labber}"
+source "${LABBER:-/repo/labber/labber}"
 set +u
 LABBER_STATE_DIR=$(mktemp -d)
 pkg_installed() { [ "$1" = alloy ]; }

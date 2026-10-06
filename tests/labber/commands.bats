@@ -4,8 +4,9 @@
 # completion, tool, the menu, uninstall-keeping-the-folder and clean.
 # Run ON the test VM by run-vm.sh, after integration.bats. Same environment variables.
 #
-# Note: this replaces /usr/local/bin/labber on the VM with the labber under test, and
-# `clean` prunes ALL unused Docker data on the VM — throwaway VMs only.
+# Note: this replaces the VM's installed labber (/usr/local/lib/labber, linked from
+# /usr/local/bin/labber) with the labber under test, and `clean` prunes ALL unused
+# Docker data on the VM — throwaway VMs only.
 
 SVC=labber-test
 
@@ -23,7 +24,20 @@ teardown_file() {
     docker image rm labber-test-job >/dev/null 2>&1 || true
     sudo -n rm -rf "$LABBER_SERVICE_BASE"
     # leave the VM with the labber under test installed (not the bumped test copy)
-    sudo -n install -m 755 "$LABBER" /usr/local/bin/labber
+    install_tested
+}
+
+# install the labber under test the way labber installs itself
+install_tested() {
+    sudo -n bash -c 'source "$1"; labber_place "$(dirname "$1")"' _ "$LABBER" < /dev/null
+}
+
+# a tarball like GitHub's of the labber under test, with version $2 → $1
+make_bundle() {
+    local b="$BATS_FILE_TMPDIR/bundle"; rm -rf "$b"; mkdir -p "$b/homelab-main"
+    cp -R "$(dirname "$LABBER")" "$b/homelab-main/labber"
+    sed -i "s/^VERSION=.*/VERSION=\"$2\"/" "$b/homelab-main/labber/labber"
+    tar -czf "$1" -C "$b" homelab-main
 }
 
 tty_run() {
@@ -100,13 +114,15 @@ web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
 
 # ── labber itself ─────────────────────────────────────────────────────────────
 
-@test "install: puts labber in /usr/local/bin with shell function and completion" {
+@test "install: puts labber in /usr/local/lib/labber, linked from /usr/local/bin, with shell function and completion" {
     # answers: overwrite the existing labber? · enable tab completion?
     tty_run $'y\ny\n' bash "$LABBER" install
     echo "$output"
+    [ "$(readlink /usr/local/bin/labber)" = /usr/local/lib/labber/labber ]
     cmp -s "$LABBER" /usr/local/bin/labber
-    [ "$(stat -c '%U %a' /usr/local/bin/labber)" = "root 755" ]
-    [ ! -e /usr/local/bin/labber.new ]
+    diff -r "$(dirname "$LABBER")/files" /usr/local/lib/labber/files
+    [ "$(stat -c '%U %a' /usr/local/lib/labber/labber)" = "root 755" ]
+    [ ! -e /usr/local/bin/labber.new ] && [ ! -e /usr/local/lib/labber.new ] && [ ! -e /usr/local/lib/labber.old ]
     [ "$(grep -cx '# labber shell function' ~/.bashrc)" -eq 1 ]
     [ "$(grep -cx '# labber completion' ~/.bashrc)" -eq 1 ]
 }
@@ -124,16 +140,55 @@ web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
 }
 
 @test "update: self-updates when the published version is newer, not when it's the same" {
-    newer="$BATS_FILE_TMPDIR/labber-newer"
-    sed -E 's/^VERSION="[^"]*"/VERSION="99.0.0"/' "$LABBER" > "$newer"
+    newer="$BATS_FILE_TMPDIR/labber-newer.tar.gz"
+    make_bundle "$newer" 99.0.0
     run env LABBER_URL="file://$newer" bash /usr/local/bin/labber update < /dev/null
     echo "$output"
     [ "$status" -eq 0 ]
     [[ "$output" == *"labber updated"*"v99.0.0"* ]]
-    grep -qx 'VERSION="99.0.0"' /usr/local/bin/labber
+    grep -qx 'VERSION="99.0.0"' /usr/local/lib/labber/labber
+    [ -f /usr/local/lib/labber/files/alloy/base.alloy ]
     run env LABBER_URL="file://$newer" bash /usr/local/bin/labber update < /dev/null
     [[ "$output" == *"already on latest (v99.0.0)"* ]]
-    sudo -n install -m 755 "$LABBER" /usr/local/bin/labber
+    install_tested
+}
+
+@test "upgrade from a pre-4.0 labber: update installs the forwarder, which moves to the new layout" {
+    old="$(dirname "$LABBER")/../old/labber"
+    [ -f "$old" ] || skip "no pre-4.0 labber shipped"
+    sudo -n rm -rf /usr/local/lib/labber
+    sudo -n install -m 755 "$old" /usr/local/bin/labber
+    # the old labber self-updates from services/labber (here: the forwarder under test)
+    fwd="$(dirname "$LABBER")/../services/labber"
+    run env LABBER_URL="file://$fwd" bash /usr/local/bin/labber update < /dev/null
+    echo "$output"
+    [[ "$output" == *"labber updated"* ]]
+    cmp -s "$fwd" /usr/local/bin/labber
+    # its next run moves it to /usr/local/lib/labber and runs the command
+    bundle="$BATS_FILE_TMPDIR/labber-current.tar.gz"
+    make_bundle "$bundle" "$(grep -m1 '^VERSION=' "$LABBER" | cut -d'"' -f2)"
+    run env LABBER_URL="file://$bundle" /usr/local/bin/labber ls < /dev/null
+    echo "$output"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"labber moved to /usr/local/lib/labber"* ]]
+    [[ "$output" == *"$SVC"* ]]
+    [ "$(readlink /usr/local/bin/labber)" = /usr/local/lib/labber/labber ]
+    [ -f /usr/local/lib/labber/files/health-check.sh ]
+    # and from then on it's the new labber
+    run env LABBER_URL="file://$bundle" /usr/local/bin/labber update < /dev/null
+    [[ "$output" == *"already on latest"* ]]
+    install_tested
+}
+
+@test "the forwarder still works for the old one-line setup/install commands" {
+    fwd="$(dirname "$LABBER")/../services/labber"
+    bundle="$BATS_FILE_TMPDIR/labber-current.tar.gz"
+    [ -f "$bundle" ] || make_bundle "$bundle" "$(grep -m1 '^VERSION=' "$LABBER" | cut -d'"' -f2)"
+    run env LABBER_URL="file://$bundle" bash -c "bash <(cat '$fwd') help" < /dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"labber v"* ]]
+    # not the installed labber: nothing on the system changes
+    [ "$(readlink /usr/local/bin/labber)" = /usr/local/lib/labber/labber ]
 }
 
 @test "tool ls lists the repo's tools" {

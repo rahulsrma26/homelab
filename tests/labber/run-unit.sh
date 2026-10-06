@@ -10,7 +10,8 @@ docker build -q -t labber-unit -f "$here/Dockerfile.unit" "$here" >/dev/null
 rc=0
 docker run --rm -v "$repo:/repo:ro" labber-unit bats "$@" /repo/tests/labber/unit.bats || rc=$?
 
-# the Alloy configs setup generates (VM and LXC) must pass the real alloy's check
+# labber's Alloy files as they are, and the configs setup generates from them (VM,
+# LXC, Docker host), must pass the real alloy's check
 if [[ $# -eq 0 ]]; then
     out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
     alloy_image=grafana/alloy:v1.20.1    # keep near the version setup installs from apt
@@ -20,6 +21,13 @@ if [[ $# -eq 0 ]]; then
             echo "ok - alloy accepts the generated $kind config"
         else
             echo "not ok - alloy rejects the generated $kind config"; rc=1
+        fi
+    done
+    for f in base docker; do
+        if docker run --rm -v "$repo/labber/files/alloy:/in:ro" --entrypoint alloy "$alloy_image" fmt "/in/$f.alloy" >/dev/null; then
+            echo "ok - alloy accepts labber/files/alloy/$f.alloy"
+        else
+            echo "not ok - alloy rejects labber/files/alloy/$f.alloy"; rc=1
         fi
     done
 fi

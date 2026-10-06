@@ -1,0 +1,29 @@
+services:
+  it-tools:
+    image: ghcr.io/corentinth/it-tools:latest
+    container_name: it-tools
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+
+  stirling-pdf:
+    image: stirlingtools/stirling-pdf:latest
+    container_name: stirling-pdf
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    volumes:
+      - stirling-pdf-tessdata:/usr/share/tessdata
+      - stirling-pdf-configs:/configs
+
+  openspeedtest:
+    image: openspeedtest/latest
+    container_name: openspeedtest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+
+volumes:
+  stirling-pdf-tessdata:
+  stirling-pdf-configs:

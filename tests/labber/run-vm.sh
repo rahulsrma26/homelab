@@ -15,6 +15,8 @@
 # in the docker group), and passwordless sudo for the user:
 #   echo "<user> ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/labber-test
 set -euo pipefail
+# macOS tar would add ._* metadata files to every archive
+export COPYFILE_DISABLE=1
 
 host="${LABBER_TEST_HOST:?set LABBER_TEST_HOST=user@vm}"
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=8)
@@ -41,10 +43,22 @@ cp -R "$here/fixtures/labber-test" "$tmp/repo/services/labber-test"
     git -c user.name=labber-test -c user.email=labber-test@localhost commit -qm "working tree snapshot"
 )
 
-# 2. ship it, with labber and the tests, to the VM
+# labber as `labber update` downloads it: a tarball like GitHub's (<repo>-main/labber/…)
+mkdir -p "$tmp/bundle/homelab-main"
+cp -R "$repo/labber" "$tmp/bundle/homelab-main/labber"
+tar -czf "$tmp/labber.tar.gz" -C "$tmp/bundle" homelab-main
+# the last labber from before 4.0 (a single file at services/labber), for the upgrade test
+mkdir -p "$tmp/old"
+for c in $(cd "$repo" && git rev-list HEAD -- services/labber); do
+    if (cd "$repo" && git show "$c:services/labber") > "$tmp/old/labber" 2>/dev/null \
+        && grep -q '^labber_main()' "$tmp/old/labber"; then break; fi
+    rm -f "$tmp/old/labber"
+done
+
+# 2. ship it, with labber, the forwarder and the tests, to the VM
 echo ":: copying working tree to $host:$remote"
-tar -czf - -C "$tmp" repo -C "$repo" services/labber tests/labber \
-    | vm "$host" "rm -rf $remote && mkdir -p $remote && tar -xzf - -C $remote"
+tar -czf - -C "$tmp" repo labber.tar.gz old -C "$repo" labber services/labber tests/labber \
+    | vm "$host" "rm -rf $remote && mkdir -p $remote && tar -xzf - -C $remote 2>/dev/null"
 
 # 3. requirements on the VM
 vm "$host" 'sudo -n true' 2>/dev/null \
@@ -55,9 +69,9 @@ vm "$host" 'command -v bats >/dev/null || sudo -n apt-get install -y -q bats >/d
 echo ":: running integration tests on $host"
 rc=0
 vm "$host" "cd $remote && \
-    LABBER=$remote/services/labber \
+    LABBER=$remote/labber/labber \
     LABBER_REPO=file://$remote/repo \
-    LABBER_URL=file://$remote/services/labber \
+    LABBER_URL=file://$remote/labber.tar.gz \
     LABBER_SERVICE_BASE=$remote/services-under-test \
     bats tests/labber/integration.bats tests/labber/commands.bats" || rc=$?
 
@@ -67,7 +81,7 @@ if [[ -n "$network_ip" ]]; then
     echo ":: network: moving $old_ip → $network_ip and back, then an unconfirmed move"
     # gateway/prefix/DNS stay as they are; the move only changes the address
     move_cmd() { # <new-ip>
-        echo "cd $remote && sudo -n bash -c 'source services/labber; SETUP_VIRT=vm;
+        echo "cd $remote && sudo -n bash -c 'source labber/labber; SETUP_VIRT=vm;
             iface=\$(net_iface); c=\$(net_cidr \$iface);
             setup_static_vm \$iface $1 \${c#*/} \$(net_gw) \"\$(net_dns)\"'"
     }
@@ -76,7 +90,7 @@ if [[ -n "$network_ip" ]]; then
         for i in $(seq 24); do
             sleep 5
             if vm -o StrictHostKeyChecking=accept-new "$user@$1" \
-                "sudo -n bash $remote/services/labber setup --confirm-ip && getent hosts deb.debian.org >/dev/null"; then
+                "sudo -n bash $remote/labber/labber setup --confirm-ip && getent hosts deb.debian.org >/dev/null"; then
                 echo "ok: confirmed on $1, DNS works"; return 0
             fi
         done

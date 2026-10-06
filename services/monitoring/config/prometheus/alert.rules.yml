@@ -1,6 +1,7 @@
 groups:
   - name: proxmox-hosts
     rules:
+      # Targets Prometheus scrapes itself (pve-exporter, prometheus)
       - alert: HostDown
         expr: up == 0
         for: 2m
@@ -8,6 +9,50 @@ groups:
           severity: critical
         annotations:
           summary: "Host {{ $labels.instance }} is down"
+
+      # Hosts and guests that PUSH metrics with Alloy never report up == 0 when they
+      # die — their samples just stop. So: it was reporting 15 minutes ago, not now.
+      - alert: HostNotReporting
+        expr: max by (instance) (node_boot_time_seconds offset 15m) unless max by (instance) (node_boot_time_seconds)
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} stopped sending metrics (down, or Alloy stopped)"
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Service {{ $labels.name }} failed on {{ $labels.instance }}"
+
+  # metrics from labber setup's health check (/usr/local/sbin/labber-health-check)
+  - name: guests
+    rules:
+      - alert: RebootRequired
+        expr: labber_reboot_required == 1
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} has had a newer kernel installed for over a day — reboot it"
+
+      - alert: ServicesNeedRestart
+        expr: labber_restart_required_services > 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}: {{ $value }} service(s) still run outdated libraries — reboot, or: sudo needrestart -r a"
+
+      - alert: SecurityUpdatesStuck
+        expr: labber_security_updates_pending > 0
+        for: 7d
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}: {{ $value }} security update(s) pending for a week — automatic updates may be failing"
 
       - alert: HighCPU
         expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
@@ -56,3 +101,38 @@ groups:
           severity: critical
         annotations:
           summary: "SMART health FAILED on {{ $labels.instance }} device {{ $labels.device }}"
+
+  # container metrics pushed by Alloy on Docker hosts (job guest-containers)
+  - name: containers
+    rules:
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{job="guest-containers"}[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} on {{ $labels.instance }} restarted {{ $value }} times in 15 minutes"
+
+      # was running 10 minutes ago, isn't now (stopped, crashed for good, or removed).
+      # Clears by itself once it's been gone longer than the window.
+      - alert: ContainerGone
+        expr: max by (instance, name) (container_last_seen{job="guest-containers"} offset 10m) unless max by (instance, name) (container_last_seen{job="guest-containers"})
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} on {{ $labels.instance }} stopped (or was removed)"
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total{job="guest-containers"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} on {{ $labels.instance }} ran out of memory and was killed"
+
+      # from `labber check-updates` (daily on Docker hosts) — a weekly note, not a page
+      - alert: ServiceUpdateAvailable
+        expr: max by (instance, service) (labber_service_update_available) == 1
+        for: 1d
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }} has an update — labber {{ $labels.service }} update"

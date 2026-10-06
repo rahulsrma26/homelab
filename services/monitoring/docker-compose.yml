@@ -90,26 +90,15 @@ services:
       - PVE_PASSWORD=${PVE_PASSWORD}
       - PVE_VERIFY_SSL=${PVE_VERIFY_SSL}
 
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
-    container_name: cadvisor
+  # checks from the outside that each service actually answers (HTTP/TCP), alerts via Telegram
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
     restart: unless-stopped
-    expose:
-      - "8080"
-    command:
-      - '-housekeeping_interval=15s'
-      - '-docker_only=true'
-      - '-store_container_labels=false'
-    devices:
-      - /dev/kmsg
+    ports:
+      - "3001:3001"
     volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:rw
-      - /sys:/sys:ro
-      - /var/lib/docker:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-      - /etc/machine-id:/etc/machine-id:ro
-    privileged: true
+      - uptime-kuma-data:/app/data
 
 volumes:
   grafana-data:
@@ -117,3 +106,4 @@ volumes:
   loki-data:
   influxdb-data:
   alertmanager-data:
+  uptime-kuma-data:

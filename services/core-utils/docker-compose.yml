@@ -1,0 +1,44 @@
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  joplin-db:
+    image: postgres:16-alpine
+    container_name: joplin-db
+    restart: unless-stopped
+    expose:
+      - "5432"
+    environment:
+      - POSTGRES_USER=joplin
+      - POSTGRES_PASSWORD=${JOPLIN_DB_PASSWORD}
+      - POSTGRES_DB=joplin
+    volumes:
+      - joplin-db-data:/var/lib/postgresql/data
+
+  joplin:
+    image: joplin/server:latest
+    container_name: joplin
+    restart: unless-stopped
+    ports:
+      - "22300:22300"
+    environment:
+      - APP_PORT=22300
+      - APP_BASE_URL=${JOPLIN_BASE_URL}
+      - DB_CLIENT=pg
+      - POSTGRES_HOST=joplin-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=joplin
+      - POSTGRES_PASSWORD=${JOPLIN_DB_PASSWORD}
+      - POSTGRES_DATABASE=joplin
+    depends_on:
+      - joplin-db
+
+volumes:
+  joplin-db-data:
