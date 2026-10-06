@@ -1180,10 +1180,21 @@ st_update_run() {
     apt-get -y -q autoremove
 }
 
+# an Intel or AMD GPU that can do video decode (a passed-through iGPU). VMs also have
+# /dev/dri/card0 for the virtual display (vendor 0x1234), which doesn't count.
+has_media_gpu() {
+    local v
+    for v in /sys/class/drm/renderD*/device/vendor; do
+        [[ -f "$v" ]] || continue
+        case "$(cat "$v")" in 0x8086|0x1002) return 0 ;; esac
+    done
+    return 1
+}
+
 setup_pkg_list() {
     local p=(curl git sudo htop nano ca-certificates jq tmux rsync ncdu)
     [[ "$SETUP_VIRT" == lxc ]] || p+=(smartmontools lm-sensors iotop)
-    [[ -e /dev/dri ]] && p+=(vainfo)
+    has_media_gpu && p+=(vainfo)
     echo "${p[@]}"
 }
 st_packages_status() {
@@ -1582,17 +1593,19 @@ EOF
         ' "$f" > "$bak/interfaces.new"
         apply="cp '$bak/interfaces.new' '$f'"
         restore="cp '$bak/interfaces.orig' '$f'"
-        # resolv.conf: only when it's a plain file (not managed by systemd-resolved)
+        # stop the DHCP client for this interface, then bring it up with the new config
+        local cycle="(dhclient -r '$iface' 2>/dev/null; pkill -f 'dhclient.*$iface'; dhcpcd -k '$iface' 2>/dev/null; pkill -f 'dhcpcd.*$iface'; ip -4 addr flush dev '$iface'; ifdown --force '$iface' 2>/dev/null; ifup --force '$iface')"
+        apply+=" && $cycle"
+        restore+=" && $cycle"
+        # resolv.conf: only when it's a plain file (not managed by systemd-resolved), and
+        # only AFTER the cycle — releasing a dhcpcd lease rewrites resolv.conf and would
+        # wipe the nameservers (found on Debian 13, which uses dhcpcd)
         if [[ -n "$dns" && -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]; then
             cp -p /etc/resolv.conf "$bak/resolv.orig"
             { grep -E '^(search|domain|options)' /etc/resolv.conf || true; for c in $dns; do echo "nameserver $c"; done; } > "$bak/resolv.new"
             apply+=" && cp '$bak/resolv.new' /etc/resolv.conf"
             restore+=" && cp '$bak/resolv.orig' /etc/resolv.conf"
         fi
-        # stop the DHCP client for this interface, then bring it up with the new config
-        local cycle="(dhclient -r '$iface' 2>/dev/null; pkill -f 'dhclient.*$iface'; dhcpcd -k '$iface' 2>/dev/null; pkill -f 'dhcpcd.*$iface'; ip -4 addr flush dev '$iface'; ifdown --force '$iface' 2>/dev/null; ifup --force '$iface')"
-        apply+=" && $cycle"
-        restore+=" && $cycle"
     else
         warn "unsupported network manager — use a UniFi reservation instead"
         return 1
