@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.5.1"
+VERSION="2.6.0"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -866,7 +866,7 @@ _labber_complete() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local arg1="${COMP_WORDS[1]}"
     local svc_cmds="install uninstall start stop restart rebuild update shell logs status go"
-    local global_cmds="install deploy ls check-updates clean update tool help"
+    local global_cmds="install deploy setup ls check-updates clean update tool help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -1047,6 +1047,673 @@ show_overview() {
     fi
 }
 
+# ── setup: prepare a fresh LXC or VM ──────────────────────────────────────────
+# `labber setup` walks a checklist of steps for a new Debian/Ubuntu LXC or VM.
+# Every step checks first, so re-running only does what's still missing.
+
+LABBER_STATE_DIR="/var/lib/labber"
+SETUP_SSH_CONF="/etc/ssh/sshd_config.d/10-labber.conf"
+SETUP_JOURNAL_CONF="/etc/systemd/journald.conf.d/10-labber.conf"
+SETUP_STEPS=(update packages admin hostname ssh unattended journal docker dockerlogs guestagent labber fzf nfs fail2ban network)
+SETUP_VIRT=""          # lxc | vm
+SETUP_USER=""          # who user-level steps are for: the admin user on a VM, else root
+SETUP_HOST_CMDS=()     # commands to run on the Proxmox host (printed at the end)
+SETUP_NOTES=()         # anything else the user needs to do
+SETUP_NET_PENDING=0    # a static-IP change is waiting for confirmation
+SETUP_NET_NEW=""       # the address it changes to
+
+# small key=value store so re-runs remember choices (admin user, network choice)
+state_get() {
+    awk -v k="$1" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' \
+        "$LABBER_STATE_DIR/setup.state" 2>/dev/null || true
+}
+state_set() {
+    local f="$LABBER_STATE_DIR/setup.state"
+    mkdir -p "$LABBER_STATE_DIR"; touch "$f"
+    { grep -v "^$1=" "$f" || true; echo "$1=$2"; } > "$f.tmp"
+    mv "$f.tmp" "$f"
+}
+
+detect_virt() {
+    local v=""
+    command -v systemd-detect-virt &>/dev/null && v=$(systemd-detect-virt 2>/dev/null || true)
+    case "$v" in
+        lxc|lxc-libvirt) echo lxc ;;
+        kvm|qemu|vmware|microsoft|oracle|xen|bochs|parallels) echo vm ;;
+        none) echo bare ;;
+        *) if grep -qa 'container=lxc' /proc/1/environ 2>/dev/null; then echo lxc; else echo unknown; fi ;;
+    esac
+}
+
+pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
+apt_install() { DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@"; }
+user_home() { getent passwd "$1" | cut -d: -f6; }
+
+# ask "question" [default] → prints the answer (prompt goes to stderr)
+ask() {
+    local ans
+    read -rp "  $1${2:+ [$2]}: " ans
+    echo "${ans:-${2:-}}"
+}
+# yesno "question" y|n → exit status
+yesno() {
+    local ans def="${2:-n}"
+    read -rp "  $1 [$([[ $def == y ]] && echo Y/n || echo y/N)] " ans
+    ans="${ans:-$def}"
+    [[ "$ans" =~ ^[Yy] ]]
+}
+
+valid_ipv4() {
+    [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+    local o; for o in "${BASH_REMATCH[@]:1}"; do (( o <= 255 )) || return 1; done
+}
+
+net_iface() { ip route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i+1); exit } }'; }
+net_gw()    { ip route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i+1); exit } }'; }
+net_cidr()  { ip -4 -o addr show dev "$1" scope global 2>/dev/null | awk '{ print $4; exit }'; }
+net_dns()   { awk '/^nameserver/ { print $2 }' /etc/resolv.conf 2>/dev/null | paste -sd' ' - || true; }
+primary_ip() { local c; c=$(net_cidr "$(net_iface)"); echo "${c%/*}"; }
+
+# the admin user on this machine, if we know one
+setup_admin_name() {
+    local u; u=$(state_get admin)
+    if [[ -n "$u" ]] && id "$u" &>/dev/null; then echo "$u"; return; fi
+    if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != root ]]; then echo "$SUDO_USER"; fi
+}
+
+# the account you SSH in as: the admin user on a VM (once it exists), else root
+setup_login_user() {
+    local a; a=$(setup_admin_name)
+    if [[ "$SETUP_VIRT" == vm && -n "$a" ]]; then echo "$a"; else echo root; fi
+}
+
+has_ssh_key() {
+    grep -qE '^(ssh-(ed25519|rsa)|ecdsa-sha2-|sk-)' "$(user_home "$1")/.ssh/authorized_keys" 2>/dev/null
+}
+
+add_ssh_key() {
+    local user="$1" key="$2" home; home=$(user_home "$user")
+    install -d -m 700 -o "$user" -g "$(id -gn "$user")" "$home/.ssh"
+    touch "$home/.ssh/authorized_keys"
+    grep -qxF "$key" "$home/.ssh/authorized_keys" || echo "$key" >> "$home/.ssh/authorized_keys"
+    chmod 600 "$home/.ssh/authorized_keys"
+    chown "$user:" "$home/.ssh/authorized_keys"
+}
+
+step_title() {
+    case "$1" in
+        update)     echo "system update (apt full-upgrade)" ;;
+        packages)   echo "base packages" ;;
+        admin)      echo "admin user with sudo" ;;
+        hostname)   echo "hostname + timezone" ;;
+        ssh)        echo "SSH: key-only logins" ;;
+        unattended) echo "automatic security updates" ;;
+        journal)    echo "limit systemd journal to 200 MB" ;;
+        docker)     echo "Docker (official repo) + compose/buildx" ;;
+        dockerlogs) echo "Docker log rotation (10 MB x 3)" ;;
+        guestagent) echo "qemu-guest-agent" ;;
+        labber)     echo "install labber (for the admin user on a VM)" ;;
+        fzf)        echo "fzf (from repo tools/)" ;;
+        nfs)        echo "NFS client (nfs-common)" ;;
+        fail2ban)   echo "fail2ban for SSH" ;;
+        network)    echo "network: fixed IP" ;;
+    esac
+}
+
+step_applies() {
+    case "$1" in
+        admin|guestagent) [[ "$SETUP_VIRT" == vm ]] ;;
+        nfs)              [[ "$SETUP_VIRT" != lxc ]] ;;
+        *)                true ;;
+    esac
+}
+
+step_optional() { [[ "$1" == nfs || "$1" == fail2ban ]]; }
+
+# ── setup steps: st_<id>_status prints "done[: detail]" or "todo[: detail]" ───
+
+st_update_status() { echo "todo"; }
+st_update_run() {
+    apt-get update -q || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get -y -q \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade || return 1
+    apt-get -y -q autoremove
+}
+
+setup_pkg_list() {
+    local p=(curl git sudo htop nano ca-certificates jq tmux rsync ncdu)
+    [[ "$SETUP_VIRT" == lxc ]] || p+=(smartmontools lm-sensors iotop)
+    [[ -e /dev/dri ]] && p+=(vainfo)
+    echo "${p[@]}"
+}
+st_packages_status() {
+    local p missing=()
+    for p in $(setup_pkg_list); do pkg_installed "$p" || missing+=("$p"); done
+    if (( ${#missing[@]} )); then echo "todo: missing ${missing[*]}"; else echo "done"; fi
+}
+st_packages_run() {
+    apt-get update -q || return 1
+    # shellcheck disable=SC2046
+    apt_install $(setup_pkg_list)
+}
+
+st_admin_status() {
+    local a; a=$(setup_admin_name)
+    if [[ -n "$a" ]] && id -nG "$a" | grep -qw sudo; then echo "done: $a"; else echo "todo"; fi
+}
+st_admin_run() {
+    local name
+    while true; do
+        name=$(ask "admin username (you'll SSH in as this user)")
+        [[ "$name" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$name" != root ]] && break
+        warn "use lowercase letters, digits, - or _"
+    done
+    if ! id "$name" &>/dev/null; then
+        info "creating $name — choose a password (it's used for sudo)"
+        adduser --gecos "" "$name" || return 1
+    fi
+    usermod -aG sudo "$name" || return 1
+    if getent group _ssh >/dev/null; then usermod -aG _ssh "$name"; fi
+    # keys Proxmox (or you) put on root also let you in as the admin user
+    if [[ -s /root/.ssh/authorized_keys ]]; then
+        local key
+        while IFS= read -r key; do
+            [[ "$key" =~ ^(ssh-|ecdsa-|sk-) ]] && add_ssh_key "$name" "$key"
+        done < /root/.ssh/authorized_keys
+        ok "copied root's SSH keys to $name"
+    fi
+    state_set admin "$name"
+    SETUP_USER="$name"
+}
+
+current_tz() {
+    if [[ -f /etc/timezone ]]; then cat /etc/timezone
+    else readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' || true; fi
+}
+st_hostname_status() {
+    local tz; tz=$(current_tz)
+    if [[ -z "$tz" || "$tz" == *UTC* ]]; then echo "todo: timezone ${tz:-unset}"; else echo "done: $(hostname), $tz"; fi
+}
+st_hostname_run() {
+    local cur_tz def_tz tz
+    cur_tz=$(current_tz)
+    def_tz="$cur_tz"; [[ -z "$def_tz" || "$def_tz" == *UTC* ]] && def_tz="Europe/London"
+    tz=$(ask "timezone" "$def_tz")
+    if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
+        ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime
+        echo "$tz" > /etc/timezone
+        ok "timezone $tz"
+    else
+        warn "unknown timezone '$tz' — skipped (list: ls /usr/share/zoneinfo)"
+    fi
+
+    local cur new; cur=$(hostname)
+    new=$(ask "hostname" "$cur")
+    if [[ ! "$new" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+        warn "invalid hostname '$new' — skipped"
+    elif [[ "$new" != "$cur" ]]; then
+        if [[ "$SETUP_VIRT" == lxc ]]; then
+            # Proxmox rewrites an LXC's hostname and /etc/hosts at every start
+            SETUP_HOST_CMDS+=("pct set <CTID> --hostname $new && pct reboot <CTID>")
+            info "hostname is managed by Proxmox for LXCs — command added to the summary"
+        else
+            hostnamectl set-hostname "$new" 2>/dev/null || { echo "$new" > /etc/hostname; hostname "$new"; }
+            if grep -q '^127\.0\.1\.1' /etc/hosts; then
+                sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$new/" /etc/hosts
+            else
+                printf '127.0.1.1\t%s\n' "$new" >> /etc/hosts
+            fi
+            ok "hostname $new"
+        fi
+    fi
+}
+
+st_ssh_status() {
+    local u; u=$(setup_login_user)
+    if [[ -f "$SETUP_SSH_CONF" ]]; then echo "done"
+    elif has_ssh_key "$u"; then echo "todo"
+    else echo "todo: no SSH key for $u yet"; fi
+}
+st_ssh_run() {
+    pkg_installed openssh-server || apt_install openssh-server || return 1
+    if ! grep -qiE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+        warn "/etc/ssh/sshd_config doesn't include sshd_config.d — skipped"
+        return 0
+    fi
+
+    local user; user=$(setup_login_user)
+    if ! has_ssh_key "$user"; then
+        warn "no SSH key installed for $user — password logins stay on until there is one"
+        local key; key=$(ask "paste your public key (ssh-ed25519 …), or Enter to skip")
+        if [[ "$key" =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)[[:space:]]+[A-Za-z0-9+/=]+ ]]; then
+            add_ssh_key "$user" "$key"; ok "key added for $user"
+        else
+            [[ -z "$key" ]] || warn "that doesn't look like a public key"
+            SETUP_NOTES+=("add your key from your Mac: ssh-copy-id $user@$(primary_ip) — then run 'labber setup' again for key-only SSH")
+            return 0
+        fi
+    fi
+
+    # root: key-only in an LXC; off in a VM once an admin with sudo can log in instead
+    local root_policy="prohibit-password"
+    if [[ "$SETUP_VIRT" == vm ]]; then
+        if [[ "$user" != root ]] && id -nG "$user" | grep -qw sudo; then
+            root_policy="no"
+        else
+            warn "no admin user with sudo yet — root keeps key-only login"
+        fi
+    fi
+
+    mkdir -p "$(dirname "$SETUP_SSH_CONF")"
+    cat > "$SETUP_SSH_CONF" <<EOF
+# managed by labber setup — delete this file to undo
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin $root_policy
+EOF
+    if ! /usr/sbin/sshd -t 2>/dev/null; then
+        rm -f "$SETUP_SSH_CONF"
+        warn "sshd rejected the config — nothing changed"
+        return 1
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || systemctl restart ssh
+    echo
+    info "keep this session open, and from a SECOND terminal on your Mac run:"
+    echo -e "    ${W}ssh $user@$(primary_ip)${N}"
+    if yesno "did that log in without asking for a password?" n; then
+        ok "SSH is key-only (root: $root_policy)"
+    else
+        rm -f "$SETUP_SSH_CONF"
+        systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+        warn "reverted — password logins are back on"
+    fi
+}
+
+st_unattended_status() {
+    if pkg_installed unattended-upgrades && grep -qs 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades
+    then echo "done"; else echo "todo"; fi
+}
+st_unattended_run() {
+    apt_install unattended-upgrades || return 1
+    # the same file `dpkg-reconfigure -plow unattended-upgrades` writes
+    printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
+        > /etc/apt/apt.conf.d/20auto-upgrades
+    ok "security updates install automatically (Debian's default: security only, no auto-reboot)"
+}
+
+st_journal_status() { if [[ -f "$SETUP_JOURNAL_CONF" ]]; then echo "done"; else echo "todo"; fi; }
+st_journal_run() {
+    mkdir -p "$(dirname "$SETUP_JOURNAL_CONF")"
+    printf '# managed by labber setup\n[Journal]\nSystemMaxUse=200M\n' > "$SETUP_JOURNAL_CONF"
+    systemctl restart systemd-journald
+}
+
+st_docker_status() {
+    if command -v docker &>/dev/null && docker compose version &>/dev/null; then
+        echo "done: $(docker --version | awk '{print $3}' | tr -d ,)"
+    else
+        echo "todo"
+    fi
+}
+st_docker_run() {
+    # read os-release in a subshell: it defines VERSION, which would clobber labber's
+    local id codename like ubuntu_codename
+    id=$(. /etc/os-release; echo "${ID:-}")
+    codename=$(. /etc/os-release; echo "${VERSION_CODENAME:-}")
+    like=$(. /etc/os-release; echo "${ID_LIKE:-}")
+    ubuntu_codename=$(. /etc/os-release; echo "${UBUNTU_CODENAME:-}")
+    if [[ "$id" != debian && "$id" != ubuntu ]]; then
+        if [[ "$like" == *ubuntu* ]]; then id=ubuntu; codename="${ubuntu_codename:-$codename}"
+        else id=debian; fi
+    fi
+    apt_install ca-certificates curl || return 1
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL "https://download.docker.com/linux/$id/gpg" -o /etc/apt/keyrings/docker.asc || return 1
+    chmod a+r /etc/apt/keyrings/docker.asc
+    cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/$id
+Suites: $codename
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+    apt-get update -q || return 1
+    apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return 1
+    systemctl enable --now docker
+    if [[ "$SETUP_USER" != root ]]; then
+        usermod -aG docker "$SETUP_USER"
+        SETUP_NOTES+=("log out and back in as $SETUP_USER so the docker group applies")
+    fi
+    if ! docker info &>/dev/null; then
+        if [[ "$SETUP_VIRT" == lxc ]]; then
+            warn "Docker isn't running — LXCs need nesting enabled on the Proxmox host"
+            SETUP_HOST_CMDS+=("pct set <CTID> --features nesting=1,keyctl=1 && pct reboot <CTID>")
+        else
+            warn "Docker isn't running — check: systemctl status docker"
+        fi
+    fi
+}
+
+st_dockerlogs_status() {
+    if grep -qs '"max-size"' /etc/docker/daemon.json; then echo "done"
+    elif ! command -v docker &>/dev/null; then echo "todo: after Docker"
+    else echo "todo"; fi
+}
+st_dockerlogs_run() {
+    command -v docker &>/dev/null || { warn "Docker isn't installed — skipped"; return 0; }
+    local f=/etc/docker/daemon.json
+    mkdir -p /etc/docker
+    if [[ -s "$f" ]]; then
+        command -v jq &>/dev/null || apt_install jq || return 1
+        local driver; driver=$(jq -r '."log-driver" // "json-file"' "$f") || return 1
+        if [[ "$driver" != json-file && "$driver" != local ]]; then
+            warn "Docker uses the '$driver' log driver — size limits don't apply, skipped"
+            return 0
+        fi
+        cp -p "$f" "$f.labber-bak"
+        jq '. + {"log-opts": ((."log-opts" // {}) + {"max-size": "10m", "max-file": "3"})}' "$f.labber-bak" > "$f" \
+            || { cp -p "$f.labber-bak" "$f"; return 1; }
+    else
+        printf '{\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "10m", "max-file": "3" }\n}\n' > "$f"
+    fi
+    systemctl restart docker
+    SETUP_NOTES+=("log rotation applies to newly created containers — existing ones pick it up on 'labber <svc> restart'")
+}
+
+st_guestagent_status() { if pkg_installed qemu-guest-agent; then echo "done"; else echo "todo"; fi; }
+st_guestagent_run() {
+    apt_install qemu-guest-agent || return 1
+    systemctl start qemu-guest-agent 2>/dev/null || true
+    SETUP_HOST_CMDS+=("qm set <VMID> --agent enabled=1   # then shut the VM down and start it (a reboot isn't enough)")
+}
+
+st_labber_status() {
+    if [[ -x "$LABBER_BIN" ]] && grep -qxF "# labber shell function" "$(user_home "$SETUP_USER")/.bashrc" 2>/dev/null
+    then echo "done"; else echo "todo"; fi
+}
+st_labber_run() {
+    local tmp; tmp=$(mktemp /tmp/labber-install-XXXXXX)
+    curl -fsSL "$LABBER_URL" -o "$tmp" || { rm -f "$tmp"; warn "download failed: $LABBER_URL"; return 1; }
+    place_bin "$tmp"
+    ok "labber installed to $LABBER_BIN"
+    mkdir -p "$SERVICE_BASE"
+    if [[ "$SETUP_USER" != root ]]; then
+        chown "$SETUP_USER:" "$SERVICE_BASE"
+        SUDO_USER="$SETUP_USER" _install_shell_fn
+        SUDO_USER="$SETUP_USER" _install_completion_fn
+    else
+        ( unset SUDO_USER; _install_shell_fn; _install_completion_fn )
+    fi
+}
+
+st_fzf_status() {
+    if [[ -d "$(user_home "$SETUP_USER")/.fzf" ]]; then echo "done"; else echo "todo"; fi
+}
+st_fzf_run() {
+    local tmpdir; tmpdir=$(clone_repo_dir tools/) || return 1
+    [[ -f "$tmpdir/tools/fzf.sh" ]] || { rm -rf "$tmpdir"; warn "tools/fzf.sh not in repo"; return 1; }
+    # run the repo's tool as the user, so fzf lands in their home
+    local script; script=$(mktemp /tmp/labber-fzf-XXXXXX.sh)
+    cp "$tmpdir/tools/fzf.sh" "$script"; chmod 755 "$script"; rm -rf "$tmpdir"
+    runuser -l "$SETUP_USER" -c "bash $script"
+    local rc=$?
+    rm -f "$script"
+    return $rc
+}
+
+st_nfs_status() { if pkg_installed nfs-common; then echo "done"; else echo "todo"; fi; }
+st_nfs_run() { apt_install nfs-common; }
+
+st_fail2ban_status() {
+    if pkg_installed fail2ban && [[ -f /etc/fail2ban/jail.d/labber-sshd.conf ]]; then echo "done"; else echo "todo"; fi
+}
+st_fail2ban_run() {
+    # newer Debian logs to the journal, not /var/log/auth.log — hence backend = systemd
+    apt_install fail2ban python3-systemd || return 1
+    cat > /etc/fail2ban/jail.d/labber-sshd.conf <<'EOF'
+# managed by labber setup
+[sshd]
+enabled  = true
+backend  = systemd
+maxretry = 3
+findtime = 600
+bantime  = 3600
+EOF
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+}
+
+st_network_status() {
+    local iface c; iface=$(net_iface); c=$(net_cidr "$iface")
+    local choice; choice=$(state_get network)
+    if [[ -n "$choice" ]]; then echo "done: $choice"
+    elif [[ -z "$iface" ]]; then echo "todo: no network detected"
+    elif ip -4 addr show dev "$iface" 2>/dev/null | grep -q dynamic; then echo "todo: DHCP ${c:-}"
+    else echo "done: static ${c:-}"; fi
+}
+st_network_run() {
+    local iface cidr gw dns mac
+    iface=$(net_iface); cidr=$(net_cidr "$iface"); gw=$(net_gw); dns=$(net_dns)
+    mac=$(cat "/sys/class/net/$iface/address" 2>/dev/null || true)
+    [[ -n "$iface" && -n "$cidr" ]] || { warn "couldn't detect the network — skipped"; return 0; }
+
+    echo
+    echo -e "  current:  ${W}$cidr${N} on $iface   gateway $gw   DNS ${dns:--}   MAC $mac"
+    echo "  1) UniFi DHCP reservation — recommended: nothing changes here, all IPs stay in UniFi"
+    if [[ "$SETUP_VIRT" == lxc ]]; then
+        echo "  2) static IP set by Proxmox (Proxmox owns an LXC's network config)"
+    else
+        echo "  2) static IP on this machine (rolls back unless you confirm from the new IP)"
+    fi
+    echo "  3) skip"
+    local choice; choice=$(ask "choice" 1)
+    case "$choice" in
+        1)
+            echo
+            info "in UniFi: Client Devices → the device with MAC $mac → Settings → Fixed IP Address"
+            info "set the IP you want (currently ${cidr%/*}); it applies at the next DHCP renewal or reboot"
+            state_set network "UniFi reservation ($mac)"
+            ;;
+        2)
+            local ip prefix new_gw new_dns
+            while true; do
+                ip=$(ask "new IP" "${cidr%/*}"); prefix=$(ask "prefix length" "${cidr#*/}")
+                new_gw=$(ask "gateway" "$gw"); new_dns=$(ask "DNS servers (space-separated)" "$dns")
+                local ok_all=1 d
+                valid_ipv4 "$ip" && valid_ipv4 "$new_gw" && [[ "$prefix" =~ ^[0-9]+$ ]] && (( prefix >= 8 && prefix <= 32 )) || ok_all=0
+                for d in $new_dns; do valid_ipv4 "$d" || ok_all=0; done
+                (( ok_all )) && break
+                warn "invalid address — try again"
+            done
+            if [[ "$SETUP_VIRT" == lxc ]]; then
+                # rewrite only ip= and gw= in the existing net0 line, keeping bridge/MAC/firewall/VLAN tag
+                SETUP_HOST_CMDS+=("pct set <CTID> --net0 \"\$(pct config <CTID> | sed -n 's/^net0: //p' | sed -E 's/,?gw=[^,]*//; s|ip=[^,]*|ip=$ip/$prefix|'),gw=$new_gw\"")
+                [[ -z "$new_dns" || "$new_dns" == "$dns" ]] || SETUP_HOST_CMDS+=("pct set <CTID> --nameserver \"$new_dns\"")
+                SETUP_HOST_CMDS+=("pct reboot <CTID>")
+                state_set network "static $ip/$prefix (via Proxmox)"
+            else
+                setup_static_vm "$iface" "$ip" "$prefix" "$new_gw" "$new_dns" || return 1
+            fi
+            ;;
+        *) info "network unchanged" ;;
+    esac
+}
+
+# write a static config for a VM, apply it in the background (the SSH session will
+# drop if the IP changes), and roll back after 2 minutes unless confirmed with
+# `labber setup --confirm-ip`. Supports ifupdown (Debian) and netplan (Ubuntu).
+setup_static_vm() {
+    local iface="$1" ip="$2" prefix="$3" gw="$4" dns="$5"
+    local st="$LABBER_STATE_DIR" bak="$LABBER_STATE_DIR/ip-backup"
+    mkdir -p "$bak"; rm -f "$bak"/* "$st/ip-confirmed" "$st/ip-result"
+    local apply="" restore=""
+
+    if command -v netplan &>/dev/null && compgen -G "/etc/netplan/*.yaml" >/dev/null; then
+        local np="/etc/netplan/90-labber-$iface.yaml" ns=""
+        [[ -n "$dns" ]] && ns="      nameservers: { addresses: [$(echo "$dns" | sed 's/ /, /g')] }"
+        cat > "$bak/netplan.new" <<EOF
+# managed by labber setup — delete this file and run 'netplan apply' to undo
+network:
+  version: 2
+  ethernets:
+    $iface:
+      dhcp4: false
+      addresses: [$ip/$prefix]
+      routes: [{ to: default, via: $gw }]
+$ns
+EOF
+        apply="install -m 600 '$bak/netplan.new' '$np' && netplan apply"
+        restore="rm -f '$np' && netplan apply"
+    elif command -v ifup &>/dev/null; then
+        local f="" c
+        for c in /etc/network/interfaces /etc/network/interfaces.d/*; do
+            [[ -f "$c" ]] && grep -qE "^[[:space:]]*iface[[:space:]]+$iface[[:space:]]+inet[[:space:]]" "$c" && { f="$c"; break; }
+        done
+        [[ -n "$f" ]] || { warn "no 'iface $iface inet' entry in /etc/network/interfaces* — use a UniFi reservation instead"; return 1; }
+        cp -p "$f" "$bak/interfaces.orig"
+        awk -v ifc="$iface" -v addr="$ip/$prefix" -v gw="$gw" '
+            $1 == "iface" && $2 == ifc && $3 == "inet" {
+                print "iface " ifc " inet static"; print "    address " addr; print "    gateway " gw
+                inblk = 1; next
+            }
+            inblk && /^[[:space:]]/ { if ($1 ~ /^(address|netmask|gateway|broadcast|network)$/) next; print; next }
+            { inblk = 0; print }
+        ' "$f" > "$bak/interfaces.new"
+        apply="cp '$bak/interfaces.new' '$f'"
+        restore="cp '$bak/interfaces.orig' '$f'"
+        # resolv.conf: only when it's a plain file (not managed by systemd-resolved)
+        if [[ -n "$dns" && -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]; then
+            cp -p /etc/resolv.conf "$bak/resolv.orig"
+            { grep -E '^(search|domain|options)' /etc/resolv.conf || true; for c in $dns; do echo "nameserver $c"; done; } > "$bak/resolv.new"
+            apply+=" && cp '$bak/resolv.new' /etc/resolv.conf"
+            restore+=" && cp '$bak/resolv.orig' /etc/resolv.conf"
+        fi
+        # stop the DHCP client for this interface, then bring it up with the new config
+        local cycle="(dhclient -r '$iface' 2>/dev/null; pkill -f 'dhclient.*$iface'; dhcpcd -k '$iface' 2>/dev/null; pkill -f 'dhcpcd.*$iface'; ip -4 addr flush dev '$iface'; ifdown --force '$iface' 2>/dev/null; ifup --force '$iface')"
+        apply+=" && $cycle"
+        restore+=" && $cycle"
+    else
+        warn "unsupported network manager — use a UniFi reservation instead"
+        return 1
+    fi
+
+    cat > "$st/ip-apply.sh" <<EOF
+#!/bin/bash
+# written by labber setup: apply a static IP, roll back unless confirmed within 2 minutes
+sleep 5
+$apply
+for i in \$(seq 60); do
+    if [[ -f '$st/ip-confirmed' ]]; then echo confirmed > '$st/ip-result'; rm -f '$st/ip-confirmed'; exit 0; fi
+    sleep 2
+done
+$restore
+echo "rolled back \$(date)" > '$st/ip-result'
+EOF
+    chmod 700 "$st/ip-apply.sh"
+    setsid nohup bash "$st/ip-apply.sh" > "$st/ip-apply.log" 2>&1 < /dev/null &
+    state_set network_pending "static $ip/$prefix"
+    SETUP_NET_PENDING=1
+    SETUP_NET_NEW="$ip"
+}
+
+# `labber setup --confirm-ip`, run from the new address
+setup_confirm_ip() {
+    (( EUID == 0 )) || die "run as root: sudo labber setup --confirm-ip"
+    local pending; pending=$(state_get network_pending)
+    [[ -n "$pending" ]] || die "no IP change is waiting for confirmation"
+    touch "$LABBER_STATE_DIR/ip-confirmed"
+    local i
+    for i in $(seq 10); do
+        if grep -qs confirmed "$LABBER_STATE_DIR/ip-result"; then
+            state_set network "$pending"; state_set network_pending ""
+            ok "IP change confirmed: $pending"
+            return
+        fi
+        sleep 1
+    done
+    rm -f "$LABBER_STATE_DIR/ip-confirmed"
+    warn "too late — the change was already rolled back ($(cat "$LABBER_STATE_DIR/ip-result" 2>/dev/null || echo unknown))"
+}
+
+do_setup() {
+    if [[ "${1:-}" == --confirm-ip ]]; then setup_confirm_ip; return; fi
+    interactive || die "setup is interactive — run it in a terminal"
+    if (( EUID != 0 )); then
+        # re-run under sudo when labber is a real file (not `bash <(curl …)`)
+        if [[ -f "$0" && "$0" != /dev/* && "$0" != /proc/* ]]; then exec sudo bash "$0" setup; fi
+        die "setup needs root — run it as root, or: sudo labber setup"
+    fi
+    [[ -d /etc/pve ]] && die "this is a Proxmox host — setup is for LXCs and VMs"
+    command -v apt-get &>/dev/null || die "setup supports Debian/Ubuntu (apt) only"
+
+    SETUP_VIRT=$(detect_virt)
+    if [[ "$SETUP_VIRT" != lxc && "$SETUP_VIRT" != vm ]]; then
+        warn "couldn't tell whether this is an LXC or a VM (detected: $SETUP_VIRT)"
+        yesno "treat it as a VM?" y || die "aborted"
+        SETUP_VIRT=vm
+    fi
+    SETUP_USER=$(setup_admin_name); [[ -n "$SETUP_USER" ]] || SETUP_USER=root
+
+    # checklist: pre-select steps that still need doing (optional ones start off)
+    local ids=() sel=() stat=() id s
+    for id in "${SETUP_STEPS[@]}"; do
+        step_applies "$id" || continue
+        s=$("st_${id}_status")
+        ids+=("$id"); stat+=("$s")
+        if [[ "$s" == todo* ]] && ! step_optional "$id"; then sel+=(1); else sel+=(0); fi
+    done
+
+    local n i input
+    while true; do
+        echo -e "\n${W}labber setup${N} — $(hostname), ${SETUP_VIRT^^}, user: $SETUP_USER\n"
+        for i in "${!ids[@]}"; do
+            local mark="[ ]"; (( sel[i] )) && mark="[${G}x${N}]"
+            local sc="$G"; [[ "${stat[$i]}" == todo* ]] && sc="$Y"
+            printf "  %2d %b %-42s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
+        done
+        echo
+        read -rp "toggle by number (e.g. 3 5), a = all, n = none, Enter = run, q = quit: " input
+        case "$input" in
+            "") break ;;
+            q|Q) info "nothing changed"; return ;;
+            a|A) for i in "${!sel[@]}"; do sel[i]=1; done ;;
+            n|N) for i in "${!sel[@]}"; do sel[i]=0; done ;;
+            *) for n in $input; do
+                   if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#ids[@]} )); then
+                       sel[n-1]=$(( 1 - sel[n-1] ))
+                   fi
+               done ;;
+        esac
+    done
+
+    local done_steps=() failed=()
+    for i in "${!ids[@]}"; do
+        (( sel[i] )) || continue
+        id="${ids[$i]}"
+        echo; info "$(step_title "$id")"
+        # `if` keeps one failing step from aborting the whole setup
+        if "st_${id}_run"; then done_steps+=("$id"); else failed+=("$id"); warn "$(step_title "$id") failed"; fi
+    done
+
+    echo; echo -e "${W}── setup summary ──${N}"
+    (( ${#done_steps[@]} == 0 )) || ok "done: ${done_steps[*]}"
+    (( ${#failed[@]} == 0 )) || warn "failed: ${failed[*]} — fix and run 'labber setup' again"
+    if (( ${#SETUP_HOST_CMDS[@]} )); then
+        echo; warn "run on the Proxmox host (replace <CTID>/<VMID> with this guest's ID):"
+        printf "    %s\n" "${SETUP_HOST_CMDS[@]}"
+    fi
+    if (( ${#SETUP_NOTES[@]} )); then
+        echo; for n in "${SETUP_NOTES[@]}"; do info "$n"; done
+    fi
+    if (( SETUP_NET_PENDING )); then
+        echo
+        warn "the new IP applies in 5 seconds — this session will probably disconnect"
+        warn "within 2 minutes, connect to the NEW address and confirm, or it rolls back:"
+        echo -e "    ${W}ssh $(setup_login_user)@$SETUP_NET_NEW${N}   then   ${W}sudo labber setup --confirm-ip${N}"
+    fi
+}
+
 # ── interactive menu ──────────────────────────────────────────────────────────
 
 show_menu() {
@@ -1055,7 +1722,7 @@ show_menu() {
     show_overview
     echo
 
-    local cmds=(  deploy  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  check-updates  go  clean  update )
+    local cmds=(  deploy  uninstall  start  stop  restart  rebuild  shell  logs  status  ls  check-updates  go  clean  update  setup )
     local descs=(
         "deploy a service from repo"
         "stop and remove a service"
@@ -1071,6 +1738,7 @@ show_menu() {
         "go to service directory"
         "remove all unused containers, images, volumes"
         "system apt update + upgrade labber"
+        "prepare this LXC/VM (users, SSH, Docker, network...)"
     )
 
     echo -e "${W}commands:${N}"
@@ -1112,6 +1780,7 @@ ${W}Commands:${N}
   [svc] logs        follow docker compose logs
   [svc] status      show container status
   [svc] go          cd to service directory
+  setup             prepare this fresh LXC/VM (interactive checklist; re-runnable)
   ls                list services: containers up, health, ports, updates
   check-updates     check images and repo config for updates (cron-able)
   clean             remove all unused containers, images, networks, and volumes
@@ -1138,7 +1807,11 @@ ${W}Note:${N}
   'labber <svc> go' requires the shell function installed by 'labber install'.
   After install, run: source ~/.bashrc
 
-${W}One-liner install on any LXC:${N}
+${W}Fresh LXC/VM${N} (as root — only curl needed):
+  apt update && apt install -y curl
+  bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) setup
+
+${W}Just install labber:${N}
   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) install
 EOF
 }
@@ -1149,7 +1822,7 @@ SVC="${1:-}"; shift 2>/dev/null || true
 CMD="${1:-}"; shift 2>/dev/null || true
 
 # Global commands have no service prefix — detect when SVC slot holds a global cmd
-_GLOBAL_CMDS="install deploy ls check-updates clean update tool help -h --help"
+_GLOBAL_CMDS="install deploy setup ls check-updates clean update tool help -h --help"
 if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
     _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
 elif [[ -z "$CMD" ]]; then
@@ -1178,6 +1851,7 @@ case "$CMD" in
     status)    do_status    "$SVC" ;;
     ls)        do_ls ;;
     check-updates) do_check_updates ;;
+    setup)     do_setup     "$SVC" ;;
     go)        do_go        "$SVC" ;;
     clean)     do_clean ;;
     tool)      do_tool      "$SVC" ;;
