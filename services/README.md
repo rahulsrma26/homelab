@@ -26,7 +26,7 @@ apt update && apt install -y curl
 bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber) setup
 ```
 
-It detects whether it's in an LXC or a VM, shows a checklist with each step's current state, and pre-selects what still needs doing. Toggle steps by number, then press Enter.
+It detects whether it's in an LXC or a VM and asks whether the machine will run **Docker services** — answer no for, say, a plain web server, and the Docker steps are left out (asked on every run, with your last answer as the default; answering no never uninstalls anything). It then shows a checklist with each step's current state and pre-selects what still needs doing. Toggle steps by number, then press Enter.
 
 | Step | LXC | VM | What it does |
 |---|---|---|---|
@@ -37,8 +37,8 @@ It detects whether it's in an LXC or a VM, shows a checklist with each step's cu
 | SSH: key-only logins | ✓ | ✓ | only once a key is installed; root is key-only in an LXC and off in a VM; you confirm a test login from a second terminal, or it reverts |
 | Automatic security updates | ✓ | ✓ | `unattended-upgrades`, Debian security updates only, no auto-reboot |
 | Journal limit | ✓ | ✓ | systemd journal capped at 200 MB |
-| Docker | ✓ | ✓ | official Docker repo + compose/buildx; on an LXC, prints the nesting command if Docker can't start |
-| Docker log rotation | ✓ | ✓ | container logs capped at 10 MB × 3 |
+| Docker *(Docker hosts)* | ✓ | ✓ | official Docker repo + compose/buildx; on an LXC, prints the nesting command if Docker can't start |
+| Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
 | labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services` |
 | fzf | ✓ | ✓ | from `tools/fzf.sh` |

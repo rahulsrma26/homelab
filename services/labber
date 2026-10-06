@@ -1065,6 +1065,7 @@ SETUP_HOST_CMDS=()     # commands to run on the Proxmox host (printed at the end
 SETUP_NOTES=()         # anything else the user needs to do
 SETUP_NET_PENDING=0    # a static-IP change is waiting for confirmation
 SETUP_NET_NEW=""       # the address it changes to
+SETUP_DOCKER=1         # 0: not a Docker host — Docker steps are left out
 
 # small key=value store so re-runs remember choices (admin user, network choice)
 state_get() {
@@ -1090,7 +1091,10 @@ detect_virt() {
 }
 
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
-apt_install() { DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@"; }
+# package commands read from /dev/null: otherwise apt/dpkg (and their maintainer
+# scripts) can swallow answers typed ahead for setup's own questions
+apt_get() { DEBIAN_FRONTEND=noninteractive apt-get "$@" < /dev/null; }
+apt_install() { apt_get install -y -q "$@"; }
 user_home() { getent passwd "$1" | cut -d: -f6; }
 
 # ask "question" [default] → prints the answer (prompt goes to stderr)
@@ -1167,6 +1171,7 @@ step_title() {
 step_applies() {
     case "$1" in
         admin|guestagent) [[ "$SETUP_VIRT" == vm ]] ;;
+        docker|dockerlogs) (( SETUP_DOCKER )) ;;
         nfs)              [[ "$SETUP_VIRT" != lxc ]] ;;
         *)                true ;;
     esac
@@ -1178,10 +1183,10 @@ step_optional() { [[ "$1" == nfs || "$1" == fail2ban ]]; }
 
 st_update_status() { echo "todo"; }
 st_update_run() {
-    apt-get update -q || return 1
-    DEBIAN_FRONTEND=noninteractive apt-get -y -q \
+    apt_get update -q || return 1
+    apt_get -y -q \
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade || return 1
-    apt-get -y -q autoremove
+    apt_get -y -q autoremove
 }
 
 # an Intel or AMD GPU that can do video decode (a passed-through iGPU). VMs also have
@@ -1207,7 +1212,7 @@ st_packages_status() {
     if (( ${#missing[@]} )); then echo "todo: missing ${missing[*]}"; else echo "done"; fi
 }
 st_packages_run() {
-    apt-get update -q || return 1
+    apt_get update -q || return 1
     # shellcheck disable=SC2046
     apt_install $(setup_pkg_list)
 }
@@ -1219,7 +1224,7 @@ st_admin_status() {
 st_admin_run() {
     local name
     while true; do
-        name=$(ask "admin username (you'll SSH in as this user)")
+        name=$(ask "admin username (you'll SSH in as this user)" "$(state_get admin)")
         [[ "$name" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$name" != root ]] && break
         warn "use lowercase letters, digits, - or _"
     done
@@ -1393,7 +1398,7 @@ Components: stable
 Architectures: $(dpkg --print-architecture)
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
-    apt-get update -q || return 1
+    apt_get update -q || return 1
     apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return 1
     systemctl enable --now docker
     if [[ "$SETUP_USER" != root ]]; then
@@ -1471,7 +1476,7 @@ st_fzf_run() {
     # run the repo's tool as the user, so fzf lands in their home
     local script; script=$(mktemp /tmp/labber-fzf-XXXXXX.sh)
     cp "$tmpdir/tools/fzf.sh" "$script"; chmod 755 "$script"; rm -rf "$tmpdir"
-    runuser -l "$SETUP_USER" -c "bash $script"
+    runuser -l "$SETUP_USER" -c "bash $script" < /dev/null
     local rc=$?
     rm -f "$script"
     return $rc
@@ -1522,7 +1527,8 @@ st_network_run() {
         echo "  2) static IP on this machine (rolls back unless you confirm from the new IP)"
     fi
     echo "  3) skip"
-    local choice; choice=$(ask "choice" 1)
+    local choice; choice=$(ask "choice" "$(state_get network_choice | grep -E '^[123]$' || echo 1)")
+    state_set network_choice "$choice"
     case "$choice" in
         1)
             echo
@@ -1626,6 +1632,7 @@ for i in \$(seq 60); do
 done
 $restore
 echo "rolled back \$(date)" > '$st/ip-result'
+sed -i '/^network_pending=/d' '$st/setup.state'
 EOF
     chmod 700 "$st/ip-apply.sh"
     setsid nohup bash "$st/ip-apply.sh" > "$st/ip-apply.log" 2>&1 < /dev/null &
@@ -1653,6 +1660,22 @@ setup_confirm_ip() {
     warn "too late — the change was already rolled back ($(cat "$LABBER_STATE_DIR/ip-result" 2>/dev/null || echo unknown))"
 }
 
+# is this a Docker host? Not every machine is (a web server, say): without Docker
+# the Docker steps are left out (nothing is uninstalled). Asked on every run, with
+# the last answer shown and used as the default.
+setup_ask_docker() {
+    local last def=y hint=""
+    last=$(state_get docker)
+    [[ "$last" == no ]] && def=n
+    [[ -n "$last" ]] && hint=" (last answer: $last)"
+    if yesno "Will this machine run Docker services?$hint" "$def"; then
+        SETUP_DOCKER=1; state_set docker yes
+    else
+        SETUP_DOCKER=0; state_set docker no
+        info "Docker steps left out — answer yes on a later 'labber setup' to add them"
+    fi
+}
+
 do_setup() {
     if [[ "${1:-}" == --confirm-ip ]]; then setup_confirm_ip; return; fi
     interactive || die "setup is interactive — run it in a terminal"
@@ -1667,10 +1690,16 @@ do_setup() {
     SETUP_VIRT=$(detect_virt)
     if [[ "$SETUP_VIRT" != lxc && "$SETUP_VIRT" != vm ]]; then
         warn "couldn't tell whether this is an LXC or a VM (detected: $SETUP_VIRT)"
-        yesno "treat it as a VM?" y || die "aborted"
-        SETUP_VIRT=vm
+        local last_virt; last_virt=$(state_get virt)
+        if yesno "treat it as a VM?${last_virt:+ (last answer: $last_virt)}" "$([[ $last_virt == lxc ]] && echo n || echo y)"; then
+            SETUP_VIRT=vm
+        else
+            SETUP_VIRT=lxc
+        fi
+        state_set virt "$SETUP_VIRT"
     fi
     SETUP_USER=$(setup_admin_name); [[ -n "$SETUP_USER" ]] || SETUP_USER=root
+    setup_ask_docker
 
     # checklist: pre-select steps that still need doing (optional ones start off)
     local ids=() sel=() stat=() id s
