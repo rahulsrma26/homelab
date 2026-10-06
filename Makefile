@@ -8,6 +8,9 @@ help:
 	@echo "Available services:"
 	@for s in $(SERVICES); do echo "  $$s"; done
 
+service:
+	git add services && git commit -m "services: update" && git push origin main
+
 labber:
 	git add labber && git commit -m "labber: update" && git push origin main
 
