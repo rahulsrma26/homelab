@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# After an edit to labber (labber/labber or anything in labber/files/), bump labber's
+# patch version once per commit, so `labber update` sees the change.
 set -euo pipefail
 
 input=$(cat)
@@ -10,17 +12,20 @@ else
     file_path=$(echo "$input" | grep -o '"file_path":"[^"]*"' | head -1 | cut -d'"' -f4)
 fi
 
-[[ "$file_path" == */services/labber ]] || exit 0
+[[ "$file_path" == */labber/labber || "$file_path" == */labber/files/* ]] || exit 0
 
 repo_root=$(git -C "$(dirname "$file_path")" rev-parse --show-toplevel) || exit 0
+script="$repo_root/labber/labber"
+[[ -f "$script" ]] || exit 0
 
-# Read version from last commit
-head_version=$(git -C "$repo_root" show HEAD:services/labber 2>/dev/null \
+# Read version from last commit (labber lived at services/labber before 4.0.0)
+head_version=$( { git -C "$repo_root" show HEAD:labber/labber 2>/dev/null \
+    || git -C "$repo_root" show HEAD:services/labber 2>/dev/null; } \
     | grep '^VERSION=' | cut -d'"' -f2) || exit 0
 [[ -n "$head_version" ]] || exit 0
 
 # Read version in working file
-current_version=$(grep '^VERSION=' "$file_path" | cut -d'"' -f2)
+current_version=$(grep '^VERSION=' "$script" | cut -d'"' -f2)
 
 # Skip if already bumped beyond HEAD
 [[ "$current_version" == "$head_version" ]] || exit 0
@@ -29,9 +34,9 @@ IFS='.' read -r major minor patch <<< "$head_version"
 new_version="$major.$minor.$((patch + 1))"
 
 if sed --version 2>/dev/null | grep -q GNU; then
-    sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$new_version\"/" "$file_path"
+    sed -i "s/^VERSION=\"[^\"]*\"/VERSION=\"$new_version\"/" "$script"
 else
-    sed -i '' "s/^VERSION=\"[^\"]*\"/VERSION=\"$new_version\"/" "$file_path"
+    sed -i '' "s/^VERSION=\"[^\"]*\"/VERSION=\"$new_version\"/" "$script"
 fi
 
 echo "labber: bumped $head_version → $new_version"
