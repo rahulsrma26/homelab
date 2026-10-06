@@ -97,7 +97,7 @@ Examples: `labber frigate logs` · `labber paperless-ngx restart` · `labber jel
 
 On every `install`, `start`, `rebuild` and `update`:
 
-- **`.env` values** — keys new in `.env.example` are added to `.env`; placeholders (below) are generated or asked for. If anything is still unset, labber lists it and asks before starting.
+- **`.env` values** — keys new in `.env.example` are added to `.env`; placeholders (below) are asked for or generated. If anything is still unset, labber lists it and asks before starting.
 - **Ports** — warns if a published port is already used by another container or process.
 - **Data folders** — creates missing bind-mount folders owned by `PUID`/`PGID` (or `UID`/`GID`) from `.env`, otherwise by you. Without this, Docker creates them as root and many containers can't write to them. Existing paths are never changed.
 
@@ -105,21 +105,22 @@ Updates pull new images **before** stopping the old containers, so a failed pull
 
 Without a terminal (cron, scripts), labber never prompts: it reports what's wrong and doesn't start the service.
 
-## `.env` placeholders
+## `.env` templates
 
-Values in a service's `.env.example` that labber fills in on install:
+Values in a service's `.env.example` that labber fills in on install (and on update, for newly added keys):
 
-| Placeholder | Meaning | Autofill |
+| Template | Meaning | Enter does |
 |---|---|---|
-| `_changeme_` | you must provide it (API tokens, keys from other systems) | — asks |
-| `_changeme_min_N_` | any value of at least N characters | N random letters/digits |
-| `_changeme_hex_N_` | exactly N hex characters (`openssl rand -hex 32` → `_changeme_hex_64_`) | random hex |
-| `_changeme_b64_N_` | base64 of N random bytes | random |
-| `_changeme_md5_` / `_changeme_sha256_` | same as `_changeme_hex_32_` / `_changeme_hex_64_` | random hex |
-| `_changeme_uuid_` | a UUID | random UUID |
-| `changeme`, `<...>` | older style — you must provide it | — asks |
+| `{{ name }}` | you must provide it (API tokens, keys from other systems, hosts) | — (skip leaves it unset) |
+| `{{ name \| default(8000) }}` | a setting with a sensible default (`default()` = empty) | keeps the default |
+| `{{ name \| generate(hex64) }}` | N random hex characters (`openssl rand -hex 32` → `hex64`); typed: exactly N hex | generates |
+| `{{ name \| generate(base64_32) }}` | N random bytes, base64-encoded | generates |
+| `{{ name \| generate(uuid) }}` | a UUID | generates |
+| `{{ name \| generate([A-Za-z0-9],16) }}` | N random characters from a set (passwords, secrets with a minimum length); typed: at least N | generates |
 
-On install labber asks once whether to generate everything it can, then asks only for values that must come from you (secrets are typed hidden, and checked against their rule).
+Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{ paperless_host }}:{{ paperless_port | default(8000) }}`. A name used several times in one `.env` is asked once and filled in everywhere (e.g. `{{ domain }}`).
+
+labber first asks once whether to generate all the secrets (it lists them); answer no to go through them one by one. Values only you can provide are asked one by one; secrets are typed hidden and checked against their rule. Anything left unset is listed before starting, and labber asks before starting anyway.
 
 ## Updates
 
@@ -143,7 +144,7 @@ Then apply with `labber <svc> update` (config + images) or `labber <svc> rebuild
 Each service directory contains:
 
 - `docker-compose.yml` — service definition
-- `.env.example` — every variable the compose file uses, with placeholders for secrets (see above). Pick the strictest rule the app documents, and use `_changeme_` for anything that must match a value elsewhere.
+- `.env.example` — every variable the compose file uses, with `{{ … }}` templates (see above) for secrets and anything machine-specific (hosts, domains). Pick the strictest generator the app documents, and use `{{ name }}` for anything that must match a value elsewhere.
 - `README.txt` — short summary and list of files to edit before deployment (shown during install)
 - `config/` — versioned config files (where applicable)
 

@@ -177,16 +177,20 @@ place_bin() {
     rm -f "$src"
 }
 
-# ── .env placeholders ─────────────────────────────────────────────────────────
-# Placeholder values used in .env.example:
-#   _changeme_          you must provide it (e.g. an API token from another app)
-#   _changeme_min_N_    any value of at least N characters; autofill: N random letters/digits
-#   _changeme_hex_N_    exactly N hex characters;           autofill: random hex
-#   _changeme_b64_N_    base64 of N random bytes;            autofill: random
-#   _changeme_md5_      same as _changeme_hex_32_
-#   _changeme_sha256_   same as _changeme_hex_64_
-#   _changeme_uuid_     a UUID;                              autofill: random UUID
-#   changeme, <...>     older style — you must provide it
+# ── .env templates ────────────────────────────────────────────────────────────
+# Values in .env.example can contain Jinja-like placeholders, filled in on
+# install/update/start (anywhere inside a value, e.g. http://{{ host }}:{{ port | default(80) }}):
+#   {{ name }}                            you provide it (required)
+#   {{ name | default(8000) }}            asked; Enter keeps the default (default() = empty)
+#   {{ name | generate(hex64) }}          a secret, typed hidden; Enter generates it
+#       hexN            N random hex characters (typed value: exactly N hex chars)
+#       base64_N        N random bytes, base64-encoded
+#       uuid            a random UUID
+#       [set],N         N random characters from a tr-style set, e.g. [A-Za-z0-9],16
+#                       (typed value: at least N characters)
+# A name used several times in one .env is asked once and filled in everywhere.
+
+TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate)\(([^}]*)\)[[:space:]]*)?\}\}'
 
 # N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'
 rand_chars() {
@@ -202,52 +206,58 @@ rand_uuid() {
     else uuidgen | tr 'A-Z' 'a-z'; fi
 }
 
-# placeholder rule for a value: prints "<kind> <length>", or nothing if not a placeholder
-placeholder_rule() {
-    local v="$1"
-    case "$v" in
-        _changeme_|changeme) echo "manual 0" ;;
-        _changeme_md5_)      echo "hex 32" ;;
-        _changeme_sha256_)   echo "hex 64" ;;
-        _changeme_uuid_)     echo "uuid 36" ;;
-        *)
-            if [[ "$v" =~ ^_changeme_(min|hex|b64)_([0-9]+)_$ ]]; then
-                echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
-            elif [[ "$v" =~ \<[^\>]+\> ]]; then
-                echo "manual 0"
-            fi
-            ;;
-    esac
+# every placeholder in a string, one per line: "name<TAB>function<TAB>argument"
+tpl_list() {
+    local rest="$1"
+    while [[ "$rest" =~ $TPL_RE ]]; do
+        printf '%s\t%s\t%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+        rest="${rest#*"${BASH_REMATCH[0]}"}"
+    done
 }
 
-rule_desc() {
+# $1 with every placeholder named $2 replaced by $3 (others left as they are)
+tpl_fill() {
+    local s="$1" name="$2" val="$3" out="" m n
+    while [[ "$s" =~ $TPL_RE ]]; do
+        m="${BASH_REMATCH[0]}"; n="${BASH_REMATCH[1]}"
+        out+="${s%%"$m"*}"
+        if [[ "$n" == "$name" ]]; then out+="$val"; else out+="$m"; fi
+        s="${s#*"$m"}"
+    done
+    printf '%s' "$out$s"
+}
+
+# generate(...) specs: is it one we know?
+gen_known() { [[ "$1" =~ ^(hex[0-9]+|base64_[0-9]+|uuid|\[.+\],[0-9]+)$ ]]; }
+
+gen_desc() {
     case "$1" in
-        manual) echo "required" ;;
-        min)    echo "at least $2 characters" ;;
-        hex)    echo "$2 hex characters" ;;
-        b64)    echo "base64 of $2 random bytes" ;;
-        uuid)   echo "UUID" ;;
+        hex*)     echo "${1#hex} hex characters" ;;
+        base64_*) echo "base64 of ${1#base64_} random bytes" ;;
+        uuid)     echo "a UUID" ;;
+        *)        echo "at least ${1##*,} characters" ;;
     esac
 }
 
-rule_generate() {
+gen_value() {
     case "$1" in
-        min)  rand_chars "$2" 'A-Za-z0-9' ;;
-        hex)  rand_chars "$2" 'a-f0-9' ;;
-        b64)  head -c "$2" /dev/urandom | base64 | tr -d '\n' ;;
-        uuid) rand_uuid ;;
+        hex*)     rand_chars "${1#hex}" 'a-f0-9' ;;
+        base64_*) head -c "${1#base64_}" /dev/urandom | base64 | tr -d '\n' ;;
+        uuid)     rand_uuid ;;
+        *)        local set="${1%,*}"; set="${set#[}"; set="${set%]}"
+                  rand_chars "${1##*,}" "$set" ;;
     esac
 }
 
-# is a typed value acceptable for the rule?
-rule_valid() {
-    local kind="$1" len="$2" v="$3"
+# is a typed value acceptable for the generator?
+gen_valid() {
+    local spec="$1" v="$2"
     [[ -n "$v" ]] || return 1
-    case "$kind" in
-        min)  (( ${#v} >= len )) ;;
-        hex)  [[ "$v" =~ ^[0-9a-fA-F]+$ ]] && (( ${#v} == len )) ;;
-        uuid) [[ "$v" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] ;;
-        *)    return 0 ;;
+    case "$spec" in
+        hex*)     [[ "$v" =~ ^[0-9a-fA-F]+$ ]] && (( ${#v} == ${spec#hex} )) ;;
+        uuid)     [[ "$v" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] ;;
+        base64_*) return 0 ;;
+        *)        (( ${#v} >= ${spec##*,} )) ;;
     esac
 }
 
@@ -312,67 +322,84 @@ sync_env_keys() {
     (( ${#added[@]} == 0 )) || info "added new settings from .env.example: ${added[*]}"
 }
 
-# keys in .env whose value is still a placeholder: prints "KEY kind len" per line
+# keys in .env whose value still contains a placeholder, one per line
 env_placeholders() {
-    local file="$1" key val rule
+    local file="$1" line key
     [[ -f "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
-        key="${BASH_REMATCH[1]}"; val=$(env_get "$file" "$key")
-        rule=$(placeholder_rule "$val")
-        [[ -z "$rule" ]] || echo "$key $rule"
+        [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+        key="${BASH_REMATCH[1]}"
+        if [[ "$(env_get "$file" "$key")" =~ $TPL_RE ]]; then echo "$key"; fi
     done < "$file"
 }
 
-# walk through every placeholder in .env: generate it, or let the user type it
+# ask for every placeholder in .env (each name once), then fill them in
 fill_env_placeholders() {
-    local env="$1" items
-    mapfile -t items < <(env_placeholders "$env")
-    (( ${#items[@]} > 0 )) || return 0
+    local env="$1" keys
+    mapfile -t keys < <(env_placeholders "$env")
+    (( ${#keys[@]} > 0 )) || return 0
     if ! interactive; then
-        warn "$env has ${#items[@]} unset value(s) — run labber interactively to fill them"
+        warn "$env has ${#keys[@]} unset value(s) — run labber interactively to fill them"
         return 0
     fi
 
-    local auto_n=0 it
-    for it in "${items[@]}"; do [[ "${it#* }" != manual* ]] && auto_n=$((auto_n + 1)); done
-    echo; info "${#items[@]} setting(s) in $env need a value"
+    # each name once, in order of appearance (the first occurrence's function wins)
+    local -A func arg value
+    local order=() k name f a
+    for k in "${keys[@]}"; do
+        while IFS=$'\t' read -r name f a; do
+            [[ -n "${func[$name]+set}" ]] && continue
+            func[$name]="${f:-required}"; arg[$name]="$a"; order+=("$name")
+        done < <(tpl_list "$(env_get "$env" "$k")")
+    done
+    echo; info "${#order[@]} value(s) to fill in for $env"
 
-    local autofill="n" ans
-    if (( auto_n > 0 )); then
-        read -rp "Generate the $auto_n secret(s) that can be generated? [Y/n] " ans
-        [[ "$ans" =~ ^[Nn]$ ]] || autofill="y"
+    # secrets: offer to generate them all at once
+    local gens=() n
+    for n in "${order[@]}"; do [[ "${func[$n]}" == generate ]] && gens+=("$n"); done
+    local autofill=n ans
+    if (( ${#gens[@]} )); then
+        read -rp "Generate ${gens[*]}? [Y/n] " ans
+        [[ "$ans" =~ ^[Nn]$ ]] || autofill=y
     fi
 
-    local key kind len val
-    for it in "${items[@]}"; do
-        read -r key kind len <<< "$it"
-        if [[ "$kind" != manual && "$autofill" == y ]]; then
-            env_set "$env" "$key" "$(rule_generate "$kind" "$len")"
-            ok "$key generated ($(rule_desc "$kind" "$len"))"
-            continue
-        fi
-        # show templates like https://joplin.<your-domain> as a hint; bare tokens add nothing
-        local hint="" cur; cur=$(env_get "$env" "$key")
-        [[ "$cur" == *"<"*">"* ]] && hint=" — format: $cur"
-        while true; do
-            if [[ "$kind" == manual ]]; then
-                read -rp "  $key ($(rule_desc "$kind" "$len")$hint), Enter to skip: " val
-                [[ -n "$val" ]] || { warn "$key left unset"; break; }
-            else
-                read -rsp "  $key ($(rule_desc "$kind" "$len")), Enter to generate: " val; echo
-                [[ -n "$val" ]] || val=$(rule_generate "$kind" "$len")
-            fi
-            if rule_valid "$kind" "$len" "$val"; then env_set "$env" "$key" "$val"; ok "$key set"; break; fi
-            warn "needs $(rule_desc "$kind" "$len") — try again"
-        done
+    local v
+    for n in "${order[@]}"; do
+        case "${func[$n]}" in
+            generate)
+                if ! gen_known "${arg[$n]}"; then warn "$n: unknown generator '${arg[$n]}' — left unset"; continue; fi
+                if [[ "$autofill" == y ]]; then
+                    value[$n]=$(gen_value "${arg[$n]}"); ok "$n generated ($(gen_desc "${arg[$n]}"))"; continue
+                fi
+                while true; do
+                    read -rsp "  $n ($(gen_desc "${arg[$n]}")), Enter to generate: " v; echo
+                    [[ -n "$v" ]] || v=$(gen_value "${arg[$n]}")
+                    gen_valid "${arg[$n]}" "$v" && break
+                    warn "needs $(gen_desc "${arg[$n]}") — try again"
+                done
+                value[$n]="$v"; ok "$n set" ;;
+            default)
+                read -rp "  $n [${arg[$n]}]: " v
+                value[$n]="${v:-${arg[$n]}}" ;;
+            *)
+                read -rp "  $n (required), Enter to skip: " v
+                if [[ -n "$v" ]]; then value[$n]="$v"; else warn "$n left unset"; fi ;;
+        esac
+    done
+
+    # fill each key's value with the answers (unanswered placeholders stay)
+    local val
+    for k in "${keys[@]}"; do
+        val=$(env_get "$env" "$k")
+        for n in "${!value[@]}"; do val=$(tpl_fill "$val" "$n" "${value[$n]}"); done
+        env_set "$env" "$k" "$val"
     done
 }
 
 # before starting: refuse quietly-broken configs unless the user insists
 confirm_env_complete() {
     local env="$1" left
-    left=$(env_placeholders "$env" | awk '{print $1}' | tr '\n' ' ')
+    left=$(env_placeholders "$env" | tr '\n' ' ')
     [[ -n "$left" ]] || return 0
     warn "still unset in $env: $left"
     interactive || return 1
@@ -2503,11 +2530,12 @@ ${W}Commands:${N}
   <svc>             show a service's status and commands
   (no args)         interactive menu
 
-${W}.env placeholders${N} (in .env.example — filled in on install/update/start):
-  _changeme_           you provide it       _changeme_hex_N_   N random hex characters
-  _changeme_min_N_     ≥ N characters       _changeme_b64_N_   base64 of N random bytes
-  _changeme_md5_       = _changeme_hex_32_  _changeme_sha256_  = _changeme_hex_64_
-  _changeme_uuid_      a random UUID        changeme, <...>    older style — you provide it
+${W}.env templates${N} (in .env.example — filled in on install/update/start):
+  {{ name }}                        you provide it
+  {{ name | default(8000) }}        asked; Enter keeps 8000
+  {{ name | generate(hex64) }}      secret; Enter generates it — also base64_32, uuid,
+                                    [A-Za-z0-9],16 (16 chars from that set)
+  Placeholders can sit inside a value: http://{{ host }}:{{ port | default(80) }}
 
 ${W}Before every start${N} labber also checks for port conflicts and creates missing
 bind-mount folders owned by PUID/PGID (or UID/GID) from .env, else by you.
