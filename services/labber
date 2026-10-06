@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.6.2"
+VERSION="2.7.0"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -841,10 +841,19 @@ _fix_rc_owner() {
     if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then chown "$SUDO_USER:" "$1" 2>/dev/null || true; fi
 }
 
+# shell startup files labber keeps its blocks in: ~/.bashrc, plus ~/.zshrc if the
+# user has one (zsh reuses the bash completion through bashcompinit)
+_labber_rcs() {
+    local h; h=$(target_home)
+    echo "$h/.bashrc"
+    if [[ -f "$h/.zshrc" ]]; then echo "$h/.zshrc"; fi
+}
+
 _install_shell_fn() {
-    local rc; rc="$(target_home)/.bashrc"
-    _strip_rc_block "$rc" "# labber shell function" '^}$'
-    cat >> "$rc" <<'BASHRC'
+    local rc
+    while IFS= read -r rc; do
+        _strip_rc_block "$rc" "# labber shell function" '^}$'
+        cat >> "$rc" <<'BASHRC'
 
 # labber shell function
 labber() {
@@ -855,20 +864,28 @@ labber() {
   fi
 }
 BASHRC
-    _fix_rc_owner "$rc"
-    ok "shell function updated in $rc"
+        _fix_rc_owner "$rc"
+        ok "shell function updated in $rc"
+    done < <(_labber_rcs)
 }
 
 _install_completion_fn() {
-    local rc; rc="$(target_home)/.bashrc"
-    # remove the old block so we always install the latest version
-    _strip_rc_block "$rc" "# labber completion" '^complete -F _labber_complete labber$'
-    cat >> "$rc" <<'BASHRC'
-
-# labber completion
+    local rc
+    while IFS= read -r rc; do
+        # remove the old block so we always install the latest version
+        _strip_rc_block "$rc" "# labber completion" '^complete -F _labber_complete labber$'
+        {
+            echo; echo "# labber completion"
+            [[ "$rc" == *.zshrc ]] && echo "autoload -U +X bashcompinit && bashcompinit"
+            cat <<'BASHRC'
 _labber_complete() {
-    local cur="${COMP_WORDS[COMP_CWORD]}"
-    local arg1="${COMP_WORDS[1]}"
+    local cur arg1
+    if [[ -n "${ZSH_VERSION:-}" ]]; then
+        # zsh's bashcompinit: COMP_CWORD counts from 0 but the array from 1
+        cur="${COMP_WORDS[COMP_CWORD+1]}"; arg1="${COMP_WORDS[2]}"
+    else
+        cur="${COMP_WORDS[COMP_CWORD]}"; arg1="${COMP_WORDS[1]}"
+    fi
     local svc_cmds="install uninstall start stop restart rebuild update shell logs status go"
     local global_cmds="install deploy setup ls check-updates clean update tool help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
@@ -882,8 +899,10 @@ _labber_complete() {
 }
 complete -F _labber_complete labber
 BASHRC
-    _fix_rc_owner "$rc"
-    ok "tab completion updated in $rc"
+        } >> "$rc"
+        _fix_rc_owner "$rc"
+        ok "tab completion updated in $rc"
+    done < <(_labber_rcs)
 }
 
 do_self_install() {
@@ -1058,7 +1077,7 @@ show_overview() {
 LABBER_STATE_DIR="/var/lib/labber"
 SETUP_SSH_CONF="/etc/ssh/sshd_config.d/10-labber.conf"
 SETUP_JOURNAL_CONF="/etc/systemd/journald.conf.d/10-labber.conf"
-SETUP_STEPS=(update packages admin hostname ssh unattended journal docker dockerlogs guestagent labber fzf nfs fail2ban network)
+SETUP_STEPS=(update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck alloy zsh labber fzf nfs fail2ban network)
 SETUP_VIRT=""          # lxc | vm
 SETUP_USER=""          # who user-level steps are for: the admin user on a VM, else root
 SETUP_HOST_CMDS=()     # commands to run on the Proxmox host (printed at the end)
@@ -1153,7 +1172,13 @@ step_title() {
         update)     echo "system update (apt full-upgrade)" ;;
         packages)   echo "base packages" ;;
         admin)      echo "admin user with sudo" ;;
+        locale)     echo "locale" ;;
         hostname)   echo "hostname + timezone" ;;
+        timesync)   echo "time sync (NTP)" ;;
+        swap)       echo "zram swap (compressed, in RAM)" ;;
+        healthcheck) echo "reboot/update checks (login message + metric)" ;;
+        alloy)      echo "Grafana Alloy: metrics + logs to monitoring" ;;
+        zsh)        echo "zsh + powerlevel10k (admin user; root on an LXC)" ;;
         ssh)        echo "SSH: key-only logins" ;;
         unattended) echo "automatic security updates" ;;
         journal)    echo "limit systemd journal to 200 MB" ;;
@@ -1170,14 +1195,21 @@ step_title() {
 
 step_applies() {
     case "$1" in
-        admin|guestagent) [[ "$SETUP_VIRT" == vm ]] ;;
+        admin|guestagent|timesync|swap) [[ "$SETUP_VIRT" == vm ]] ;;
         docker|dockerlogs) (( SETUP_DOCKER )) ;;
         nfs)              [[ "$SETUP_VIRT" != lxc ]] ;;
         *)                true ;;
     esac
 }
 
-step_optional() { [[ "$1" == nfs || "$1" == fail2ban ]]; }
+# optional steps start unticked. zram swap is only pre-ticked on VMs with ≤ 4 GB RAM.
+step_optional() {
+    case "$1" in
+        nfs|fail2ban) return 0 ;;
+        swap) (( $(awk '/^MemTotal/ { print $2 }' /proc/meminfo) > 4 * 1024 * 1024 )) ;;
+        *) return 1 ;;
+    esac
+}
 
 # ── setup steps: st_<id>_status prints "done[: detail]" or "todo[: detail]" ───
 
@@ -1482,6 +1514,382 @@ st_fzf_run() {
     return $rc
 }
 
+# ── locale ──
+
+st_locale_status() {
+    local lang; lang=$(grep -s '^LANG=' /etc/default/locale | cut -d= -f2 | tr -d '"')
+    if [[ -n "$lang" ]] && locale -a 2>/dev/null | grep -qix "$(locale_norm "$lang")"; then
+        echo "done: $lang"
+    else
+        echo "todo: ${lang:-none set}"
+    fi
+}
+# en_US.UTF-8 → en_US.utf8 (how `locale -a` lists it)
+locale_norm() { echo "$1" | sed -E 's/\.UTF-?8$/.utf8/I'; }
+st_locale_run() {
+    local loc line
+    loc=$(ask "locale" "$(state_get locale | grep . || echo en_US.UTF-8)")
+    line=$(grep -m1 -E "^${loc//./\\.}[[:space:]]" /usr/share/i18n/SUPPORTED 2>/dev/null || true)
+    if [[ -z "$line" ]]; then
+        pkg_installed locales || apt_install locales || return 1
+        line=$(grep -m1 -E "^${loc//./\\.}[[:space:]]" /usr/share/i18n/SUPPORTED 2>/dev/null || true)
+    fi
+    [[ -n "$line" ]] || { warn "unknown locale '$loc' (see /usr/share/i18n/SUPPORTED)"; return 1; }
+    pkg_installed locales || apt_install locales || return 1
+    # enable it in /etc/locale.gen (uncomment, or add) and generate
+    if grep -qE "^#[[:space:]]*${line//./\\.}$" /etc/locale.gen; then
+        sed -i -E "s/^#[[:space:]]*(${line//./\\.})$/\1/" /etc/locale.gen
+    elif ! grep -qxF "$line" /etc/locale.gen; then
+        echo "$line" >> /etc/locale.gen
+    fi
+    locale-gen > /dev/null || return 1
+    # --reset also drops LANGUAGE/LC_* left by the installer (e.g. LANGUAGE=en_GB:en),
+    # which would otherwise still decide the language of messages
+    update-locale --reset LANG="$loc" || return 1
+    state_set locale "$loc"
+    ok "locale $loc (applies from the next login)"
+}
+
+# ── time sync (VMs; LXCs use the host's clock) ──
+
+st_timesync_status() {
+    if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" == yes ]] \
+        || systemctl is-active --quiet chrony 2>/dev/null; then
+        echo "done"
+    else
+        echo "todo"
+    fi
+}
+st_timesync_run() {
+    if ! pkg_installed systemd-timesyncd && ! pkg_installed chrony; then
+        apt_install systemd-timesyncd || return 1
+    fi
+    if pkg_installed chrony; then
+        systemctl enable --now chrony
+    else
+        systemctl enable --now systemd-timesyncd
+        timedatectl set-ntp true
+    fi
+    ok "time sync on (it can take a minute to show as synchronised)"
+}
+
+# ── zram swap (VMs; an LXC's swap is set by Proxmox) ──
+
+st_swap_status() {
+    if systemctl is-active --quiet zramswap 2>/dev/null; then echo "done"; else echo "todo"; fi
+}
+st_swap_run() {
+    apt_install zram-tools || return 1
+    # compressed swap in RAM, used before any disk swap (higher priority)
+    cat > /etc/default/zramswap <<'EOF'
+# managed by labber setup
+ALGO=zstd
+PERCENT=50
+PRIORITY=100
+EOF
+    systemctl restart zramswap
+    ok "zram swap: up to 50% of RAM, compressed, used before disk swap"
+}
+
+# ── reboot/update health check ──
+# A small script, run hourly and after every apt/dpkg run, that works out whether a
+# reboot (new kernel) or service restarts (old libraries) are needed and how many
+# security updates are pending. It writes Prometheus metrics for Alloy to push, and
+# the login message shows anything that needs attention.
+
+LABBER_METRICS_DIR="/var/lib/labber/metrics"
+HEALTH_BIN="/usr/local/sbin/labber-health-check"
+
+st_healthcheck_status() {
+    if [[ -x "$HEALTH_BIN" ]] && systemctl is-enabled --quiet labber-health-check.timer 2>/dev/null
+    then echo "done"; else echo "todo"; fi
+}
+st_healthcheck_run() {
+    # needrestart finds services still running old libraries; list-only, so manual
+    # apt runs never stop to ask about restarting things
+    apt_install needrestart || return 1
+    mkdir -p /etc/needrestart/conf.d
+    cat > /etc/needrestart/conf.d/labber.conf <<'EOF'
+# managed by labber setup: list only, never prompt
+$nrconf{restart} = 'l';
+$nrconf{kernelhints} = -1;
+EOF
+    mkdir -p "$LABBER_METRICS_DIR"; chmod 755 "$LABBER_METRICS_DIR"
+    cat > "$HEALTH_BIN" <<'EOF'
+#!/bin/bash
+# written by labber setup — is a reboot or restart needed, are security updates stuck?
+# Writes metrics to /var/lib/labber/metrics/labber.prom (pushed by Alloy).
+set -u
+kernel=0 services=0 security=0
+# the kernel only matters in a VM; an LXC runs the host's kernel
+if ! systemd-detect-virt -cq 2>/dev/null; then
+    newest=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
+    [[ -n "$newest" && "$newest" != "$(uname -r)" ]] && kernel=1
+fi
+if command -v needrestart >/dev/null; then
+    services=$(needrestart -b -r l 2>/dev/null | grep -c '^NEEDRESTART-SVC:' || true)
+fi
+security=$(apt-get -s -o Debug::NoLocking=1 upgrade 2>/dev/null | grep -c '^Inst .*[Ss]ecurity' || true)
+dir=/var/lib/labber/metrics
+mkdir -p "$dir"
+cat > "$dir/labber.prom.tmp" <<PROM
+# HELP labber_reboot_required 1 when a newer kernel is installed than the one running
+# TYPE labber_reboot_required gauge
+labber_reboot_required $kernel
+# HELP labber_restart_required_services services still running outdated libraries
+# TYPE labber_restart_required_services gauge
+labber_restart_required_services $services
+# HELP labber_security_updates_pending security updates not yet installed
+# TYPE labber_security_updates_pending gauge
+labber_security_updates_pending $security
+PROM
+mv "$dir/labber.prom.tmp" "$dir/labber.prom"
+EOF
+    chmod 755 "$HEALTH_BIN"
+    cat > /etc/systemd/system/labber-health-check.service <<EOF
+[Unit]
+Description=labber: check for needed reboots and pending security updates
+[Service]
+Type=oneshot
+ExecStart=$HEALTH_BIN
+EOF
+    cat > /etc/systemd/system/labber-health-check.timer <<'EOF'
+[Unit]
+Description=labber: hourly reboot/update check
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target
+EOF
+    # also right after every package change (manual or automatic updates)
+    cat > /etc/apt/apt.conf.d/99labber-health-check <<'EOF'
+// managed by labber setup
+DPkg::Post-Invoke { "systemctl start --no-block labber-health-check.service >/dev/null 2>&1 || true"; };
+EOF
+    # login message, only when something needs attention
+    cat > /etc/update-motd.d/95-labber-health <<'EOF'
+#!/bin/sh
+# written by labber setup
+f=/var/lib/labber/metrics/labber.prom
+[ -r "$f" ] || exit 0
+k=$(awk '/^labber_reboot_required / {print $2}' "$f")
+s=$(awk '/^labber_restart_required_services / {print $2}' "$f")
+u=$(awk '/^labber_security_updates_pending / {print $2}' "$f")
+[ "${k:-0}" = 1 ] && echo "*** Reboot needed: a newer kernel is installed."
+[ "${s:-0}" -gt 0 ] && echo "*** $s service(s) still use outdated libraries — reboot, or: sudo needrestart -r a"
+[ "${u:-0}" -gt 0 ] && echo "*** $u security update(s) pending."
+exit 0
+EOF
+    chmod 755 /etc/update-motd.d/95-labber-health
+    systemctl daemon-reload
+    systemctl enable --now labber-health-check.timer
+    "$HEALTH_BIN"
+    ok "health check installed — runs hourly and after every apt run"
+}
+
+# ── Grafana Alloy: node metrics → Prometheus, journal → Loki (like the Proxmox hosts) ──
+
+st_alloy_status() {
+    if systemctl is-active --quiet alloy 2>/dev/null && grep -qs 'managed by labber setup' /etc/alloy/config.alloy
+    then echo "done: $(state_get alloy_prometheus)"; else echo "todo"; fi
+}
+st_alloy_run() {
+    local prom loki
+    while true; do
+        prom=$(ask "Prometheus URL (e.g. http://<monitoring-host>:9090)" "$(state_get alloy_prometheus)")
+        [[ "$prom" =~ ^https?://[^[:space:]]+$ ]] && break
+        [[ -z "$prom" ]] && { warn "no Prometheus URL — skipped"; return 0; }
+        warn "needs an http:// or https:// URL"
+    done
+    while true; do
+        loki=$(ask "Loki URL" "$(state_get alloy_loki | grep . || echo "${prom%:*}:3100")")
+        [[ "$loki" =~ ^https?://[^[:space:]]+$ ]] && break
+        warn "needs an http:// or https:// URL"
+    done
+    prom="${prom%/}"; loki="${loki%/}"
+
+    if ! pkg_installed alloy; then
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://apt.grafana.com/gpg-full.key -o /etc/apt/keyrings/grafana.asc || return 1
+        chmod a+r /etc/apt/keyrings/grafana.asc
+        echo "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main" \
+            > /etc/apt/sources.list.d/grafana.list
+        apt_get update -q || return 1
+        apt_install alloy || return 1
+    fi
+    usermod -aG adm,systemd-journal alloy
+    mkdir -p "$LABBER_METRICS_DIR"; chmod 755 "$LABBER_METRICS_DIR"
+
+    mkdir -p /etc/alloy
+    cat > /etc/alloy/config.alloy <<EOF
+// managed by labber setup — same layout as services/monitoring/utils/install-exporters.sh
+logging {
+  level = "info"
+}
+
+// ── Metrics ──
+
+prometheus.exporter.unix "local" {
+  enable_collectors = ["systemd", "processes"]
+  textfile {
+    directory = "$LABBER_METRICS_DIR"
+  }
+}
+
+prometheus.scrape "node" {
+  targets         = prometheus.exporter.unix.local.targets
+  forward_to      = [prometheus.relabel.node.receiver]
+  scrape_interval = "15s"
+}
+
+prometheus.relabel "node" {
+  forward_to = [prometheus.remote_write.central.receiver]
+  rule {
+    target_label = "job"
+    replacement  = "guest-node-exporters"
+  }
+  rule {
+    target_label = "kind"
+    replacement  = "$SETUP_VIRT"
+  }
+  rule {
+    target_label = "host"
+    replacement  = constants.hostname
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = "$prom/api/v1/write"
+  }
+}
+
+// ── Logs ──
+
+loki.relabel "journal" {
+  forward_to = []
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "local" {
+  forward_to    = [loki.write.central.receiver]
+  relabel_rules = loki.relabel.journal.rules
+  labels = {
+    host = constants.hostname,
+    job  = "journal",
+  }
+  max_age = "24h"
+}
+
+loki.write "central" {
+  endpoint {
+    url = "$loki/loki/api/v1/push"
+  }
+}
+EOF
+    systemctl enable alloy
+    systemctl restart alloy
+    state_set alloy_prometheus "$prom"; state_set alloy_loki "$loki"
+    if systemctl is-active --quiet alloy; then
+        ok "Alloy pushing metrics to $prom and logs to $loki"
+    else
+        warn "Alloy didn't start — check: journalctl -u alloy"
+        return 1
+    fi
+}
+
+# ── zsh + powerlevel10k (plain zsh + git-cloned plugins, no framework) ──
+
+# the admin user on a VM; root on an LXC (there's no admin user there)
+setup_zsh_user() { echo "$SETUP_USER"; }
+
+st_zsh_status() {
+    local u h; u=$(setup_zsh_user); h=$(user_home "$u")
+    if [[ "$(getent passwd "$u" | cut -d: -f7)" == */zsh ]] && grep -qxs '# labber zsh' "$h/.zshrc"
+    then echo "done"; else echo "todo"; fi
+}
+st_zsh_run() {
+    local u h; u=$(setup_zsh_user); h=$(user_home "$u")
+    apt_install zsh git || return 1
+    # plugins: clone, or update if already there
+    local repo dir
+    for repo in romkatv/powerlevel10k zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting; do
+        dir="$h/.zsh/${repo#*/}"
+        if [[ -d "$dir/.git" ]]; then
+            runuser -u "$u" -- git -C "$dir" pull -q --ff-only < /dev/null || warn "couldn't update $repo"
+        else
+            runuser -u "$u" -- mkdir -p "$h/.zsh"
+            runuser -u "$u" -- git clone -q --depth 1 "https://github.com/$repo.git" "$dir" < /dev/null || return 1
+        fi
+    done
+    # your powerlevel10k config from the repo (tools/zsh/p10k.zsh), if there is one;
+    # without it, p10k's own wizard runs on first login
+    local tmpdir; tmpdir=$(clone_repo_dir tools/) || true
+    if [[ -n "$tmpdir" && -f "$tmpdir/tools/zsh/p10k.zsh" ]]; then
+        if [[ -f "$h/.p10k.zsh" ]] && ! cmp -s "$tmpdir/tools/zsh/p10k.zsh" "$h/.p10k.zsh"; then
+            cp -p "$h/.p10k.zsh" "$h/.p10k.zsh.bak"
+        fi
+        install -m 644 -o "$u" -g "$(id -gn "$u")" "$tmpdir/tools/zsh/p10k.zsh" "$h/.p10k.zsh"
+        ok "powerlevel10k config from the repo"
+    else
+        info "no tools/zsh/p10k.zsh in the repo — the p10k wizard will run on first login"
+    fi
+    [[ -n "$tmpdir" ]] && rm -rf "$tmpdir"
+
+    # our block goes at the very top of ~/.zshrc (p10k's instant prompt must be first);
+    # labber and fzf add their own blocks further down
+    local rc="$h/.zshrc" tmp; tmp=$(mktemp)
+    [[ -f "$rc" ]] || install -m 644 -o "$u" -g "$(id -gn "$u")" /dev/null "$rc"
+    _strip_rc_block "$rc" "# labber zsh" '^# labber zsh end$'
+    {
+        cat <<'EOF'
+# labber zsh
+# p10k instant prompt — keep at the top
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+# history: same options as the Mac's ~/.zshrc
+HISTFILE=~/.zsh_history HISTSIZE=10000 SAVEHIST=10000
+setopt BANG_HIST EXTENDED_HISTORY INC_APPEND_HISTORY SHARE_HISTORY HIST_EXPIRE_DUPS_FIRST \
+  HIST_IGNORE_DUPS HIST_IGNORE_ALL_DUPS HIST_FIND_NO_DUPS HIST_IGNORE_SPACE HIST_SAVE_NO_DUPS \
+  HIST_REDUCE_BLANKS HIST_VERIFY
+bindkey -e
+autoload -Uz compinit && compinit
+source ~/.zsh/powerlevel10k/powerlevel10k.zsh-theme
+[[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
+source ~/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh
+source ~/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+# labber zsh end
+EOF
+        cat "$rc"
+    } > "$tmp"
+    cat "$tmp" > "$rc"; rm -f "$tmp"
+    chown "$u:" "$rc"
+    chsh -s "$(command -v zsh)" "$u" || return 1
+    # fzf installed before zsh only set up bash — re-run its installer for zsh key bindings
+    if [[ -x "$h/.fzf/install" ]]; then
+        runuser -l "$u" -c "$h/.fzf/install --all" < /dev/null >/dev/null || warn "couldn't add fzf to zsh"
+    fi
+    ok "zsh is $u's login shell (needs a Nerd Font in your terminal for the p10k prompt)"
+    # labber's shell function + completion into .zshrc too
+    if [[ -x "$LABBER_BIN" ]]; then
+        if [[ "$u" == root ]]; then ( unset SUDO_USER; _install_shell_fn; _install_completion_fn ) >/dev/null
+        else SUDO_USER="$u" _install_shell_fn >/dev/null; SUDO_USER="$u" _install_completion_fn >/dev/null; fi
+    fi
+}
+
 st_nfs_status() { if pkg_installed nfs-common; then echo "done"; else echo "todo"; fi; }
 st_nfs_run() { apt_install nfs-common; }
 
@@ -1502,6 +1910,14 @@ bantime  = 3600
 EOF
     systemctl enable fail2ban
     systemctl restart fail2ban
+    # only report success once the server is up with the sshd jail loaded
+    local i
+    for i in $(seq 15); do
+        fail2ban-client status sshd >/dev/null 2>&1 && { ok "fail2ban is protecting SSH"; return 0; }
+        sleep 1
+    done
+    warn "fail2ban didn't come up — check: journalctl -u fail2ban"
+    return 1
 }
 
 st_network_status() {
@@ -1716,7 +2132,7 @@ do_setup() {
         for i in "${!ids[@]}"; do
             local mark="[ ]"; (( sel[i] )) && mark="[${G}x${N}]"
             local sc="$G"; [[ "${stat[$i]}" == todo* ]] && sc="$Y"
-            printf "  %2d %b %-46s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
+            printf "  %2d %b %-50s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
         done
         echo
         read -rp "toggle by number (e.g. 3 5), a = all, n = none, Enter = run, q = quit: " input

@@ -32,14 +32,20 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 |---|---|---|---|
 | System update | ✓ | ✓ | `apt full-upgrade` (keeps your modified config files) |
 | Base packages | ✓ | ✓ | `curl git sudo htop nano jq tmux rsync ncdu`; VMs add `smartmontools lm-sensors iotop`; `vainfo` only with a real Intel/AMD GPU |
+| Locale | ✓ | ✓ | default `en_US.UTF-8` (generates it, clears installer leftovers like `LANGUAGE`) |
 | Admin user | — | ✓ | asks for a name, adds it to `sudo`, copies root's SSH keys |
 | Hostname + timezone | ✓ | ✓ | sets them on a VM; for an LXC prints the `pct` command (Proxmox owns the LXC hostname) |
+| Time sync | — | ✓ | makes sure `systemd-timesyncd` (or chrony) is running; LXCs use the host's clock |
 | SSH: key-only logins | ✓ | ✓ | only once a key is installed; root is key-only in an LXC and off in a VM; you confirm a test login from a second terminal, or it reverts |
 | Automatic security updates | ✓ | ✓ | `unattended-upgrades`, Debian security updates only, no auto-reboot |
 | Journal limit | ✓ | ✓ | systemd journal capped at 200 MB |
+| zram swap | — | optional | compressed swap in RAM (50%, used before disk swap); pre-ticked on VMs with ≤ 4 GB RAM |
 | Docker *(Docker hosts)* | ✓ | ✓ | official Docker repo + compose/buildx; on an LXC, prints the nesting command if Docker can't start |
 | Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
+| Reboot/update checks | ✓ | ✓ | hourly and after every `apt` run: newer kernel installed (VMs), services on outdated libraries (`needrestart`, list-only), pending security updates. Shown at login, and exported as metrics for alerts |
+| Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki, like the Proxmox hosts (`services/monitoring`); asks for the URLs |
+| zsh + powerlevel10k | ✓ | ✓ | for the admin user (root on an LXC): zsh + p10k + autosuggestions + syntax highlighting; uses `tools/zsh/p10k.zsh` if present; labber and fzf work in it. Needs a Nerd Font in your terminal |
 | labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services` |
 | fzf | ✓ | ✓ | from `tools/fzf.sh` |
 | NFS client / fail2ban | optional | optional | off by default |
