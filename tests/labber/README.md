@@ -17,7 +17,7 @@ make test-labber-unit
 tests/labber/run-unit.sh -f placeholder
 ```
 
-Covers the logic without Docker or network: `.env` placeholders and parsing, compose-config parsing, service-name checks, data-folder ownership, `.bashrc` blocks, update-status cache, and the generated `ifupdown`/`netplan` static-IP configs (never applied).
+Covers the logic without Docker or network: `.env` templates (`{{ name }}`, `default()`, `generate()`) and parsing, compose-config parsing, service-name checks, data-folder ownership, `.bashrc` blocks, update-status cache, and the generated `ifupdown`/`netplan` static-IP configs (never applied).
 
 ## Integration tests
 
@@ -52,4 +52,4 @@ Only use a throwaway VM. Snapshot it after setup so you can roll back if a test 
 
 ## Fixture
 
-`fixtures/labber-test/` is a tiny service (busybox) built to exercise labber: generated and typed `.env` placeholders, a published port, a bind-mount data folder with `PUID`/`PGID`, a locally built image, and a one-shot container that exits 0. It lives here, not in `services/`, so it never shows up in deploy lists.
+`fixtures/labber-test/` is a tiny service (busybox) built to exercise labber: `.env` templates (generated, typed, defaulted, and one name used twice), a published port, a bind-mount data folder with `PUID`/`PGID`, a locally built image, and a one-shot container that exits 0. It lives here, not in `services/`, so it never shows up in deploy lists.

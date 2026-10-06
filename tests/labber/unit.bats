@@ -15,55 +15,80 @@ setup() {
 
 # ── placeholders ──────────────────────────────────────────────────────────────
 
-@test "placeholder_rule recognises every placeholder form" {
-    [ "$(placeholder_rule _changeme_)" = "manual 0" ]
-    [ "$(placeholder_rule changeme)" = "manual 0" ]
-    [ "$(placeholder_rule _changeme_min_32_)" = "min 32" ]
-    [ "$(placeholder_rule _changeme_hex_64_)" = "hex 64" ]
-    [ "$(placeholder_rule _changeme_b64_32_)" = "b64 32" ]
-    [ "$(placeholder_rule _changeme_md5_)" = "hex 32" ]
-    [ "$(placeholder_rule _changeme_sha256_)" = "hex 64" ]
-    [ "$(placeholder_rule _changeme_uuid_)" = "uuid 36" ]
-    [ "$(placeholder_rule '<telegram-bot-token>')" = "manual 0" ]
-    [ "$(placeholder_rule 'https://joplin.<your-domain>')" = "manual 0" ]
+@test "tpl_list finds every placeholder, anywhere in a value" {
+    run tpl_list 'http://{{ host }}:{{ port | default(8000) }}/v1 and {{ s | generate([A-Za-z0-9],16) }}'
+    [ "${lines[0]}" = "host		" ]
+    [ "${lines[1]}" = "port	default	8000" ]
+    [ "${lines[2]}" = "s	generate	[A-Za-z0-9],16" ]
+    [ "${#lines[@]}" -eq 3 ]
+    [ -z "$(tpl_list 'http://example:8080 {not} {{Bad Name}} plain')" ]
+    run tpl_list '{{x|default(a:b/c)}}{{y | default() }}'      # no spaces needed; empty default
+    [ "${lines[0]}" = "x	default	a:b/c" ]
+    [ "${lines[1]}" = "y	default	" ]
 }
 
-@test "placeholder_rule ignores real values" {
-    [ -z "$(placeholder_rule 8080)" ]
-    [ -z "$(placeholder_rule hello)" ]
-    [ -z "$(placeholder_rule changeme@example.com)" ]
-    [ -z "$(placeholder_rule _changeme_min_)" ]
+@test "tpl_fill replaces one name everywhere, leaves the others" {
+    v='http://{{ host }}:{{ port | default(80) }}/{{ host }}'
+    [ "$(tpl_fill "$v" host 10.0.0.1)" = 'http://10.0.0.1:{{ port | default(80) }}/10.0.0.1' ]
+    [ "$(tpl_fill "$(tpl_fill "$v" host h)" port 81)" = 'http://h:81/h' ]
+    [ "$(tpl_fill 'a{{ x }}b' x 'v&\1$y')" = 'av&\1$yb' ]          # no sed-style surprises
 }
 
-@test "generated values match their rule" {
-    [[ "$(rule_generate hex 64)" =~ ^[a-f0-9]{64}$ ]]
-    [[ "$(rule_generate min 32)" =~ ^[A-Za-z0-9]{32}$ ]]
-    [ "$(rule_generate b64 32 | wc -c)" -eq 44 ]
-    rule_valid uuid 36 "$(rule_generate uuid 36)"
+@test "generators: known specs, formats, validation" {
+    for g in hex64 base64_32 uuid '[A-Za-z0-9],16' '[a-z],3'; do gen_known "$g"; done
+    for g in hex foo '[A-Z]' 'base64_' ''; do ! gen_known "$g"; done
+    [[ "$(gen_value hex64)" =~ ^[a-f0-9]{64}$ ]]
+    [[ "$(gen_value '[A-Za-z0-9],16')" =~ ^[A-Za-z0-9]{16}$ ]]
+    [[ "$(gen_value '[a-c],40')" =~ ^[a-c]{40}$ ]]
+    [ "$(gen_value base64_32 | wc -c)" -eq 44 ]
+    gen_valid uuid "$(gen_value uuid)"
+    [ "$(gen_value hex64)" != "$(gen_value hex64)" ]
+    gen_valid hex4 beEF;  ! gen_valid hex4 beefa;  ! gen_valid hex4 zzzz
+    gen_valid '[A-Za-z0-9],16' 'any chars ok, 16+'; ! gen_valid '[A-Za-z0-9],16' short
+    ! gen_valid uuid not-a-uuid; ! gen_valid hex4 ''
+    [ "$(gen_desc hex64)" = "64 hex characters" ]
+    [ "$(gen_desc '[A-Za-z0-9],16')" = "at least 16 characters" ]
 }
 
-@test "generated secrets differ each time" {
-    [ "$(rule_generate hex 64)" != "$(rule_generate hex 64)" ]
+@test "fill: each name asked once, defaults, generated secrets, typed values" {
+    command -v script >/dev/null || skip "needs script(1)"
+    printf '%s\n' 'S={{ s | generate(hex64) }}' 'P={{ p | generate([A-Za-z0-9],16) }}   # note' \
+        'TOKEN={{ token }}' 'URL=http://{{ host }}:{{ port | default(8000) }}/v1' 'URL2=http://{{ host }}/x' 'KEEP=1' > .env
+    printf 'source "%s"; set +u\nfill_env_placeholders .env\n' "$LABBER" > fill.sh
+    # answers: generate s and p? no · s (typed, too short → asked again) · s · p: Enter → generated ·
+    # token · host (asked once) · port: Enter → 8000
+    run script -qefc "bash fill.sh" /dev/null <<< $'n\nshort\nbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef\n\nmy-token\n10.0.0.9\n\n'
+    echo "$output"
+    [ "$(env_get .env S)" = beefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef ]
+    [[ "$(env_get .env P)" =~ ^[A-Za-z0-9]{16}$ ]]
+    grep -q '# note' .env
+    [ "$(env_get .env TOKEN)" = my-token ]
+    [ "$(env_get .env URL)" = "http://10.0.0.9:8000/v1" ]
+    [ "$(env_get .env URL2)" = "http://10.0.0.9/x" ]
+    [ "$(env_get .env KEEP)" = 1 ]
+    [ "$(grep -c 'host (required)' <<< "$output")" -eq 1 ]
+    [[ "$output" == *"needs 64 hex characters"* ]]
+    [[ "$output" == *"Generate s p?"* ]]
+    [ -z "$(env_placeholders .env)" ]
 }
 
-@test "rule_valid accepts good input and rejects bad" {
-    rule_valid min 16 "abcdefghijklmnop"
-    ! rule_valid min 16 "short"
-    rule_valid hex 4 "beEF"
-    ! rule_valid hex 4 "beefa"
-    ! rule_valid hex 4 "zzzz"
-    ! rule_valid uuid 36 "not-a-uuid"
-    ! rule_valid manual 0 ""
+@test "fill: skipping a required value leaves it unset" {
+    command -v script >/dev/null || skip "needs script(1)"
+    printf 'TOKEN={{ token }}\nURL=http://{{ host | default(h) }}/{{ token }}\n' > .env
+    printf 'source "%s"; set +u\nfill_env_placeholders .env\n' "$LABBER" > fill.sh
+    run script -qefc "bash fill.sh" /dev/null <<< $'\n\n'
+    [ "$(env_placeholders .env | tr '\n' ' ')" = "TOKEN URL " ]
+    [ "$(env_get .env URL)" = "http://h/{{ token }}" ]
 }
 
 # ── .env reading and writing ──────────────────────────────────────────────────
 
 @test "env_get reads values the way compose does" {
-    printf 'A=_changeme_hex_64_   # from openssl\r\nB="quoted value" # c\nC=abc#notcomment\nD=_changeme_ # get it\nE=\nF=plain\n' > .env
-    [ "$(env_get .env A)" = "_changeme_hex_64_" ]
+    printf 'A={{ a | generate(hex64) }}   # from openssl\r\nB="quoted value" # c\nC=abc#notcomment\nD={{ d }} # get it\nE=\nF=plain\n' > .env
+    [ "$(env_get .env A)" = "{{ a | generate(hex64) }}" ]
     [ "$(env_get .env B)" = "quoted value" ]
     [ "$(env_get .env C)" = "abc#notcomment" ]
-    [ "$(env_get .env D)" = "_changeme_" ]
+    [ "$(env_get .env D)" = "{{ d }}" ]
     [ "$(env_get .env E)" = "" ]
     [ "$(env_get .env F)" = "plain" ]
     [ "$(env_get .env MISSING)" = "" ]
@@ -76,7 +101,7 @@ setup() {
 }
 
 @test "env_set keeps the line's comment and quotes special values" {
-    printf 'A=_changeme_hex_64_   # from openssl\nD=_changeme_ # get it\nX=1\n' > .env
+    printf 'A={{ a | generate(hex64) }}   # from openssl\nD={{ d }} # get it\nX=1\n' > .env
     env_set .env A deadbeef
     env_set .env D 'has space and $dollar'
     grep -qx 'A=deadbeef   # from openssl' .env
@@ -93,34 +118,34 @@ setup() {
 
 @test "sync_env_keys adds only missing keys, even without a final newline" {
     mkdir svc
-    printf 'A=1\nB=_changeme_\n# C=commented\nD=4\n' > svc/.env.example
+    printf 'A=1\nB={{ b }}\n# C=commented\nD=4\n' > svc/.env.example
     printf 'A=custom' > svc/.env
     sync_env_keys svc
     [ "$(env_get svc/.env A)" = custom ]
-    [ "$(env_get svc/.env B)" = _changeme_ ]
+    [ "$(env_get svc/.env B)" = "{{ b }}" ]
     [ "$(env_get svc/.env D)" = 4 ]
     ! grep -q '^C=' svc/.env
     [ "$(grep -c . svc/.env)" -eq 3 ]
 }
 
-@test "env_placeholders lists only unset keys" {
-    printf 'A=1\nB=_changeme_hex_64_\nC=<token>\nD=ok\n' > .env
+@test "env_placeholders lists only keys that still have a placeholder" {
+    printf 'A=1\nB={{ b | generate(hex64) }}\nC=http://{{ c }}:80\nD=ok\nE={not a placeholder}\n' > .env
     run env_placeholders .env
     [ "$status" -eq 0 ]
-    [ "${lines[0]}" = "B hex 64" ]
-    [ "${lines[1]}" = "C manual 0" ]
+    [ "${lines[0]}" = "B" ]
+    [ "${lines[1]}" = "C" ]
     [ "${#lines[@]}" -eq 2 ]
 }
 
 @test "fill_env_placeholders changes nothing without a terminal" {
-    printf 'B=_changeme_hex_64_\n' > .env
+    printf 'B={{ b | generate(hex64) }}\n' > .env
     cp .env before
     fill_env_placeholders .env < /dev/null
     cmp -s .env before
 }
 
 @test "confirm_env_complete refuses without a terminal when values are unset" {
-    printf 'B=_changeme_\n' > .env
+    printf 'B={{ b }}\n' > .env
     ! confirm_env_complete .env < /dev/null
     printf 'B=set\n' > .env
     confirm_env_complete .env < /dev/null

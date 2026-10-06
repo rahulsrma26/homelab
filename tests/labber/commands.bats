@@ -14,8 +14,8 @@ setup_file() {
     if [ -d "$SVC_DIR" ]; then (cd "$SVC_DIR" && docker compose down --remove-orphans >/dev/null 2>&1) || true; fi
     sudo -n rm -rf "$LABBER_SERVICE_BASE"
     mkdir -p "$LABBER_SERVICE_BASE"
-    # fresh install to work with (answers: generate secrets · API_TOKEN · Enter when ready)
-    script -qefc "bash $LABBER $SVC install" /dev/null <<< $'\nfixture-token\n\n' >/dev/null
+    # fresh install to work with (answers: generate secrets · api_token · web_host · web_port · Enter when ready)
+    script -qefc "bash $LABBER $SVC install" /dev/null <<< $'\nfixture-token\n\n\n\n' >/dev/null
 }
 
 teardown_file() {

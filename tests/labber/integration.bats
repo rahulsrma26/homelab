@@ -44,13 +44,17 @@ teardown() { docker rm -f labber-test-conflict >/dev/null 2>&1 || true; }
 web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/null)" = true ]; }
 
 @test "install: generates secrets, takes typed values, starts the service" {
-    # answers: generate secrets? (Enter = yes) · API_TOKEN · "Press Enter when ready"
-    tty_run $'\nfixture-token\n\n' bash "$LABBER" "$SVC" install
+    # answers: generate secret + password? (Enter = yes) · api_token · web_host (Enter =
+    # default, asked once though used twice) · web_port (default) · "Press Enter when ready"
+    tty_run $'\nfixture-token\n\n\n\n' bash "$LABBER" "$SVC" install
     echo "$output"
     [ "$status" -eq 0 ]
     [[ "$(grep '^SECRET=' "$SVC_DIR/.env")" =~ ^SECRET=[a-f0-9]{64}$ ]]
     [[ "$(grep '^PASSWORD=' "$SVC_DIR/.env")" =~ ^PASSWORD=[A-Za-z0-9]{16}\ +#\ generated\ on\ install$ ]]
     grep -qx 'API_TOKEN=fixture-token' "$SVC_DIR/.env"
+    grep -qx 'WEB_URL=http://localhost:18765/' "$SVC_DIR/.env"
+    grep -qx 'WEB_HOST=localhost' "$SVC_DIR/.env"
+    [ "$(grep -c 'web_host \[localhost\]' <<< "$output")" -eq 1 ]     # asked once
     web_running
 }
 
@@ -100,7 +104,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
 @test "start refuses while a value in .env is still unset (no terminal)" {
     lbr "$SVC" stop
     cp -p "$SVC_DIR/.env" "$BATS_FILE_TMPDIR/env.bak"
-    sed -i 's/^API_TOKEN=.*/API_TOKEN=_changeme_/' "$SVC_DIR/.env"
+    sed -i 's/^API_TOKEN=.*/API_TOKEN={{ api_token }}/' "$SVC_DIR/.env"
     lbr "$SVC" start
     echo "$output"
     [[ "$output" == *"still unset"*"API_TOKEN"* ]]
