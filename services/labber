@@ -2,7 +2,7 @@
 # labber — homelab service manager
 set -euo pipefail
 
-VERSION="2.6.0"
+VERSION="2.6.1"
 REPO="https://github.com/rahulsrma26/homelab.git"
 LABBER_URL="https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/services/labber"
 LABBER_BIN="/usr/local/bin/labber"
@@ -1683,7 +1683,7 @@ do_setup() {
         for i in "${!ids[@]}"; do
             local mark="[ ]"; (( sel[i] )) && mark="[${G}x${N}]"
             local sc="$G"; [[ "${stat[$i]}" == todo* ]] && sc="$Y"
-            printf "  %2d %b %-42s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
+            printf "  %2d %b %-46s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
         done
         echo
         read -rp "toggle by number (e.g. 3 5), a = all, n = none, Enter = run, q = quit: " input
