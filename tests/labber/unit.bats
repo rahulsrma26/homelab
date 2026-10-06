@@ -420,6 +420,84 @@ EOF
     rm -f /var/lib/labber/setup.state
 }
 
+@test "locale_norm matches how locale -a lists locales" {
+    [ "$(locale_norm en_US.UTF-8)" = "en_US.utf8" ]
+    [ "$(locale_norm de_DE.utf-8)" = "de_DE.utf8" ]
+    [ "$(locale_norm C.UTF-8)" = "C.utf8" ]
+}
+
+@test "health check: script writes the three metrics, login message shows only problems" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    apt_install() { :; }; systemctl() { :; }
+    run st_healthcheck_run
+    [ "$status" -eq 0 ]
+    bash -n "$HEALTH_BIN"
+    f=/var/lib/labber/metrics/labber.prom
+    grep -qE '^labber_reboot_required [01]$' "$f"
+    grep -qE '^labber_restart_required_services [0-9]+$' "$f"
+    grep -qE '^labber_security_updates_pending [0-9]+$' "$f"
+    grep -q 'Post-Invoke' /etc/apt/apt.conf.d/99labber-health-check
+    # nothing to report → no output
+    printf 'labber_reboot_required 0\nlabber_restart_required_services 0\nlabber_security_updates_pending 0\n' > "$f"
+    [ -z "$(/etc/update-motd.d/95-labber-health)" ]
+    printf 'labber_reboot_required 1\nlabber_restart_required_services 2\nlabber_security_updates_pending 3\n' > "$f"
+    run /etc/update-motd.d/95-labber-health
+    [[ "$output" == *"Reboot needed"* ]]
+    [[ "$output" == *"2 service(s)"* ]]
+    [[ "$output" == *"3 security update(s)"* ]]
+}
+
+@test "alloy config: URLs, textfile folder and guest labels" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    pkg_installed() { [ "$1" = alloy ]; }; usermod() { :; }; systemctl() { :; }
+    SETUP_VIRT=vm
+    printf 'not-a-url\nhttp://mon.example:9090/\n\n' | st_alloy_run >/dev/null 2>&1
+    c=/etc/alloy/config.alloy
+    grep -q 'managed by labber setup' "$c"
+    grep -q 'url = "http://mon.example:9090/api/v1/write"' "$c"
+    grep -q 'url = "http://mon.example:3100/loki/api/v1/push"' "$c"    # Loki defaults to the same host
+    grep -q "directory = \"$LABBER_METRICS_DIR\"" "$c"
+    grep -q 'replacement  = "guest-node-exporters"' "$c"
+    grep -q 'replacement  = "vm"' "$c"
+    [ "$(state_get alloy_prometheus)" = "http://mon.example:9090" ]
+}
+
+@test "completion: zsh gets bashcompinit, bash doesn't" {
+    HOME="$T/home"; mkdir -p "$HOME"; touch "$HOME/.bashrc" "$HOME/.zshrc"; unset SUDO_USER
+    _install_completion_fn >/dev/null
+    grep -q 'bashcompinit' "$HOME/.zshrc"
+    ! grep -q 'bashcompinit' "$HOME/.bashrc"
+    grep -qx 'complete -F _labber_complete labber' "$HOME/.bashrc"
+    grep -qx 'complete -F _labber_complete labber' "$HOME/.zshrc"
+}
+
+@test "completion: works the same in bash and zsh" {
+    command -v zsh >/dev/null || skip "needs zsh"
+    # regression: under zsh's bashcompinit, COMP_CWORD counts from 0 but arrays from 1,
+    # so completion read the word before the cursor
+    HOME="$T/home"; mkdir -p "$HOME"; touch "$HOME/.bashrc" "$HOME/.zshrc"; unset SUDO_USER
+    _install_completion_fn >/dev/null
+    cat > "$T/zc.zsh" <<'EOF'
+autoload -Uz compinit && compinit -u
+source ~/.zshrc
+complete_line() {   # mirrors bashcompinit's _bash_complete
+  local -a words; words=("$@"); local CURRENT=$#
+  local -a COMP_WORDS COMPREPLY; local COMP_CWORD
+  (( COMP_CWORD = CURRENT - 1 )); COMP_WORDS=( "${words[@]}" )
+  _labber_complete; print -r -- "${COMPREPLY[*]}"
+}
+print "svc:$(complete_line labber some-svc re)"
+print "global:[$(complete_line labber ls x)]"
+EOF
+    run env HOME="$HOME" zsh "$T/zc.zsh"
+    echo "$output"
+    [[ "$output" == *"svc:"*"restart"* ]]
+    [[ "$output" == *"global:[]"* ]]
+    # and bash still works
+    run bash -c "source '$HOME/.bashrc'; COMP_WORDS=(labber some-svc re); COMP_CWORD=2; _labber_complete; echo \"\${COMPREPLY[*]}\""
+    [[ "$output" == *restart* && "$output" == *rebuild* ]]
+}
+
 @test "valid_ipv4" {
     valid_ipv4 198.51.100.1
     valid_ipv4 0.0.0.0

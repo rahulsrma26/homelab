@@ -1,0 +1,83 @@
+# promtool unit tests for services/monitoring/config/prometheus/alert.rules.yml
+# Run: tests/monitoring/run.sh
+rule_files:
+  - /rules/alert.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # a pushing host that stops sending metrics at minute 30 must alert; a healthy one must not
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{instance="dies"}'
+        values: '100x30'          # samples for minutes 0..30, then nothing
+      - series: 'node_boot_time_seconds{instance="healthy"}'
+        values: '100x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostNotReporting
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: dies
+            exp_annotations:
+              summary: "dies stopped sending metrics (down, or Alloy stopped)"
+      # once it's been gone longer than the 15m offset, the alert clears by design
+      # (a stale host shouldn't page forever)
+
+  # reboot needed: only after a full day (one sample a minute, like a live host —
+  # sparser samples go stale after 5 minutes and reset the timer)
+  - interval: 1m
+    input_series:
+      - series: 'labber_reboot_required{instance="vm1"}'
+        values: '1x1600'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: RebootRequired
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: RebootRequired
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: vm1
+            exp_annotations:
+              summary: "vm1 has had a newer kernel installed for over a day — reboot it"
+
+  # a failed unit for 15 minutes
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{instance="vm1",name="nginx.service",state="failed"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SystemdUnitFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: vm1
+              name: nginx.service
+              state: failed
+            exp_annotations:
+              summary: "Service nginx.service failed on vm1"
+
+  # security updates pending for a week
+  - interval: 1m
+    input_series:
+      - series: 'labber_security_updates_pending{instance="vm1"}'
+        values: '3x12000'
+    alert_rule_test:
+      - eval_time: 3d
+        alertname: SecurityUpdatesStuck
+        exp_alerts: []
+      - eval_time: 8d
+        alertname: SecurityUpdatesStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: vm1
+            exp_annotations:
+              summary: "vm1: 3 security update(s) pending for a week — automatic updates may be failing"

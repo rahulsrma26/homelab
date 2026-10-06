@@ -2,5 +2,5 @@
 # functions under test use. Built and run by run-unit.sh.
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bats jq iproute2 python3-yaml git ca-certificates \
+    && apt-get install -y --no-install-recommends bats jq iproute2 python3-yaml git ca-certificates zsh \
     && rm -rf /var/lib/apt/lists/*

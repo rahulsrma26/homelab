@@ -191,3 +191,22 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [[ "$(grep -E 'NFS client' <<< "$output")" == *done* ]]
     [[ "$(grep -E 'fail2ban' <<< "$output")" == *done* ]]
 }
+
+@test "setup extras: Alloy runs with a valid config and exports the health metrics" {
+    systemctl is-active --quiet alloy || skip "Alloy not set up on this VM"
+    sudo -n alloy fmt /etc/alloy/config.alloy >/dev/null
+    metrics=$(curl -s localhost:12345/api/v0/component/prometheus.exporter.unix.local/metrics)
+    grep -q '^labber_reboot_required ' <<< "$metrics"
+    grep -q '^labber_security_updates_pending ' <<< "$metrics"
+    grep -q '^node_systemd_unit_state' <<< "$metrics"
+}
+
+@test "setup extras: zsh is the login shell, with labber and fzf set up in it" {
+    [[ "$(getent passwd "$USER" | cut -d: -f7)" == */zsh ]] || skip "zsh not set up for $USER"
+    [ "$(head -1 ~/.zshrc)" = "# labber zsh" ]          # must stay first (p10k instant prompt)
+    grep -qx '# labber shell function' ~/.zshrc
+    grep -qx '# labber completion' ~/.zshrc
+    grep -q 'fzf' ~/.zshrc
+    run zsh -ic 'whence -w labber _labber_complete' < /dev/null
+    [[ "$output" == *"labber: function"* && "$output" == *"_labber_complete: function"* ]]
+}
