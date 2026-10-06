@@ -216,6 +216,20 @@ web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
 
 # ── uninstall keeping the folder, clean ───────────────────────────────────────
 
+@test "uninstall still works when the compose file is broken" {
+    d="$LABBER_SERVICE_BASE/broken-svc"; mkdir -p "$d"
+    printf 'services:\n  app:\n    image: busybox:1.37\n    command: sleep 3600\n' > "$d/docker-compose.yml"
+    (cd "$d" && docker compose up -d >/dev/null 2>&1)
+    [ -n "$(docker ps -q --filter label=com.docker.compose.project=broken-svc)" ]
+    printf 'this is: [not valid\n' >> "$d/docker-compose.yml"
+    # answers: remove containers + images? yes · delete the folder? yes
+    tty_run $'y\ny\n' bash "$LABBER" broken-svc uninstall
+    echo "$output"
+    [[ "$output" == *"removing its containers by project label"* ]]
+    [ -z "$(docker ps -aq --filter label=com.docker.compose.project=broken-svc)" ]
+    [ ! -d "$d" ]
+}
+
 @test "uninstall can keep the service folder" {
     # answers: remove containers + images? yes · delete the folder? no
     tty_run $'y\nn\n' bash "$LABBER" "$SVC" uninstall

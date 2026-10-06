@@ -649,3 +649,98 @@ make_bundle() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"could not download labber"* ]]
 }
+
+# ── corner cases (audit 2026-10) ──────────────────────────────────────────────
+
+@test "env_set sets a key that appears twice everywhere (env_get reads the last)" {
+    printf 'A={{ a | default(1) }}\nB=x\nA={{ a | default(1) }}\n' > .env
+    env_set .env A 1
+    [ "$(grep -c '^A=1$' .env)" -eq 2 ]
+    [ "$(env_get .env A)" = 1 ]
+    [ -z "$(env_placeholders .env)" ]
+}
+
+@test "gen_known rejects generator typos instead of hanging or crashing later" {
+    gen_known hex64
+    gen_known base64_32
+    gen_known uuid
+    gen_known '[A-Za-z0-9],16'
+    ! gen_known '[z-a],8'          # reversed range: tr refuses it
+    ! gen_known hex0
+    ! gen_known '[A-Z],0'
+    ! gen_known '[[:space:]],8'    # only invisible characters
+    run rand_chars 8 'z-a'
+    [ "$status" -eq 1 ]
+}
+
+@test "update keeps your edits; the repo's newer version goes next to them as .labber-new" {
+    mkdir -p repo1/config repo2/config svc
+    printf 'a: 1\n' > repo1/config/app.yml; printf 'x\n' > repo1/other.yml; printf 'K=v\n' > repo1/.env.example
+    cp -r repo1/. svc/; record_base repo1 svc
+    printf 'K=mine\n' > svc/.env
+    [ "$(config_update_status repo1 svc)" = no ]
+    # you edit app.yml: not an update, and an update with an unchanged repo leaves it alone
+    printf 'a: 1\ncameras: mine\n' > svc/config/app.yml
+    [ "$(config_update_status repo1 svc)" = no ]
+    copy_svc_files repo1 svc 2>/dev/null
+    grep -q 'cameras: mine' svc/config/app.yml
+    [ ! -e svc/config/app.yml.labber-new ]
+    # the repo changes app.yml and other.yml: other.yml (not edited) is updated,
+    # app.yml keeps your version and gets .labber-new
+    printf 'a: 2\n' > repo2/config/app.yml; printf 'y\n' > repo2/other.yml; printf 'K=v\nN=1\n' > repo2/.env.example
+    [ "$(config_update_status repo2 svc)" = yes ]
+    run copy_svc_files repo2 svc
+    [[ "$output" == *"kept your edits"*"config/app.yml"* ]]
+    grep -q 'cameras: mine' svc/config/app.yml
+    [ "$(cat svc/config/app.yml.labber-new)" = 'a: 2' ]
+    [ "$(cat svc/other.yml)" = y ]
+    [ "$(cat svc/.env)" = 'K=mine' ]
+    grep -q '^N=1$' svc/.env.example
+    [ "$(config_update_status repo2 svc)" = no ]
+    # reinstall: the repo wins, your version is kept as .labber-bak
+    run copy_svc_files repo2 svc reinstall
+    [[ "$output" == *"saved as .labber-bak"* ]]
+    [ "$(cat svc/config/app.yml)" = 'a: 2' ]
+    grep -q 'cameras: mine' svc/config/app.yml.labber-bak
+}
+
+@test "update of a service installed before .labber-base: differing files are kept, not overwritten" {
+    mkdir -p repo svc
+    printf 'new\n' > repo/app.yml; printf 'old-or-edited\n' > svc/app.yml
+    [ "$(config_update_status repo svc)" = yes ]
+    copy_svc_files repo svc 2>/dev/null
+    [ "$(cat svc/app.yml)" = old-or-edited ]
+    [ "$(cat svc/app.yml.labber-new)" = new ]
+    [ -f svc/.labber-base ]
+}
+
+@test "preflight creates .env from .env.example when there's none yet" {
+    mkdir svc; printf 'K=1\n' > svc/.env.example
+    sync_env_keys svc >/dev/null
+    [ "$(cat svc/.env)" = 'K=1' ]
+}
+
+@test "piped install (curl … | bash -s install) finishes, with tab completion" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    command -v curl >/dev/null || skip "needs curl"
+    make_bundle "$T/labber.tar.gz"
+    mkdir -p "$T/home"; touch "$T/home/.bashrc"
+    run bash -c "cat '$LABBER' | LABBER_URL='file://$T/labber.tar.gz' HOME='$T/home' bash -s install"
+    echo "$output"
+    [ "$status" -eq 0 ]
+    grep -qx '# labber completion' "$T/home/.bashrc"
+    # again, with labber already installed: no terminal to ask, so it reinstalls
+    run bash -c "cat '$LABBER' | LABBER_URL='file://$T/labber.tar.gz' HOME='$T/home' bash -s install"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"labber installed"* ]]
+}
+
+@test "labber_place keeps the old install when the new one can't be copied" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    LABBER_LIB="$T/lib/labber" LABBER_BIN="$T/bin/labber"; mkdir -p "$T/lib" "$T/bin"
+    labber_place "$(dirname "$LABBER")"
+    run labber_place "$T/no-such-dir"
+    [ "$status" -eq 1 ]
+    [ -f "$LABBER_LIB/labber" ] && [ -d "$LABBER_LIB/files" ]
+    [ ! -e "$LABBER_LIB.new" ] && [ ! -e "$LABBER_LIB.old" ]
+}
