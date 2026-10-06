@@ -450,6 +450,7 @@ EOF
 @test "alloy config: URLs, textfile folder and guest labels" {
     [ "$EUID" -eq 0 ] || skip "needs root"
     pkg_installed() { [ "$1" = alloy ]; }; usermod() { :; }; systemctl() { :; }
+    alloy() { :; }; curl() { :; }     # config check + readiness probe
     SETUP_VIRT=vm
     printf 'not-a-url\nhttp://mon.example:9090/\n\n' | st_alloy_run >/dev/null 2>&1
     c=/etc/alloy/config.alloy
@@ -460,6 +461,16 @@ EOF
     grep -q 'replacement  = "guest-node-exporters"' "$c"
     grep -q 'replacement  = "vm"' "$c"
     [ "$(state_get alloy_prometheus)" = "http://mon.example:9090" ]
+    # VM: full-ish set; systemd services only; the noisy unit states are dropped
+    grep -q 'set_collectors = \["cpu", ' "$c"
+    grep -q 'unit_include = ".+\\\\.service"' "$c"
+    grep -q 'regex         = "node_systemd_unit_state;(active|inactive|activating|deactivating)"' "$c"
+    # LXC: no cpu/memory/network (Proxmox reports those), only "/"
+    SETUP_VIRT=lxc
+    printf '\n\n' | st_alloy_run >/dev/null 2>&1
+    grep -q 'set_collectors = \["stat", "filesystem", "systemd", "textfile"\]' "$c"
+    grep -q 'mount_points_exclude = "\^/\.+"' "$c"
+    grep -q 'replacement  = "lxc"' "$c"
 }
 
 @test "completion: zsh gets bashcompinit, bash doesn't" {

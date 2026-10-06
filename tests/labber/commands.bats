@@ -169,6 +169,9 @@ web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
     [ -f "$SVC_DIR/.env" ]
     [ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$SVC")" ]
     [[ "$output" == *"service directory kept"* ]]
+    # keeping the folder keeps the data: named volumes stay too
+    [ -n "$(docker volume ls -q --filter "label=com.docker.compose.project=$SVC")" ]
+    docker volume ls -q --filter "label=com.docker.compose.project=$SVC" | xargs -r docker volume rm >/dev/null
 }
 
 @test "clean: answering no changes nothing" {

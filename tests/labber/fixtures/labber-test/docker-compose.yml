@@ -12,6 +12,7 @@ services:
       - "${PORT}:80"
     volumes:
       - ./data/www:/www
+      - cache:/cache          # a named volume: uninstall must remove it with the folder
     environment:
       - SECRET=${SECRET}
       - PASSWORD=${PASSWORD}
@@ -21,3 +22,6 @@ services:
     image: labber-test-job
     environment:
       - API_TOKEN=${API_TOKEN}
+
+volumes:
+  cache:

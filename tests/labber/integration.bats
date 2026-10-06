@@ -154,6 +154,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [ ! -d "$SVC_DIR" ]
     [ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$SVC")" ]
     ! docker image inspect labber-test-job >/dev/null 2>&1
+    [ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$SVC")" ]
 }
 
 @test "setup: re-run on an already set-up VM has nothing left to do" {

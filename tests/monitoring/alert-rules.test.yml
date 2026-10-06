@@ -81,3 +81,59 @@ tests:
               instance: vm1
             exp_annotations:
               summary: "vm1: 3 security update(s) pending for a week — automatic updates may be failing"
+
+  # a container restarting every 4 minutes
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{job="guest-containers",instance="vm1",name="paperless"}'
+        values: '100x3 340x3 580x3 820x3 1060x10'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ContainerRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: guest-containers
+              instance: vm1
+              name: paperless
+            exp_annotations:
+              summary: "Container paperless on vm1 restarted 3 times in 15 minutes"
+
+  # a container that disappears at minute 20
+  - interval: 1m
+    input_series:
+      - series: 'container_last_seen{job="guest-containers",instance="vm1",name="jellyfin"}'
+        values: '1x20'
+      - series: 'container_last_seen{job="guest-containers",instance="vm1",name="stays"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ContainerGone
+        exp_alerts: []
+      - eval_time: 28m
+        alertname: ContainerGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: vm1
+              name: jellyfin
+            exp_annotations:
+              summary: "Container jellyfin on vm1 stopped (or was removed)"
+
+  # an update available for a day
+  - interval: 1m
+    input_series:
+      - series: 'labber_service_update_available{instance="vm1",service="metube",kind="image"}'
+        values: '1x1600'
+      - series: 'labber_service_update_available{instance="vm1",service="metube",kind="config"}'
+        values: '0x1600'
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: ServiceUpdateAvailable
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              instance: vm1
+              service: metube
+            exp_annotations:
+              summary: "metube on vm1 has an update — labber metube update"
