@@ -5,7 +5,7 @@ Two layers, both written with [bats](https://bats-core.readthedocs.io/).
 | Layer | File | Runs where | Time |
 |---|---|---|---|
 | Unit | `unit.bats` | throwaway Debian container on your machine (needs only Docker) | ~10 s |
-| Integration | `integration.bats` | a test VM over SSH, against real Docker | ~2 min |
+| Integration | `integration.bats`, `commands.bats` | a test VM over SSH, against real Docker | ~4 min |
 
 Both test the **working tree**, including uncommitted changes.
 
@@ -35,7 +35,12 @@ LABBER_TEST_HOST=user@vm LABBER_TEST_KEY=~/.ssh/key make test-labber-vm NETWORK=
 | `LABBER_URL` | the labber under test, instead of GitHub |
 | `LABBER_SERVICE_BASE` | a scratch folder, instead of `/opt/homelab/services` |
 
-So real services on the VM are never touched. The tests run in order — install, ls, stop/start, port conflict, unset values, rebuild, check-updates, update, uninstall — then check that re-running `labber setup` finds nothing to do.
+So real services on the VM are never touched. The tests run in order:
+
+- `integration.bats` — the service lifecycle: install, ls, stop/start, port conflict, unset values, rebuild, check-updates, update, uninstall; then a re-run of `labber setup` must find nothing to do.
+- `commands.bats` — everything else: status, restart, logs, shell, reinstall, deploy (alias and picker), update of a service missing from the repo, labber self-install and self-update, `go`, tab completion, `tool`, the menu, uninstall keeping the folder, and `clean`.
+
+`commands.bats` replaces `/usr/local/bin/labber` on the VM with the labber under test, and its `clean` test prunes **all** unused Docker data on the VM.
 
 **VM requirements:** Debian, already through `labber setup` (Docker, the user in the `docker` group), and passwordless sudo for the test user:
 

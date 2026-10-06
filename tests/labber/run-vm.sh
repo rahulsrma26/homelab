@@ -59,7 +59,7 @@ vm "$host" "cd $remote && \
     LABBER_REPO=file://$remote/repo \
     LABBER_URL=file://$remote/services/labber \
     LABBER_SERVICE_BASE=$remote/services-under-test \
-    bats tests/labber/integration.bats" || rc=$?
+    bats tests/labber/integration.bats tests/labber/commands.bats" || rc=$?
 
 # 5. optional: static IP moves and the automatic rollback
 if [[ -n "$network_ip" ]]; then
