@@ -39,14 +39,14 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | SSH: key-only logins | ✓ | ✓ | only once a key is installed; root is key-only in an LXC and off in a VM; you confirm a test login from a second terminal, or it reverts |
 | Automatic security updates | ✓ | ✓ | `unattended-upgrades`, Debian security updates only, no auto-reboot |
 | Journal limit | ✓ | ✓ | systemd journal capped at 200 MB |
-| zram swap | — | optional | compressed swap in RAM (50%, used before disk swap); pre-ticked on VMs with ≤ 4 GB RAM |
+| Swap | — | optional | asks: **1** zram only — turns off disk swap, so no swap writes to the SSD (also sets `RESUME=none` so boot doesn't wait for the old partition) · **2** zram first, disk swap as overflow · **3** disk swap only. LXC swap is set in Proxmox (`pct set <ID> --swap 0` saves host SSD writes) |
 | Docker *(Docker hosts)* | ✓ | ✓ | official Docker repo + compose/buildx; on an LXC, prints the nesting command if Docker can't start |
 | Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
 | Reboot/update checks | ✓ | ✓ | hourly and after every `apt` run: newer kernel installed (VMs), services on outdated libraries (`needrestart`, list-only), pending security updates. Shown at login, and exported as metrics for alerts |
-| Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki, like the Proxmox hosts (`services/monitoring`); asks for the URLs |
+| Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki (`services/monitoring`); asks for the URLs. Unlike the Proxmox hosts (full metrics), guests send only what's useful: VMs ~300 series (CPU, memory, load, disk I/O, real filesystems and NICs, pressure, failed services, health); LXCs even less (failed services, health, `/`, boot time — Proxmox already reports their CPU/memory/network). The config is checked with `alloy fmt` before it's applied. On **Docker hosts** it also sends per-container CPU, memory, network, restarts and OOM kills, plus container logs to Loki (Alloy runs as root there: container metrics need the containerd socket) |
 | zsh + powerlevel10k | ✓ | ✓ | for the admin user (root on an LXC): zsh + p10k + autosuggestions + syntax highlighting; uses `tools/zsh/p10k.zsh` if present; labber and fzf work in it. Needs a Nerd Font in your terminal |
-| labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services` |
+| labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services`; on Docker hosts also a daily `labber check-updates` (shown in Grafana) |
 | fzf | ✓ | ✓ | from `tools/fzf.sh` |
 | NFS client / fail2ban | optional | optional | off by default |
 | Network: fixed IP | ✓ | ✓ | see below |
@@ -70,7 +70,7 @@ Everything that has to happen on the Proxmox host (hostname, LXC static IP, nest
 labber [svc] <command>
 
   [svc] install     deploy a service from the repo (also: deploy)
-  [svc] uninstall   stop and remove a service (asks about images and the folder)
+  [svc] uninstall   stop and remove a service (asks about images, and about the folder + its Docker volumes)
   [svc] start       start containers (docker compose up -d)
   [svc] stop        docker compose stop
   [svc] restart     recreate containers (docker compose up -d --force-recreate)
@@ -148,6 +148,19 @@ Each service directory contains:
 - `config/` — versioned config files (where applicable)
 
 Services are deployed to `/opt/homelab/services/<service>/` on the target machine. Never commit a `.env`.
+
+## Monitoring
+
+How VMs, LXCs and containers are watched (details in `monitoring/README.txt`):
+
+| What | By |
+|---|---|
+| Every VM/LXC: up, CPU, memory, disk, network (seen from Proxmox) | pve-exporter in `monitoring` |
+| Inside each guest: disk, failed services, reboot needed, stuck updates, logs | Alloy, installed by `labber setup` |
+| Containers on Docker hosts: CPU, memory, restarts, OOM kills, logs; available updates | Alloy + `labber check-updates` |
+| Does each service actually answer? | Uptime Kuma, part of `monitoring` |
+| Dashboards | Grafana → Homelab folder: Guests, Containers, Logs, Proxmox |
+| Alerts | Alertmanager → Telegram (rules tested with `make test-monitoring`) |
 
 ## Tests
 
