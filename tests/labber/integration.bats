@@ -159,10 +159,35 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
 @test "setup: re-run on an already set-up VM has nothing left to do" {
     sudo -n true || skip "needs passwordless sudo"
     [ -f /etc/ssh/sshd_config.d/10-labber.conf ] || skip "VM hasn't been through labber setup"
-    tty_run $'q\n' sudo -n bash "$LABBER" setup
+    # answers: Docker services? (Enter keeps the last answer: yes) · quit the checklist
+    tty_run $'\nq\n' sudo -n bash "$LABBER" setup
     echo "$output"
     [[ "$output" == *"nothing changed"* ]]
+    [[ "$output" == *"Will this machine run Docker services?"* ]]
+    [[ "$output" == *"Docker (official repo)"* ]]
     # every step that isn't always-offered (update) or optional (nfs, fail2ban) is done
     todo=$(grep -E '^ +[0-9]+ \[' <<< "$output" | grep -v -E 'system update|NFS|fail2ban' | grep -c ' todo' || true)
     [ "$todo" -eq 0 ]
+}
+
+@test "setup: optional steps and the network step can be picked on a later run" {
+    sudo -n true || skip "needs passwordless sudo"
+    [ -f /etc/ssh/sshd_config.d/10-labber.conf ] || skip "VM hasn't been through labber setup"
+    # step numbers come from the checklist itself, so this works whatever the order
+    tty_run $'\nq\n' sudo -n bash "$LABBER" setup
+    num() { grep -E "^ +[0-9]+ \[.\] $1" <<< "$output" | awk '{print $1}'; }
+    update=$(num 'system update'); nfs=$(num 'NFS client'); f2b=$(num 'fail2ban'); net=$(num 'network:')
+    [ -n "$update" ] && [ -n "$nfs" ] && [ -n "$f2b" ] && [ -n "$net" ]
+    # answers: Docker? Enter · untick update, tick NFS + fail2ban + network · run · network: 3 = skip
+    tty_run $'\n'"$update $nfs $f2b $net"$'\n\n3\n' sudo -n bash "$LABBER" setup
+    echo "$output"
+    [[ "$output" == *"done: nfs fail2ban network"* ]]
+    [[ "$output" == *"network unchanged"* ]]
+    dpkg-query -W -f='${Status}' nfs-common | grep -q 'install ok installed'
+    systemctl is-active --quiet fail2ban
+    sudo -n fail2ban-client status sshd >/dev/null
+    # next run: both now show as done
+    tty_run $'\nq\n' sudo -n bash "$LABBER" setup
+    [[ "$(grep -E 'NFS client' <<< "$output")" == *done* ]]
+    [[ "$(grep -E 'fail2ban' <<< "$output")" == *done* ]]
 }

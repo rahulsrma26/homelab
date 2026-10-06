@@ -348,6 +348,78 @@ assert e["nameservers"]["addresses"] == ["192.0.2.1", "1.1.1.1"]
 EOF
 }
 
+@test "setup: Docker steps are left out on a non-Docker machine, and the answer is remembered" {
+    SETUP_VIRT=lxc
+    setup_ask_docker <<< "n" >/dev/null 2>&1
+    [ "$SETUP_DOCKER" -eq 0 ]
+    [ "$(state_get docker)" = no ]
+    ! step_applies docker
+    ! step_applies dockerlogs
+    step_applies labber
+    setup_ask_docker <<< "" >/dev/null 2>&1      # Enter keeps the remembered answer
+    [ "$SETUP_DOCKER" -eq 0 ]
+    setup_ask_docker <<< "y" >/dev/null 2>&1
+    [ "$SETUP_DOCKER" -eq 1 ]
+    [ "$(state_get docker)" = yes ]
+    step_applies docker
+}
+
+@test "setup: always asks about Docker, showing the last answer as the default" {
+    command -v script >/dev/null || skip "needs script(1)"
+    # read -p only prints its prompt on a terminal, so ask through a pseudo-terminal
+    printf 'source "%s"; LABBER_STATE_DIR="%s/state"\nsetup_ask_docker; echo "RESULT=$SETUP_DOCKER"\n' \
+        "$LABBER" "$T" > "$T/ask.sh"
+    run script -qefc "bash $T/ask.sh" /dev/null <<< ""          # first run: default yes
+    [[ "$output" == *"Will this machine run Docker services? [Y/n]"* ]]
+    [[ "$output" == *"RESULT=1"* ]]
+    state_set docker no
+    run script -qefc "bash $T/ask.sh" /dev/null <<< ""          # Enter keeps "no"
+    [[ "$output" == *"(last answer: no) [y/N]"* ]]
+    [[ "$output" == *"RESULT=0"* ]]
+}
+
+@test "setup checklist: answering no to Docker hides the Docker steps" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    command -v script >/dev/null || skip "needs script(1)"
+    rm -f /var/lib/labber/setup.state
+    # answers: treat as a VM? (the container isn't one) · Docker? no · quit the checklist
+    run script -qefc "bash $LABBER setup" /dev/null <<< $'y\nn\nq\n'
+    out=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')
+    echo "$out"
+    [[ "$out" == *"Docker steps left out"* ]]
+    [[ "$out" == *"system update"* ]]
+    [[ "$out" != *"Docker (official repo)"* ]]
+    [[ "$out" != *"Docker log rotation"* ]]
+    [[ "$out" == *"nothing changed"* ]]
+    rm -f /var/lib/labber/setup.state
+}
+
+@test "setup: the network step defaults to the last choice" {
+    command -v script >/dev/null || skip "needs script(1)"
+    [ -n "$(net_iface)" ] || skip "no default route here"
+    printf 'source "%s"; LABBER_STATE_DIR="%s/state"; SETUP_VIRT=lxc\nstate_set network_choice 3\nst_network_run\n' \
+        "$LABBER" "$T" > "$T/net.sh"
+    run script -qefc "bash $T/net.sh" /dev/null <<< ""      # Enter keeps the last choice (3 = skip)
+    [[ "$output" == *"choice [3]"* ]]
+    [[ "$output" == *"network unchanged"* ]]
+}
+
+@test "setup: 'treat it as a VM?' remembers the answer" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    command -v script >/dev/null || skip "needs script(1)"
+    rm -f /var/lib/labber/setup.state
+    # first run: treat as VM? no (→ LXC) · Docker? Enter · quit
+    run script -qefc "bash $LABBER setup" /dev/null <<< $'n\n\nq\n'
+    [[ "$output" == *"LXC"* ]]
+    # second run: the earlier answer is the default — Enter keeps LXC
+    run script -qefc "bash $LABBER setup" /dev/null <<< $'\n\nq\n'
+    out=$(printf '%s' "$output" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')
+    echo "$out"
+    [[ "$out" == *"treat it as a VM? (last answer: lxc) [y/N]"* ]]
+    [[ "$out" == *", LXC, user:"* ]]
+    rm -f /var/lib/labber/setup.state
+}
+
 @test "valid_ipv4" {
     valid_ipv4 198.51.100.1
     valid_ipv4 0.0.0.0
