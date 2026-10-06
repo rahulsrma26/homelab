@@ -665,6 +665,17 @@ preflight() {
 
 UPDATES_FILE="$SERVICE_BASE/.labber-updates"
 
+# replace the update-status file with stdin. Written next to it and moved over it, so
+# it works whoever owns the old file (the services folder is yours); under root
+# (sudo labber check-updates) it's handed to the folder's owner, so the daily
+# check-updates timer, which runs as that user, can still replace it.
+write_updates_file() {
+    local tmp dir; dir=$(dirname "$UPDATES_FILE")
+    tmp=$(mktemp "$UPDATES_FILE.XXXXXX" 2>/dev/null) || return 1
+    cat > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$UPDATES_FILE" || { rm -f "$tmp"; return 1; }
+    if (( EUID == 0 )); then chown "$(stat -c '%u:%g' "$dir")" "$UPDATES_FILE" 2>/dev/null || true; fi
+}
+
 # does any pulled image of this service have a newer version in its registry?
 # prints yes / no / unknown (unknown: no buildx, offline, or only local images)
 image_update_status() {
@@ -721,7 +732,7 @@ do_check_updates() {
         out+="$s"$'\t'"$img"$'\t'"$cfg"$'\t'"$now"$'\n'
         update_label "$img" "$cfg"; echo
     done
-    printf "%s" "$out" > "$UPDATES_FILE" 2>/dev/null || warn "could not write $UPDATES_FILE"
+    printf "%s" "$out" | write_updates_file || warn "could not write $UPDATES_FILE"
     echo
     info "apply with: labber <svc> update   (config + images)  or  labber <svc> rebuild   (images only)"
 }
@@ -730,14 +741,11 @@ do_check_updates() {
 # the new state for this service (empty argument = keep the cached value)
 mark_updated() {
     local svc="$1" img="$2" cfg="$3"
-    [[ -f "$UPDATES_FILE" && -w "$UPDATES_FILE" ]] || return 0
-    local tmp; tmp=$(mktemp)
+    [[ -f "$UPDATES_FILE" ]] || return 0
     awk -F'\t' -v OFS='\t' -v s="$svc" -v i="$img" -v c="$cfg" '
         $1 == s { if (i != "") $2 = i; if (c != "") $3 = c }
         { print }
-    ' "$UPDATES_FILE" > "$tmp"
-    cat "$tmp" > "$UPDATES_FILE"
-    rm -f "$tmp"
+    ' "$UPDATES_FILE" | write_updates_file || true
 }
 
 # coloured summary for an image/config update pair
