@@ -47,7 +47,7 @@ Details and conventions for adding a service: [services/README.md](services/READ
 
 ```bash
 make test-labber-unit                                  # labber unit tests + Alloy config checks (Docker)
-make test-labber-setup                                 # labber setup from scratch in a systemd container (LXC path)
+make test-labber-setup                                 # labber setup from scratch in systemd containers (LXC and VM paths)
 LABBER_TEST_HOST=user@vm make test-labber-vm           # labber integration tests on a test VM
 make test-monitoring                                   # Prometheus rules + Alertmanager config
 make test-lint                                         # repo rules (templates, compose vars, no private IPs) + shellcheck

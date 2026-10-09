@@ -22,12 +22,19 @@ Covers the logic without Docker or network: labber's files (`@NAME@` filling, fi
 ## Setup in a fresh container
 
 ```bash
-make test-labber-setup        # ~1 minute; needs Docker and internet
+make test-labber-setup                  # both paths, a few minutes; needs Docker and internet
+tests/labber/run-setup.sh lxc           # or one of them
+tests/labber/run-setup.sh vm
 ```
 
-`run-setup.sh` starts a fresh Debian container with systemd as PID 1, which is the closest Docker gets to a Proxmox LXC (both are containers on the host's kernel). It runs `labber setup` the way it runs on a new LXC: piped (`bash <(…) setup`, so it downloads its own files), as root, answering every question, with every step ticked. `setup.bats` then checks each step's result inside the container: SSH key-only, locale, automatic updates, journal limit, health-check metrics, Alloy running with the lean LXC config, zsh + p10k + fzf, labber installed, fail2ban. It also checks that a second run finds nothing left to do. Each run starts from scratch, so no VM snapshot or Proxmox access is needed.
+`run-setup.sh` starts a fresh Debian container with systemd as PID 1 and runs `labber setup` the way it runs on a new machine: piped (`bash <(…) setup`, so it downloads its own files), as root, answering every question. Each run starts from scratch, so no VM snapshot or Proxmox access is needed.
 
-Not covered there: the VM-only steps (admin user, time sync, swap, guest agent), Docker, and static IPs. The VM tests below cover those.
+| Path | Answers | Checked by |
+|---|---|---|
+| **lxc** — like a Proxmox LXC (also a container on the host's kernel) | not a VM, no Docker, every step ticked | `setup-lxc.bats`: everything for root, SSH root by key, lean LXC Alloy config, second run finds nothing to do |
+| **vm** — treated as a VM | VM, Docker; an `admin` user exists beforehand, as the Debian installer creates one | `setup-vm.bats`: admin in sudo + docker groups and owning the services folder, root SSH off, nested Docker with log rotation, Alloy with container metrics (as root), labber/zsh/p10k/fzf for the admin, guest agent, and a second run **as the admin through `sudo labber setup`** finds nothing to do |
+
+A container can't cover time sync, swap/zram, the guest agent talking to Proxmox, or static IPs; the VM tests below do.
 
 ## Integration tests
 
@@ -66,4 +73,4 @@ Only use a throwaway VM. Snapshot it after setup so you can roll back if a test 
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request: the unit tests and the fresh-container setup test above, the monitoring tests, shellcheck (`tests/repo/shellcheck.sh`, pinned version) and the repo lint (`tests/repo/lint.sh`): `.env.example` templates well-formed with known generators and no old-style placeholders, every compose `${VAR}` without a default in `.env.example`, no private IPs, no `.env` files. Run the same locally with `make ci`. The VM tests need the test VM and stay manual.
+`.github/workflows/ci.yml` runs on every push and pull request: the unit tests and the fresh-container setup tests above (both paths, in parallel), the monitoring tests, shellcheck (`tests/repo/shellcheck.sh`, pinned version) and the repo lint (`tests/repo/lint.sh`): `.env.example` templates well-formed with known generators and no old-style placeholders, every compose `${VAR}` without a default in `.env.example`, no private IPs, no `.env` files. Run the same locally with `make ci`. The VM tests need the test VM and stay manual.

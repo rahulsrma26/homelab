@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
-# Checks after `labber setup` ran in a fresh container (the LXC path). Runs inside that
-# container, as root, started by run-setup.sh — not on its own.
+# Checks after `labber setup` ran in a fresh container (the LXC path: root only, no
+# Docker). Runs inside that container, as root, started by run-setup.sh — not on its own.
 
 setup() { log=/root/setup1.log; }
 

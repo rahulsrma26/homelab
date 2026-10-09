@@ -37,11 +37,15 @@ jobs:
       - run: tests/labber/run-unit.sh
 
   labber-setup:
-    name: labber setup in a fresh container (LXC path)
+    name: labber setup in a fresh container (${{ matrix.mode }} path)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [lxc, vm]
     steps:
       - uses: actions/checkout@v5
-      - run: tests/labber/run-setup.sh
+      - run: tests/labber/run-setup.sh ${{ matrix.mode }}
 
   monitoring:
     name: Prometheus rules + Alertmanager config
