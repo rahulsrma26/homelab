@@ -29,7 +29,7 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Step | LXC | VM | What it does |
 |---|---|---|---|
 | System update | ✓ | ✓ | `apt full-upgrade` (keeps your modified config files) |
-| Base packages | ✓ | ✓ | `curl git sudo htop nano jq tmux rsync ncdu`; VMs add `smartmontools lm-sensors iotop`; `vainfo` only with a real Intel/AMD GPU |
+| Base packages | ✓ | ✓ | `curl git sudo htop nano jq tmux rsync ncdu iproute2`; VMs add `smartmontools lm-sensors iotop`; `vainfo` only with a real Intel/AMD GPU |
 | Locale | ✓ | ✓ | default `en_US.UTF-8` (generates it, clears installer leftovers like `LANGUAGE`) |
 | Admin user | — | ✓ | asks for a name, adds it to `sudo`, copies root's SSH keys |
 | Hostname + timezone | ✓ | ✓ | sets them on a VM; for an LXC prints the `pct` command (Proxmox owns the LXC hostname) |
@@ -102,6 +102,8 @@ On every `install`, `start`, `rebuild` and `update`:
 **Config files you edited** (frigate's cameras, Prometheus targets…) are never overwritten by `update`. labber remembers each repo file as it installed it (`.labber-base` in the service folder): a file you changed stays as it is, and if the repo changed it too, the repo's version is put next to it as `<file>.labber-new` to compare. Your edits also don't show up as "repo config changed" in `labber ls`. A reinstall (`labber <svc> install` again) does take the repo's version, and keeps yours as `<file>.labber-bak`. `.env.example` and `README.txt` are always replaced (you edit `.env`, which is never touched). If a service has `.env.example` but no `.env`, it's created from it.
 
 Updates pull new images **before** stopping the old containers, so a failed pull or build leaves the service running. Locally built images are built, not pulled.
+
+**Health check and rollback.** After `install`, `rebuild` and `update`, labber waits for the containers to come up: each running for 10 s since its last start (a restart or two while a database starts is fine), healthy if it has a healthcheck, or finished with exit code 0 (one-shot jobs). A crash loop (3+ restarts), a non-zero exit, a failed healthcheck or 3 minutes without getting there counts as a failed update, and labber offers to **roll back**: the images the service ran before (kept as `labber-rollback:<id>` until the update is known to be good) and, for `update`, the files it replaced. It asks rather than rolling back by itself, because the new version may already have migrated the app's data, which the old one can't read. Without a terminal it reports the failure, leaves things as they are and exits 1.
 
 Without a terminal (cron, scripts), labber never prompts: it reports what's wrong and doesn't start the service.
 

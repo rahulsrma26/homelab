@@ -49,6 +49,7 @@ tty_run() {
 
 lbr() { run bash "$LABBER" "$@" < /dev/null; }
 web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
+web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/null)" = true ]; }
 
 # ── per-service commands ──────────────────────────────────────────────────────
 
@@ -64,6 +65,52 @@ web_id() { docker inspect -f '{{.Id}}' "$SVC-web-1" 2>/dev/null; }
     [ "$status" -eq 0 ]
     after=$(web_id)
     [ -n "$after" ] && [ "$after" != "$before" ]
+}
+
+@test "rebuild: a new image that fails is rolled back to the one before" {
+    job_id() { docker image inspect -f '{{.Id}}' labber-test-job; }
+    before=$(job_id)
+    cp "$SVC_DIR/job/Dockerfile" "$BATS_FILE_TMPDIR/Dockerfile.good"
+    printf 'FROM busybox:1.37\nCMD ["false"]\n' > "$SVC_DIR/job/Dockerfile"
+    # answer: roll back? (Enter = yes)
+    tty_run $'\n' bash "$LABBER" "$SVC" rebuild
+    echo "$output"
+    [[ "$output" == *"didn't come up healthy"* ]]
+    [[ "$output" == *"job"*"exited with code 1"* ]]
+    [[ "$output" == *"rolled back"* ]]
+    [ "$(job_id)" = "$before" ]
+    [ "$(docker inspect -f '{{.State.ExitCode}}' "$SVC-job-1")" = 0 ]
+    web_running
+    cp "$BATS_FILE_TMPDIR/Dockerfile.good" "$SVC_DIR/job/Dockerfile"
+}
+
+@test "rebuild without a terminal: reports the failure, exits 1, changes nothing back" {
+    printf 'FROM busybox:1.37\nCMD ["false"]\n' > "$SVC_DIR/job/Dockerfile"
+    lbr "$SVC" rebuild
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"left as it is (no terminal)"* ]]
+    cp "$BATS_FILE_TMPDIR/Dockerfile.good" "$SVC_DIR/job/Dockerfile"
+    lbr "$SVC" rebuild
+    [ "$status" -eq 0 ]
+}
+
+@test "update: a repo change that breaks the service is rolled back, files included" {
+    repo="${LABBER_REPO#file://}"
+    compose_before=$(cat "$SVC_DIR/docker-compose.yml")
+    sed -i 's|command: \["httpd".*|command: ["sh", "-c", "exit 3"]|' "$repo/services/$SVC/docker-compose.yml"
+    echo 'BROKEN_SETTING=1' >> "$repo/services/$SVC/.env.example"
+    git -C "$repo" -c user.name=labber-test -c user.email=labber-test@localhost commit -qam "fixture: break web"
+    tty_run $'\n' bash "$LABBER" "$SVC" update
+    echo "$output"
+    git -C "$repo" reset -q --hard HEAD~1
+    [[ "$output" == *"web"*"keeps restarting"* ]]
+    [[ "$output" == *"restored the service's previous files"* ]]
+    [[ "$output" == *"rolled back"* ]]
+    [ "$(cat "$SVC_DIR/docker-compose.yml")" = "$compose_before" ]
+    ! grep -q BROKEN_SETTING "$SVC_DIR/.env.example"
+    web_running    # the images kept for the rollback are released again
+    [ -z "$(docker images -q labber-rollback)" ]
 }
 
 @test "logs follows the service's logs" {

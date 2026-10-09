@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Generate the Alloy configs `labber setup` writes for a VM and for an LXC, into $1,
 # so run-unit.sh can check them with the real alloy binary. Runs in the unit-test image.
+# the variables it sets are read by the sourced labber functions
+# shellcheck disable=SC2034
 set -euo pipefail
 out="$1"
 # shellcheck disable=SC1090

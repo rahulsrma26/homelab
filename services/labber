@@ -9,6 +9,8 @@
 # command it was given. Otherwise (or without root) it just runs the new labber once.
 set -euo pipefail
 
+# read by pre-4.0 labbers, which compare it before installing this file
+# shellcheck disable=SC2034
 VERSION="4.0.0"
 LABBER_URL="${LABBER_URL:-https://codeload.github.com/rahulsrma26/homelab/tar.gz/refs/heads/main}"
 LABBER_BIN="/usr/local/bin/labber"

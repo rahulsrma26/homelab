@@ -43,6 +43,8 @@ Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{
 
 Use lowercase snake_case names. Pick the strictest generator the app documents (e.g. LibreChat's `JWT_SECRET` is 32 random bytes as hex → `generate(hex64)`). Never generate values that must match something outside the service (shared passkeys, tokens from other apps) — use `{{ name }}`.
 
+`make test-lint` checks the machine-checkable parts of these rules (templates, compose variables, private IPs, `.env` files); CI runs it on every push.
+
 ## personal/ directory
 
 Gitignored. Store here anything that doesn't meet the public rules above:

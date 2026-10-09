@@ -1,0 +1,51 @@
+# Checks on every push and pull request: the same tests you run locally with make.
+# The VM integration tests (make test-labber-vm) need the test VM and stay manual.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-lint:
+    name: repo rules (.env templates, compose vars, no private IPs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/repo/lint.sh
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/repo/shellcheck.sh
+
+  labber-unit:
+    name: labber unit tests + Alloy configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/labber/run-unit.sh
+
+  labber-setup:
+    name: labber setup in a fresh container (LXC path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/labber/run-setup.sh
+
+  monitoring:
+    name: Prometheus rules + Alertmanager config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/monitoring/run.sh
