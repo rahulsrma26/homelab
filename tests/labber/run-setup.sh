@@ -31,7 +31,11 @@ cp "$repo/labber/labber" "$here/setup.bats" "$tmp/t/"
 
 docker build -q -t "$image" "$here/setup" >/dev/null
 docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-    --tmpfs /run --tmpfs /run/lock -v "$tmp/t:/t:ro" "$image" >/dev/null
+    --tmpfs /run --tmpfs /run/lock "$image" >/dev/null
+# copied in and handed to root, as on a real machine: git won't clone a repo that
+# belongs to another user, and both a bind mount and docker cp keep the host's user id
+docker cp "$tmp/t" "$name:/t"
+docker exec "$name" chown -R root:root /t
 for _ in $(seq 30); do
     state=$(docker exec "$name" systemctl is-system-running 2>/dev/null || true)
     [[ "$state" == running || "$state" == degraded ]] && break

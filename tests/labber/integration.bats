@@ -83,7 +83,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
 
 @test "stop, then ls shows stopped, then start brings it back" {
     lbr "$SVC" stop
-    ! web_running
+    ! web_running || false
     lbr ls
     [[ "$(grep "$SVC" <<< "$output")" == *stopped* ]]
     lbr "$SVC" start
@@ -98,7 +98,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     echo "$output"
     [[ "$output" == *"port conflict"* ]]
     [[ "$output" == *"container labber-test-conflict"* ]]
-    ! web_running
+    ! web_running || false
     docker rm -f labber-test-conflict >/dev/null
     lbr "$SVC" start
     web_running
@@ -111,7 +111,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     lbr "$SVC" start
     echo "$output"
     [[ "$output" == *"still unset"*"API_TOKEN"* ]]
-    ! web_running
+    ! web_running || false
     cp -p "$BATS_FILE_TMPDIR/env.bak" "$SVC_DIR/.env"
     lbr "$SVC" start
     web_running
@@ -160,7 +160,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [ "$status" -eq 0 ]
     [ ! -d "$SVC_DIR" ]
     [ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$SVC")" ]
-    ! docker image inspect labber-test-job >/dev/null 2>&1
+    ! docker image inspect labber-test-job >/dev/null 2>&1 || false
     [ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$SVC")" ]
 }
 

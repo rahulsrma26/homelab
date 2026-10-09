@@ -15,7 +15,7 @@ tty_run() {
     cat "$log"
     grep -q 'setup summary' "$log"
     grep -q '✓ done: ' "$log"
-    ! grep -q 'failed: ' "$log"
+    ! grep -q 'failed: ' "$log" || false
     # run piped, it downloaded its own files to a temp folder and removed it afterwards
     [ -z "$(ls -d /tmp/labber-files-* 2>/dev/null)" ]
 }
@@ -68,8 +68,8 @@ tty_run() {
     grep -q 'set_collectors = \["stat", "filesystem", "systemd", "textfile"\]' "$c"
     grep -q 'replacement  = "lxc"' "$c"
     grep -q 'url = "http://127.0.0.1:9090/api/v1/write"' "$c"
-    ! grep -q '@[A-Z_]*@' "$c"
-    ! grep -q 'cadvisor' "$c"                 # not a Docker host
+    ! grep -q '@[A-Z_]*@' "$c" || false
+    ! grep -q 'cadvisor' "$c" || false                 # not a Docker host
 }
 
 @test "zsh with powerlevel10k is root's shell; fzf works in it" {

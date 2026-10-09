@@ -8,6 +8,8 @@ docker run --rm -v "$rules:/rules:ro" -v "$here:/tests:ro" --entrypoint promtool
 docker run --rm -v "$rules:/rules:ro" -v "$here:/tests:ro" --entrypoint promtool "$image" test rules /tests/alert-rules.test.yml
 # alertmanager.yml is a template (${TELEGRAM_*} filled in at container start): check it filled in
 am=$(mktemp -d); trap 'rm -rf "$am"' EXIT
+chmod 755 "$am"            # amtool runs as "nobody" in its container
 sed 's|${TELEGRAM_BOT_TOKEN}|123:test|; s|${TELEGRAM_CHAT_ID}|-1001|' \
     "$here/../../services/monitoring/config/alertmanager/alertmanager.yml" > "$am/alertmanager.yml"
+chmod 644 "$am/alertmanager.yml"
 docker run --rm -v "$am:/a:ro" --entrypoint amtool prom/alertmanager:v0.27.0 check-config /a/alertmanager.yml

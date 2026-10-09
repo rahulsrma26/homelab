@@ -45,7 +45,7 @@ setup() {
     [ "$(gen_value hex64)" != "$(gen_value hex64)" ]
     gen_valid hex4 beEF;  ! gen_valid hex4 beefa;  ! gen_valid hex4 zzzz
     gen_valid '[A-Za-z0-9],16' 'any chars ok, 16+'; ! gen_valid '[A-Za-z0-9],16' short
-    ! gen_valid uuid not-a-uuid; ! gen_valid hex4 ''
+    ! gen_valid uuid not-a-uuid; ! gen_valid hex4 '' || false
     [ "$(gen_desc hex64)" = "64 hex characters" ]
     [ "$(gen_desc '[A-Za-z0-9],16')" = "at least 16 characters" ]
 }
@@ -124,7 +124,7 @@ setup() {
     [ "$(env_get svc/.env A)" = custom ]
     [ "$(env_get svc/.env B)" = "{{ b }}" ]
     [ "$(env_get svc/.env D)" = 4 ]
-    ! grep -q '^C=' svc/.env
+    ! grep -q '^C=' svc/.env || false
     [ "$(grep -c . svc/.env)" -eq 3 ]
 }
 
@@ -146,7 +146,7 @@ setup() {
 
 @test "confirm_env_complete refuses without a terminal when values are unset" {
     printf 'B={{ b }}\n' > .env
-    ! confirm_env_complete .env < /dev/null
+    ! confirm_env_complete .env < /dev/null || false
     printf 'B=set\n' > .env
     confirm_env_complete .env < /dev/null
 }
@@ -252,7 +252,7 @@ EOF
 }
 
 @test "has_media_gpu is false without an Intel/AMD render node" {
-    ! has_media_gpu
+    ! has_media_gpu || false
 }
 
 # ── state, update cache, labels ───────────────────────────────────────────────
@@ -334,7 +334,7 @@ EOF
     grep -qx '    gateway 192.0.2.1' "$new"
     grep -qx 'iface ens18 inet6 auto' "$new"
     grep -qx 'iface lo inet loopback' "$new"
-    ! grep -q 'inet dhcp' "$new"
+    ! grep -q 'inet dhcp' "$new" || false
     bash -n "$LABBER_STATE_DIR/ip-apply.sh"
     [ "$(state_get network_pending)" = "static 192.0.2.20/24" ]
 }
@@ -378,8 +378,8 @@ EOF
     setup_ask_docker <<< "n" >/dev/null 2>&1
     [ "$SETUP_DOCKER" -eq 0 ]
     [ "$(state_get docker)" = no ]
-    ! step_applies docker
-    ! step_applies dockerlogs
+    ! step_applies docker || false
+    ! step_applies dockerlogs || false
     step_applies labber
     setup_ask_docker <<< "" >/dev/null 2>&1      # Enter keeps the remembered answer
     [ "$SETUP_DOCKER" -eq 0 ]
@@ -464,7 +464,7 @@ EOF
     grep -q 'Post-Invoke' /etc/apt/apt.conf.d/99labber-health-check
     # the services folder is filled in, no @NAME@ left
     grep -qF "updates=\"$SERVICE_BASE/.labber-updates\"" "$HEALTH_BIN"
-    ! grep -q '@[A-Z_]*@' "$HEALTH_BIN"
+    ! grep -q '@[A-Z_]*@' "$HEALTH_BIN" || false
     # nothing to report → no output
     printf 'labber_reboot_required 0\nlabber_restart_required_services 0\nlabber_security_updates_pending 0\n' > "$f"
     [ -z "$(/etc/update-motd.d/95-labber-health)" ]
@@ -499,14 +499,14 @@ EOF
     grep -q 'set_collectors = \["stat", "filesystem", "systemd", "textfile"\]' "$c"
     grep -q 'mount_points_exclude = "\^/\.+"' "$c"
     grep -q 'replacement  = "lxc"' "$c"
-    ! grep -q '@[A-Z_]*@' "$c"
+    ! grep -q '@[A-Z_]*@' "$c" || false
 }
 
 @test "completion: zsh gets bashcompinit, bash doesn't" {
     HOME="$T/home"; mkdir -p "$HOME"; touch "$HOME/.bashrc" "$HOME/.zshrc"; unset SUDO_USER
     _install_completion_fn >/dev/null
-    grep -q 'bashcompinit' "$HOME/.zshrc"
-    ! grep -q 'bashcompinit' "$HOME/.bashrc"
+    grep -qx 'autoload -U +X bashcompinit && bashcompinit' "$HOME/.zshrc"
+    ! grep -q '^autoload .*bashcompinit' "$HOME/.bashrc" || false
     grep -qx 'complete -F _labber_complete labber' "$HOME/.bashrc"
     grep -qx 'complete -F _labber_complete labber' "$HOME/.zshrc"
 }
@@ -541,9 +541,9 @@ EOF
 @test "valid_ipv4" {
     valid_ipv4 198.51.100.1
     valid_ipv4 0.0.0.0
-    ! valid_ipv4 256.1.1.1
-    ! valid_ipv4 1.2.3
-    ! valid_ipv4 a.b.c.d
+    ! valid_ipv4 256.1.1.1 || false
+    ! valid_ipv4 1.2.3 || false
+    ! valid_ipv4 a.b.c.d || false
 }
 
 # ── command line ──────────────────────────────────────────────────────────────
@@ -606,7 +606,7 @@ make_bundle() {
     [ "$(printf '%s\n' "${lines[@]}" | sort -u | tr '\n' ' ')" = "@COLLECTORS@ @FS_EXCLUDE@ @LOKI@ @METRICS_DIR@ @PROMETHEUS@ @VIRT@ " ]
     run grep -oh '@[A-Z_]*@' "$LABBER_FILES/health-check.sh"
     [ "$output" = "@SERVICE_BASE@" ]
-    ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh"
+    ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh" || false
 }
 
 @test "download + place: installs the folder, links the command, replaces a pre-4.0 file" {
@@ -665,10 +665,10 @@ make_bundle() {
     gen_known base64_32
     gen_known uuid
     gen_known '[A-Za-z0-9],16'
-    ! gen_known '[z-a],8'          # reversed range: tr refuses it
-    ! gen_known hex0
-    ! gen_known '[A-Z],0'
-    ! gen_known '[[:space:]],8'    # only invisible characters
+    ! gen_known '[z-a],8' || false          # reversed range: tr refuses it
+    ! gen_known hex0 || false
+    ! gen_known '[A-Z],0' || false
+    ! gen_known '[[:space:]],8' || false    # only invisible characters
     run rand_chars 8 'z-a'
     [ "$status" -eq 1 ]
 }

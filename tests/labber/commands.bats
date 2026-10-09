@@ -108,7 +108,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [[ "$output" == *"restored the service's previous files"* ]]
     [[ "$output" == *"rolled back"* ]]
     [ "$(cat "$SVC_DIR/docker-compose.yml")" = "$compose_before" ]
-    ! grep -q BROKEN_SETTING "$SVC_DIR/.env.example"
+    ! grep -q BROKEN_SETTING "$SVC_DIR/.env.example" || false
     web_running    # the images kept for the rollback are released again
     [ -z "$(docker images -q labber-rollback)" ]
 }
@@ -300,5 +300,5 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     tty_run $'y\n' bash "$LABBER" clean
     echo "$output"
     [[ "$output" == *"docker cleaned"* ]]
-    ! docker inspect labber-test-unused >/dev/null 2>&1
+    ! docker inspect labber-test-unused >/dev/null 2>&1 || false
 }

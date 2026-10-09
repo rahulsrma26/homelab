@@ -19,33 +19,33 @@ jobs:
     name: repo rules (.env templates, compose vars, no private IPs)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: bash tests/repo/lint.sh
 
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: tests/repo/shellcheck.sh
 
   labber-unit:
     name: labber unit tests + Alloy configs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: tests/labber/run-unit.sh
 
   labber-setup:
     name: labber setup in a fresh container (LXC path)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: tests/labber/run-setup.sh
 
   monitoring:
     name: Prometheus rules + Alertmanager config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: tests/monitoring/run.sh
