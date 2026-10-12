@@ -102,6 +102,33 @@ groups:
         annotations:
           summary: "SMART health FAILED on {{ $labels.instance }} device {{ $labels.device }}"
 
+  # memory (EDAC: ECC / IB-ECC) and ZFS pools, pushed by Alloy from the Proxmox hosts
+  - name: hardware
+    rules:
+      # data may already be wrong: act at once
+      - alert: MemoryUncorrectableError
+        expr: increase(node_edac_uncorrectable_errors_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Uncorrectable memory (ECC) error on {{ $labels.instance }}, memory controller {{ $labels.controller }}"
+
+      # one corrected error now and then is normal; a steady stream means a failing module
+      - alert: MemoryCorrectableErrors
+        expr: increase(node_edac_correctable_errors_total[24h]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} corrected memory (ECC) errors in 24h on {{ $labels.instance }}, memory controller {{ $labels.controller }}"
+
+      - alert: ZfsPoolNotOnline
+        expr: node_zfs_zpool_state{state!="online"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} is {{ $labels.state }}"
+
   # container metrics pushed by Alloy on Docker hosts (job guest-containers)
   - name: containers
     rules:

@@ -26,6 +26,9 @@ Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   RebootRequired       newer kernel installed for over a day
   ServicesNeedRestart  services on outdated libraries for over a day
   SecurityUpdatesStuck security updates pending for a week
+  MemoryUncorrectableError  an uncorrectable ECC / IB-ECC error (EDAC) on a Proxmox host
+  MemoryCorrectableErrors   more than 3 corrected ECC errors in 24h (a failing module)
+  ZfsPoolNotOnline     a ZFS pool degraded/faulted for 5 min
   ContainerRestarting  a container restarted 3+ times in 15 min (Docker hosts)
   ContainerGone        a container that was running stopped or was removed
   ContainerOOMKilled   a container ran out of memory
