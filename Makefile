@@ -1,6 +1,6 @@
 SERVICES := $(shell find services -maxdepth 3 -name docker-compose.yml -exec dirname {} \; | sed 's|^services/||' | sort)
 
-.PHONY: help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-lint ci $(SERVICES)
+.PHONY: help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-scripts test-lint ci $(SERVICES)
 
 help:
 	@echo "Usage: make <service|labber>"
@@ -40,13 +40,17 @@ test-labber-vm:
 test-monitoring:
 	tests/monitoring/run.sh
 
+# scripts/ end-to-end: NUT server/client/monitor with a simulated UPS (systemd containers)
+test-scripts:
+	tests/scripts/run-nut.sh
+
 # repo rules (CLAUDE.md) + shellcheck — what CI runs besides the tests above
 test-lint:
 	tests/repo/run.sh
 	tests/repo/shellcheck.sh
 
 # everything CI runs
-ci: test-lint test-labber-unit test-labber-setup test-monitoring
+ci: test-lint test-labber-unit test-labber-setup test-monitoring test-scripts
 
 $(SERVICES):
 	git add services/$@ && git commit -m "$@: update" && git push origin main

@@ -8,7 +8,7 @@ Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for 
 |---|---|
 | [`labber/`](labber/) | **labber**, the bash tool that sets up fresh LXCs/VMs and installs, updates and monitors the services |
 | [`services/`](services/) | one folder per service: `docker-compose.yml`, `.env.example` (with templates labber fills in), `README.txt` |
-| [`scripts/`](scripts/) | one-off host scripts, run with one command from GitHub (e.g. Proxmox systemd-boot → GRUB + update hook). See [scripts/README.md](scripts/README.md) |
+| [`scripts/`](scripts/) | one-off host scripts, run with one command from GitHub (Proxmox systemd-boot → GRUB, NUT UPS setup). See [scripts/README.md](scripts/README.md) |
 | [`tests/`](tests/) | labber unit tests (in Docker) and integration tests (on a throwaway VM); Prometheus alert-rule tests |
 | [`tools/`](tools/) | install scripts and dotfiles (`labber tool <name>`) |
 
@@ -51,6 +51,7 @@ make test-labber-unit                                  # labber unit tests + All
 make test-labber-setup                                 # labber setup from scratch in systemd containers (LXC and VM paths)
 LABBER_TEST_HOST=user@vm make test-labber-vm           # labber integration tests on a test VM
 make test-monitoring                                   # Prometheus rules + Alertmanager config
+make test-scripts                                      # scripts/ end-to-end (NUT with a simulated UPS)
 make test-lint                                         # repo rules (templates, compose vars, no private IPs) + shellcheck
 make ci                                                # everything CI runs on each push
 ```
