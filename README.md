@@ -8,6 +8,7 @@ Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for 
 |---|---|
 | [`labber/`](labber/) | **labber**, the bash tool that sets up fresh LXCs/VMs and installs, updates and monitors the services |
 | [`services/`](services/) | one folder per service: `docker-compose.yml`, `.env.example` (with templates labber fills in), `README.txt` |
+| [`scripts/`](scripts/) | one-off host scripts, run with one command from GitHub (e.g. Proxmox systemd-boot → GRUB + update hook). See [scripts/README.md](scripts/README.md) |
 | [`tests/`](tests/) | labber unit tests (in Docker) and integration tests (on a throwaway VM); Prometheus alert-rule tests |
 | [`tools/`](tools/) | install scripts and dotfiles (`labber tool <name>`) |
 

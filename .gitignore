@@ -3,6 +3,7 @@
 !*.env.example
 personal/
 internal/
+manuals/
 .obsidian/
 tmp/
 .venv/
