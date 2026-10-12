@@ -22,6 +22,16 @@ if [ -z "${PROMETHEUS_URL}" ] || [ -z "${LOKI_URL}" ]; then
   exit 1
 fi
 
+# catch typos like "http:///host" or a missing scheme before they end up in the config
+for url in "${PROMETHEUS_URL}" "${LOKI_URL}"; do
+  if [[ ! "${url}" =~ ^https?://[^/]+ ]]; then
+    echo "Not a valid URL: ${url} (expected e.g. http://192.168.management.monitoring:9090)"
+    exit 1
+  fi
+done
+PROMETHEUS_URL="${PROMETHEUS_URL%/}"
+LOKI_URL="${LOKI_URL%/}"
+
 echo "=== Installing smartctl_exporter v${SMARTCTL_EXPORTER_VERSION} ==="
 
 curl -fsSL "https://github.com/prometheus-community/smartctl_exporter/releases/download/v${SMARTCTL_EXPORTER_VERSION}/smartctl_exporter-${SMARTCTL_EXPORTER_VERSION}.linux-${ARCH}.tar.gz" \
