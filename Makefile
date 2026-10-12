@@ -11,6 +11,9 @@ help:
 add:
 	git add services && git add labber && git add tools && git add tests && git add README.md && git commit -m "all update" && git push origin main
 
+scripts:
+	git add scripts && git commit -m "scripts: update" && git push origin main
+
 service:
 	git add services && git commit -m "services: update" && git push origin main
 
