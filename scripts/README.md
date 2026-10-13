@@ -7,6 +7,7 @@ One-off host scripts, each meant to be run straight from GitHub with a single co
 | Script | For | What it does |
 |---|---|---|
 | [`proxmox-grub-boot.sh`](#proxmox-grub-bootsh) | a Proxmox VE host (ZFS root, UEFI) | switches the boot loader from systemd-boot to GRUB on every boot disk, and keeps GRUB synced after updates |
+| [`samba-setup.sh`](#samba-setupsh) | any Debian machine or LXC | native Samba (SMB) shares, hardened: SMB3 + encryption, no NetBIOS/guests; security fixes via Debian's automatic updates |
 | [`nut-setup.sh`](#nut-setupsh) | a Proxmox host or any Debian machine (e.g. an Orange Pi) | sets up NUT, so the machine shuts down cleanly on a power cut. Covers the UPS server, the clients on the same UPS, and monitor-only setups |
 
 ---
@@ -143,6 +144,47 @@ Flags: `--role`, `--policy`, `--timer <s>`, `--ups <name>`, `--server <ip>` (cli
 - `fsd-timer`: the client goes down first, then the server.
 
 Not covered by the test: real USB detection, cutting a real UPS's output, and the mail.
+
+---
+
+## samba-setup.sh
+
+**Run it** as root in the machine or LXC that has the folders (on a `sudo` machine: `sudo -i` first):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/samba-setup.sh)
+```
+
+It asks for a login name, the shares and an optional network limit. Or give them as flags:
+
+```bash
+… --user alice --share files=/mnt/files --share media=/mnt/media --share vault=/mnt/vault:ro \
+  --allow "192.168.<home-vlan>.0/24 100.64.0.0/10"
+```
+
+| Flag | |
+|---|---|
+| `--user NAME` | the SMB login. A no-login system user plus a Samba password. The password is generated and **printed once**, unless given with `--password` |
+| `--share NAME=PATH[:ro]` | repeatable; `:ro` = read-only. Default (interactive): `files`, `media`, `vault:ro` when `/mnt/files`, `/mnt/media`, `/mnt/vault` exist |
+| `--owner USER` | everything written over SMB belongs to this user (default `root`, i.e. the LXC's root in an unprivileged LXC), so other tools on the same folders agree on ownership |
+| `--allow "CIDR …"` | only these networks may connect (`hosts allow`; localhost always). Default: any |
+| `--dry-run` / `--yes` | print the generated `smb.conf` and change nothing / no questions |
+
+**Why native, not a container:** Samba gets regular security fixes. From Debian's package, they install automatically (unattended-upgrades).
+
+**Hardening in the generated `smb.conf`:**
+- **SMB3 only** (`server min protocol = SMB3_00`), with **encryption whenever the client supports it** (`smb encrypt = desired`): macOS negotiates SMB 3.1.1 with AES-GCM.
+- **Port 445 only:** NetBIOS and `nmbd` off, nothing on 139.
+- **No guests, no anonymous listing,** no printers; logs go to the journal.
+- **macOS:** `catia fruit streams_xattr`, so Finder tags, metadata and odd file names work. No executable bit on new files (`map archive = no`).
+
+**Re-runs:**
+- **Safe:** the old config is kept as `smb.conf.bak-<date>`, the new one must pass `testparm` before it replaces it, and the password stays unless `--password` is given.
+- **Checks:** the script ends by checking that `smbd` listens on 445, and by **testing a real login** whenever it knows the password.
+
+**Tested:**
+- **On a Debian 13 VM**, from a Mac: mounted over SMB 3.1.1 with encryption required. A Finder tag round-tripped; `vault` refused writes. `--allow` without the Mac's network refused it.
+- **On every CI run** in a systemd container (`make test-scripts`): wrong password, anonymous, guest and SMB 2.1 refused; writes owned by the forced owner; read-only share; AES-encrypted SMB3 session; re-run keeps the password; `--allow` blocks.
 
 ---
 

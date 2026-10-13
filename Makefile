@@ -1,12 +1,17 @@
 SERVICES := $(shell find services -maxdepth 3 -name docker-compose.yml -exec dirname {} \; | sed 's|^services/||' | sort)
 
-.PHONY: help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-scripts test-lint ci $(SERVICES)
+.PHONY: hooks help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-scripts test-lint ci $(SERVICES)
 
 help:
 	@echo "Usage: make <service|labber>"
 	@echo ""
 	@echo "Available services:"
 	@for s in $(SERVICES); do echo "  $$s"; done
+
+# turn on the repo's git hooks (.githooks/pre-push: no personal details, IPs, keys, .env)
+hooks:
+	git config core.hooksPath .githooks
+	@echo "hooks on: every push runs the repo lint (personal/lint-denylist.txt for your own words)"
 
 add:
 	git add services && git add labber && git add tools && git add tests && git add README.md && git commit -m "all update" && git push origin main
@@ -40,9 +45,10 @@ test-labber-vm:
 test-monitoring:
 	tests/monitoring/run.sh
 
-# scripts/ end-to-end: NUT server/client/monitor with a simulated UPS (systemd containers)
+# scripts/ end-to-end in systemd containers: NUT (simulated UPS) and Samba
 test-scripts:
 	tests/scripts/run-nut.sh
+	tests/scripts/run-samba.sh
 
 # repo rules (CLAUDE.md) + shellcheck — what CI runs besides the tests above
 test-lint:

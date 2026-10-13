@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# pre-push: refuse a push that would publish personal details, private IPs, keys or .env
+# files (the rules in tests/repo/lint.sh, plus your local personal/lint-denylist.txt).
+# Checks the working tree AND the lines the pushed commits add — a secret committed and
+# deleted again would still be in the history.
+# Turn on once per clone: make hooks   ·   Emergency bypass: git push --no-verify
+set -uo pipefail
+repo=$(git rev-parse --show-toplevel); cd "$repo" || exit 1
+zero=0000000000000000000000000000000000000000
+
+# the lint needs bash 4+: a newer bash here if there is one (Homebrew), else Docker
+lint() {
+    local b
+    for b in /opt/homebrew/bin/bash /usr/local/bin/bash bash; do
+        if command -v "$b" >/dev/null 2>&1 && "$b" -c '((BASH_VERSINFO[0] >= 4))' 2>/dev/null; then
+            "$b" tests/repo/lint.sh "$@"; return
+        fi
+    done
+    if docker info >/dev/null 2>&1; then tests/repo/run.sh "$@"; return; fi
+    echo "pre-push: the repo lint needs bash 4+ (brew install bash) or a running Docker"
+    return 1
+}
+
+ok=1
+echo "pre-push: checking the working tree…"
+lint || ok=0
+while read -r lref lsha _ rsha; do
+    [[ "$lsha" == "$zero" ]] && continue                      # deleting a branch
+    if [[ "$rsha" == "$zero" ]] || ! git cat-file -e "$rsha^{commit}" 2>/dev/null; then
+        range="$lsha --not --remotes"                         # new branch / remote unknown here
+    else
+        range="$rsha..$lsha"
+    fi
+    echo "pre-push: checking the commits being pushed ($lref)…"
+    lint --diff "$range" || ok=0
+done
+if (( ! ok )); then
+    echo
+    echo "pre-push: push refused — fix the lines above, then push again."
+    echo "          (a commit that adds them must be changed too: git commit --amend / git rebase -i)"
+    exit 1
+fi

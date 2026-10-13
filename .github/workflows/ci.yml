@@ -55,8 +55,9 @@ jobs:
       - run: tests/monitoring/run.sh
 
   scripts:
-    name: scripts/ (NUT setup with a simulated UPS)
+    name: scripts/ (NUT with a simulated UPS, Samba)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: tests/scripts/run-nut.sh
+      - run: tests/scripts/run-samba.sh

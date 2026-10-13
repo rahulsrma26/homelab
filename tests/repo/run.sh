@@ -6,4 +6,4 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
 docker build -q -t labber-unit -f "$repo/tests/labber/Dockerfile.unit" "$repo/tests/labber" >/dev/null
 docker run --rm -v "$repo:/repo:ro" labber-unit bash -c \
-    'git config --global --add safe.directory /repo && bash /repo/tests/repo/lint.sh'
+    'git config --global --add safe.directory /repo && bash /repo/tests/repo/lint.sh "$@"' lint "$@"

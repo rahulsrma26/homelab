@@ -34,8 +34,8 @@ Full guide: [labber/README.md](labber/README.md).
 
 | Area | Services |
 |---|---|
-| Access & security | Authelia + LLDAP (SSO), Vaultwarden, Nginx Proxy Manager, Traefik |
-| Monitoring | Prometheus, Grafana, Loki, Alertmanager (→ Telegram), InfluxDB, pve-exporter, Uptime Kuma |
+| Access & security | Authelia + LLDAP (SSO), Vaultwarden, Traefik (LAN reverse proxy, or the public entry via Cloudflare Tunnel), Nginx Proxy Manager (being retired) |
+| Monitoring | Prometheus, Grafana, Loki, Alertmanager (→ Telegram), InfluxDB, pve-exporter; Uptime Kuma (separate) |
 | Media & files | Jellyfin, Immich public proxy, FileBrowser Quantum, MeTube |
 | Documents | Paperless-ngx, Paperless-GPT |
 | AI | llama.cpp (CUDA, plus a TurboQuant build), LibreChat, voice assistant agent |
@@ -52,13 +52,14 @@ make test-labber-setup                                 # labber setup from scrat
 LABBER_TEST_HOST=user@vm make test-labber-vm           # labber integration tests on a test VM
 make test-monitoring                                   # Prometheus rules + Alertmanager config
 make test-scripts                                      # scripts/ end-to-end (NUT with a simulated UPS)
-make test-lint                                         # repo rules (templates, compose vars, no private IPs) + shellcheck
+make test-lint                                         # repo rules (templates, compose vars, private IPs, keys, personal details) + shellcheck
+make hooks                                             # once per clone: the same rules on every git push
 make ci                                                # everything CI runs on each push
 ```
 
 ## Conventions
 
-This repo is public. No secrets, real IPs, private hostnames or personal details. Addresses are written as `192.168.<vlan>.<host>`, and secrets as `{{ name | generate(…) }}` templates in `.env.example`. Anything private lives in gitignored folders. See [CLAUDE.md](CLAUDE.md).
+This repo is public. No secrets, real IPs, private hostnames or personal details. Once per clone, run **`make hooks`**: every `git push` then runs the repo lint on the working tree **and on the pushed commits**, and refuses the push if anything slips through. Put your own words (domain, names, e-mail) in `personal/lint-denylist.txt` (gitignored); the hook checks those too. Addresses are written as `192.168.<vlan>.<host>`, and secrets as `{{ name | generate(…) }}` templates in `.env.example`. Anything private lives in gitignored folders. See [CLAUDE.md](CLAUDE.md).
 
 ## License
 

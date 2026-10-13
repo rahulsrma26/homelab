@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.0"
+VERSION="4.2.2"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1566,7 +1566,7 @@ step_title() {
         docker)     echo "Docker (official repo) + compose/buildx" ;;
         dockerlogs) echo "Docker log rotation (10 MB x 3)" ;;
         guestagent) echo "qemu-guest-agent" ;;
-        labber)     echo "install labber (for the admin user on a VM)" ;;
+        labber)     echo "install labber (for root in an LXC, the admin user in a VM)" ;;
         fzf)        echo "fzf (from repo tools/)" ;;
         nfs)        echo "NFS client (nfs-common)" ;;
         fail2ban)   echo "fail2ban for SSH" ;;
@@ -1669,8 +1669,9 @@ st_hostname_status() {
 st_hostname_run() {
     local cur_tz def_tz tz
     cur_tz=$(current_tz)
-    def_tz="$cur_tz"; [[ -z "$def_tz" || "$def_tz" == *UTC* ]] && def_tz="Europe/London"
-    tz=$(ask "timezone" "$def_tz")
+    # suggest what the machine has; a fresh LXC/VM is usually on UTC — type yours, e.g. Region/City
+    def_tz="${cur_tz:-Etc/UTC}"
+    tz=$(ask "timezone (Region/City — list: timedatectl list-timezones)" "$def_tz")
     if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
         ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime
         echo "$tz" > /etc/timezone
