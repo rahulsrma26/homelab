@@ -1,0 +1,142 @@
+# Immich (photos) + Immich Kiosk, based on Immich's own compose file
+# (https://github.com/immich-app/immich/releases/latest/download/docker-compose.yml).
+# The library is mounted at /data: the database stores every file as /data/library/…,
+# so this path must never change. Database and model cache live on the machine's own
+# disk (fast); the library is a separate mount (e.g. an LXC bind mount from ZFS).
+name: immich
+
+services:
+  immich-server:
+    container_name: immich_server
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    devices:
+      - /dev/dri:/dev/dri          # Intel iGPU: hardware transcoding (enable in Admin → Video transcoding)
+    volumes:
+      - ${UPLOAD_LOCATION}:/data
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - .env
+    ports:
+      - "2283:2283"
+    depends_on:
+      - redis
+      - database
+    restart: always
+    healthcheck:
+      disable: false
+
+  # ── optional containers: each asked yes/no at install (COMPOSE_PROFILES in .env) ──
+
+  # local machine learning (OpenVINO on the iGPU). With a faster ML server elsewhere,
+  # list both in Admin → Machine Learning → URL: Immich tries them in order, so this one
+  # is the fallback when the other is off. Without it (and without another ML server),
+  # smart search, faces and duplicate detection don't run.
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    profiles: [ml-yes]
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}-openvino
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - model-cache:/cache
+    env_file:
+      - .env
+    restart: always
+    healthcheck:
+      disable: false
+
+  redis:
+    container_name: immich_redis
+    image: docker.io/valkey/valkey:8-bookworm@sha256:fea8b3e67b15729d4bb70589eb03367bab9ad1ee89c876f54327fc7c6e618571
+    healthcheck:
+      test: redis-cli ping || exit 1
+    restart: always
+
+  database:
+    container_name: immich_postgres
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:41eacbe83eca995561fe43814fd4891e16e39632806253848efaf04d3c8a8b84
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: ${DB_DATABASE_NAME}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
+    shm_size: 128mb
+    restart: always
+
+  # Immich Kiosk: a slideshow web page (:3502)
+  immich-kiosk:
+    profiles: [kiosk-yes]
+    image: ghcr.io/damongolding/immich-kiosk:latest
+    container_name: immich_kiosk
+    tty: true
+    environment:
+      LANG: ${KIOSK_LANG}
+      TZ: ${TZ}
+      KIOSK_IMMICH_API_KEY: ${KIOSK_IMMICH_API_KEY}
+      KIOSK_IMMICH_URL: http://immich-server:2283
+      # Clock
+      KIOSK_SHOW_TIME: true
+      KIOSK_TIME_FORMAT: 24
+      KIOSK_SHOW_DATE: true
+      KIOSK_DATE_FORMAT: DD-MMM
+      KIOSK_CLOCK_SOURCE: client
+      # Kiosk behaviour
+      KIOSK_DURATION: 30
+      KIOSK_DISABLE_SCREENSAVER: false
+      KIOSK_OPTIMIZE_IMAGES: false
+      KIOSK_USE_GPU: true
+      # Image metadata
+      KIOSK_SHOW_ALBUM_NAME: true
+      KIOSK_SHOW_IMAGE_DATE: true
+      KIOSK_IMAGE_DATE_FORMAT: YYYY-MM-DD
+      KIOSK_SHOW_IMAGE_DESCRIPTION: true
+      KIOSK_SHOW_IMAGE_LOCATION: true
+    ports:
+      - "3502:3000"
+    volumes:
+      - ${KIOSK_CONFIG_LOCATION}:/config
+    restart: unless-stopped
+
+  # ImmichFrame: a digital photo frame web page (:3503). Configure it at /admin
+  # (connect it to Immich there); settings are stored in IMMICHFRAME_CONFIG_LOCATION.
+  immichframe:
+    profiles: [frame-yes]
+    image: ghcr.io/immichframe/immichframe:latest
+    container_name: immichframe
+    environment:
+      TZ: ${TZ}
+      IMMICHFRAME_ADMIN_PASSWORD: ${IMMICHFRAME_ADMIN_PASSWORD}
+    ports:
+      - "3503:8080"
+    volumes:
+      - ${IMMICHFRAME_CONFIG_LOCATION}:/app/Config
+    restart: unless-stopped
+
+  # Immich Power Tools: bulk tools (people merging, missing locations, …) (:3504).
+  # Reads Immich's database directly, with the same DB_* values as the server.
+  immich-power-tools:
+    profiles: [powertools-yes]
+    image: ghcr.io/immich-power-tools/immich-power-tools:latest
+    container_name: immich_power_tools
+    environment:
+      IMMICH_URL: http://immich-server:2283
+      EXTERNAL_IMMICH_URL: ${EXTERNAL_IMMICH_URL}
+      IMMICH_API_KEY: ${POWER_TOOLS_IMMICH_API_KEY}
+      DB_HOST: immich_postgres
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE_NAME: ${DB_DATABASE_NAME}
+    ports:
+      - "3504:3000"
+    volumes:
+      - power-tools-data:/app/data
+    depends_on:
+      - database
+    restart: unless-stopped
+
+volumes:
+  model-cache:
+  power-tools-data:
