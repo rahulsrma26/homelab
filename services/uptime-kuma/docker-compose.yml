@@ -1,0 +1,12 @@
+services:
+  # checks from the outside that each service actually answers (HTTP/TCP/ping), alerts via Telegram.
+  # Runs apart from the monitoring stack (and its host), so it can report when that host is down.
+  # Multi-arch image: also runs on arm64 boards (e.g. an Orange Pi).
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/app/data

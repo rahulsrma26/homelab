@@ -7,7 +7,6 @@ Services:
   influxdb      :8086  Time-series storage for Home Assistant (365d retention)
   alertmanager  :9093  Alert routing to Telegram
   pve-exporter  :9221  Proxmox API metrics for Prometheus
-  uptime-kuma   :3001  Checks that each service actually answers; alerts via Telegram
 
 Before deployment:
   .env
@@ -43,9 +42,5 @@ Dashboards (Grafana → Homelab folder, provisioned from config/grafana/provisio
 Container metrics for this host's own containers come from Alloy, like on every other
 Docker host — set up this LXC/VM with `labber setup` and answer yes to Docker.
 
-Uptime Kuma (http://<monitoring-host>:3001), once after deployment:
-  1. Create the admin account.
-  2. Settings → Notifications → add Telegram (same bot and chat as .env), tick "Default enabled".
-  3. Add a monitor per service: HTTP(s) with its URL (e.g. http://192.168.server.jellyfin:8096),
-     interval 60s; TCP Port for services without a web page.
-  Monitors and history live in the uptime-kuma-data volume (in the LXC's PBS backups).
+Uptime Kuma is its own service (services/uptime-kuma), on a different machine, so it can
+report when this host is down. It checks Grafana, Prometheus and Home Assistant from the outside.

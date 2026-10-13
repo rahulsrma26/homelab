@@ -1,0 +1,39 @@
+# Routes: one router + one service per app. Edit this file in the installed service folder
+# (labber keeps your edits on update); Traefik reloads it by itself, no restart needed.
+# {{ env "DOMAIN" }} is filled in by Traefik from .env. The DNS name (<name>.DOMAIN) must
+# resolve to this LXC (local DNS / UniFi / Technitium).
+#
+# Pattern — copy for each app:
+#   routers:   <name>: rule Host(`<name>.{{ env "DOMAIN" }}`), entryPoints [websecure], service <name>
+#   services:  <name>: the app's address (http://<ip>:<port>)
+http:
+  routers:
+    dashboard:
+      entryPoints: [websecure]
+      rule: Host(`traefik.{{ env "DOMAIN" }}`)
+      service: api@internal
+      middlewares: [secure-headers]
+
+    example:
+      entryPoints: [websecure]
+      rule: Host(`example.{{ env "DOMAIN" }}`)
+      service: example
+      middlewares: [secure-headers]
+
+    # an app with a self-signed certificate of its own (e.g. Proxmox on :8006)
+    proxmox-example:
+      entryPoints: [websecure]
+      rule: Host(`pve-example.{{ env "DOMAIN" }}`)
+      service: proxmox-example
+
+  services:
+    example:
+      loadBalancer:
+        servers:
+          - url: http://192.168.server.example:8080
+
+    proxmox-example:
+      loadBalancer:
+        serversTransport: skip-verify
+        servers:
+          - url: https://192.168.management.example:8006

@@ -1,0 +1,14 @@
+# Shared pieces the routes in routes.yml can use.
+http:
+  middlewares:
+    secure-headers:
+      headers:
+        frameDeny: true
+        contentTypeNosniff: true
+        referrerPolicy: strict-origin-when-cross-origin
+        stsSeconds: 31536000
+
+  serversTransports:
+    # for backends with self-signed certificates (Proxmox, PBS, TrueNAS)
+    skip-verify:
+      insecureSkipVerify: true

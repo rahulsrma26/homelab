@@ -21,6 +21,19 @@ Each service directory contains:
 
 Services are deployed to `/opt/homelab/services/<service>/` on the target machine. Never commit a `.env`.
 
+### Variants and optional containers (no extra service folders)
+
+labber runs `docker compose` inside the service folder, so Compose reads two settings from `.env`. A `{{ … | choice(…) }}` template turns them into an install question:
+
+| Need | How | Example |
+|---|---|---|
+| **The same app in different setups** | a shared `docker-compose.yml` plus one `compose.<variant>.yml` per variant; `.env.example`: `COMPOSE_FILE=docker-compose.yml:compose.{{ mode \| choice(a,b) }}.yml` | `traefik`: `lan` (homelab proxy) or `cf` (public, behind a Cloudflare Tunnel) |
+| **Optional containers** | `profiles: [<name>]` on the container; `.env.example`: `COMPOSE_PROFILES={{ name \| default() }}` | a local ML worker that only some installs run |
+
+- **Switching later:** change the value in `.env`, then run `labber <svc> rebuild`. It removes the other variant's containers (`down --remove-orphans`).
+- **Variables:** the repo lint checks `${VARS}` in `compose.*.yml` files as well.
+- **Settings only one variant uses:** give them `default()`, so the other variant can just press Enter.
+
 ## Monitoring
 
 How VMs, LXCs and containers are watched (details in `monitoring/README.txt`):
@@ -30,6 +43,6 @@ How VMs, LXCs and containers are watched (details in `monitoring/README.txt`):
 | Every VM/LXC: up, CPU, memory, disk, network (seen from Proxmox) | pve-exporter in `monitoring` |
 | Inside each guest: disk, failed services, reboot needed, stuck updates, logs | Alloy, installed by `labber setup` |
 | Containers on Docker hosts: CPU, memory, restarts, OOM kills, logs; available updates | Alloy + `labber check-updates` |
-| Does each service actually answer? | Uptime Kuma, part of `monitoring` |
+| Does each service actually answer? | Uptime Kuma (`uptime-kuma`), on a different machine than `monitoring` so they watch each other |
 | Dashboards | Grafana → Homelab folder: Guests, Containers, Logs, Proxmox |
 | Alerts | Alertmanager → Telegram (rules tested with `make test-monitoring`) |
