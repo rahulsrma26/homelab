@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.2"
+VERSION="4.2.3"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1664,17 +1664,23 @@ current_tz() {
 }
 st_hostname_status() {
     local tz; tz=$(current_tz)
-    if [[ -z "$tz" || "$tz" == *UTC* ]]; then echo "todo: timezone ${tz:-unset}"; else echo "done: $(hostname), $tz"; fi
+    # UTC is how a fresh LXC/VM starts: only "done" once someone confirmed it here
+    if [[ -n "$tz" && ( "$tz" != *UTC* || "$tz" == "$(state_get timezone)" ) ]]; then
+        echo "done: $(hostname), $tz"
+    else
+        echo "todo: timezone ${tz:-unset}"
+    fi
 }
 st_hostname_run() {
     local cur_tz def_tz tz
     cur_tz=$(current_tz)
     # suggest what the machine has; a fresh LXC/VM is usually on UTC — type yours, e.g. Region/City
-    def_tz="${cur_tz:-Etc/UTC}"
+    def_tz=$(state_get timezone | grep . || echo "${cur_tz:-Etc/UTC}")
     tz=$(ask "timezone (Region/City — list: timedatectl list-timezones)" "$def_tz")
     if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
         ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime
         echo "$tz" > /etc/timezone
+        state_set timezone "$tz"
         ok "timezone $tz"
     else
         warn "unknown timezone '$tz' — skipped (list: ls /usr/share/zoneinfo)"

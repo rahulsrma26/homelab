@@ -72,6 +72,17 @@ setup() {
     [ -z "$(env_placeholders .env)" ]
 }
 
+@test "timezone step: UTC counts as done only once confirmed; real zones always do" {
+    current_tz() { echo Etc/UTC; }
+    [[ "$(st_hostname_status)" == "todo: timezone Etc/UTC" ]]      # fresh machine: not set yet
+    state_set timezone Etc/UTC
+    [[ "$(st_hostname_status)" == done:* ]]                         # someone chose UTC
+    current_tz() { echo Region/City; }
+    [[ "$(st_hostname_status)" == "done: $(hostname), Region/City" ]]
+    current_tz() { echo ""; }
+    [[ "$(st_hostname_status)" == "todo: timezone unset" ]]
+}
+
 @test "choice: values, validation and template parsing" {
     run tpl_list 'COMPOSE_FILE=a.yml:compose.{{ mode | choice(lan, cf) }}.yml'
     [ "$output" = $'mode\tchoice\tlan, cf' ]

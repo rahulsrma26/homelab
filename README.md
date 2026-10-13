@@ -1,5 +1,7 @@
 # homelab
 
+[![ci](https://github.com/rahulsrma26/homelab/actions/workflows/ci.yml/badge.svg)](https://github.com/rahulsrma26/homelab/actions/workflows/ci.yml)
+
 Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for self-hosted services, **labber** to deploy and run them, and monitoring for every machine, VM, LXC and container.
 
 ## Layout
