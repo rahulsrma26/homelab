@@ -1,6 +1,8 @@
 # scripts
 
-One-off host scripts, each meant to be run straight from GitHub with a single command. Each script also explains itself in its header comment.
+One-off host scripts, each meant to be run straight from GitHub with a single command.
+
+**As root.** On a machine where you log in as a normal user with `sudo` (e.g. an Orange Pi), switch to root first with `sudo -i`. `sudo bash <(curl …)` fails with `/dev/fd/63: No such file or directory`, because sudo closes the descriptor the downloaded script is passed through. Don't use `curl … | sudo bash` either: the script then has no terminal for its questions. Each script also explains itself in its header comment.
 
 | Script | For | What it does |
 |---|---|---|

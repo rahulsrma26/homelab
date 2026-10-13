@@ -188,12 +188,17 @@ case "$ROLE/$POLICY" in
 esac
 echo
 echo "${B}Plan${N}"
-echo "  role    : $ROLE${POLICY:+ ($POLICY)}"
+echo "  role    : $ROLE$([[ "$POLICY" != none ]] && echo " ($POLICY)")"
 echo "  UPS     : $UPS${SERVER:+ on $SERVER}${DESC:+ — $DESC}"
 echo "  action  : $what"
-[[ "$ROLE" != client ]] && echo "  listens : $LISTEN:3493 (users: upsmon, client, homeassistant)"
-echo "  alerts  : power events → syslog + mail to root$([[ -d /etc/pve ]] && echo " → Proxmox notifications")"
-echo "  writes  : /etc/nut/* (old copy in /etc/nut.bak-<date>), /usr/local/sbin/nut-notify$([[ "$POLICY" == *timer ]] && echo ", nut-upssched-cmd")"
+[[ "$ROLE" != client ]] && echo "  listens : $LISTEN:3493 (users: $([[ "$ROLE" == server ]] && echo "upsmon, ")client, homeassistant)"
+if [[ "$ROLE" == monitor ]]; then
+    echo "  alerts  : none from here (no upsmon) — clients and Home Assistant report power events"
+    echo "  writes  : /etc/nut/* (old copy in /etc/nut.bak-<date>)"
+else
+    echo "  alerts  : power events → syslog$([[ -x /usr/sbin/sendmail ]] && echo " + mail to root")$([[ -d /etc/pve ]] && echo " → Proxmox notifications")"
+    echo "  writes  : /etc/nut/* (old copy in /etc/nut.bak-<date>), /usr/local/sbin/nut-notify$([[ "$POLICY" == *timer ]] && echo ", nut-upssched-cmd")"
+fi
 echo
 if (( ! DRY && ! YES )); then
     read -rp "Continue? [y/N] " a || true
@@ -378,7 +383,7 @@ fi
 
 # ── summary ───────────────────────────────────────────────────────────────────
 echo
-ok "done: $ROLE ($POLICY) — $what"
+ok "done: $ROLE$([[ "$POLICY" != none ]] && echo " ($POLICY)") — $what"
 if [[ "$ROLE" != client ]]; then
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}' | head -1)
     if (( NEWPW )); then
