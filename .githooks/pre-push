@@ -22,6 +22,13 @@ lint() {
 }
 
 ok=1
+refs=$(cat)
+# main is stable: only CI moves it (after every test passed on dev)
+if grep -qE ' refs/heads/main [0-9a-f]+$' <<<"$refs" && [[ "${ALLOW_MAIN:-}" != 1 ]]; then
+    echo "pre-push: don't push to main — push to dev; CI promotes it to main once every test passes."
+    echo "          (emergency only: ALLOW_MAIN=1 git push …)"
+    exit 1
+fi
 echo "pre-push: checking the working tree…"
 lint || ok=0
 while read -r lref lsha _ rsha; do
@@ -33,7 +40,7 @@ while read -r lref lsha _ rsha; do
     fi
     echo "pre-push: checking the commits being pushed ($lref)…"
     lint --diff "$range" || ok=0
-done
+done <<<"$refs"
 if (( ! ok )); then
     echo
     echo "pre-push: push refused — fix the lines above, then push again."

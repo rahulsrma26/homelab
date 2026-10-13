@@ -1,10 +1,13 @@
-# Checks on every push and pull request: the same tests you run locally with make.
+# Checks on every push to dev and every pull request: the same tests you run locally with
+# make. When all of them pass on dev, "promote" fast-forwards main to that commit — main is
+# what machines install and update from (labber, the curl one-liners), so they only ever
+# get commits that passed CI. Nobody pushes to main directly (the pre-push hook refuses).
 # The VM integration tests (make test-labber-vm) need the test VM and stay manual.
 name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   pull_request:
 
 permissions:
@@ -61,3 +64,29 @@ jobs:
       - uses: actions/checkout@v5
       - run: tests/scripts/run-nut.sh
       - run: tests/scripts/run-samba.sh
+
+  # all of the above passed on dev → main = this commit (fast-forward only: if main has
+  # moved on its own, this fails instead of overwriting it)
+  promote:
+    name: promote to main (stable)
+    needs: [repo-lint, shellcheck, labber-unit, labber-setup, monitoring, scripts]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: promote-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "::error::main has commits that dev doesn't — not overwriting it. Merge main into dev (or reset main) by hand."
+            exit 1
+          fi
+          git push origin HEAD:refs/heads/main
+          echo "main → $(git rev-parse --short HEAD)"
+

@@ -60,3 +60,7 @@ Gitignored. Store here anything that doesn't meet the public rules above:
 - Install scripts (no hardcoded credentials or IPs)
 - Network diagrams and service registries with placeholder IPs
 - Hardware specs and setup guides
+
+## Branches
+
+Commit and push to **`dev`**, never to `main`. CI promotes `dev` to `main` (fast-forward) once every job passes; `main` is what machines install and update from. The pre-push hook refuses a push to `main` (`ALLOW_MAIN=1` only in an emergency).

@@ -8,28 +8,29 @@ help:
 	@echo "Available services:"
 	@for s in $(SERVICES); do echo "  $$s"; done
 
+# push to dev; CI fast-forwards main (what machines install from) once every test passes
 # turn on the repo's git hooks (.githooks/pre-push: no personal details, IPs, keys, .env)
 hooks:
 	git config core.hooksPath .githooks
 	@echo "hooks on: every push runs the repo lint (personal/lint-denylist.txt for your own words)"
 
 add:
-	git add services && git add labber && git add tools && git add tests && git add README.md && git commit -m "all update" && git push origin main
+	git add services && git add labber && git add tools && git add tests && git add README.md && git commit -m "all update" && git push origin dev
 
 script:
-	git add scripts && git commit -m "scripts: update" && git push origin main
+	git add scripts && git commit -m "scripts: update" && git push origin dev
 
 service:
-	git add services && git commit -m "services: update" && git push origin main
+	git add services && git commit -m "services: update" && git push origin dev
 
 labber:
-	git add labber && git commit -m "labber: update" && git push origin main
+	git add labber && git commit -m "labber: update" && git push origin dev
 
 tool:
-	git add tools && git commit -m "tools: update" && git push origin main
+	git add tools && git commit -m "tools: update" && git push origin dev
 
 test:
-	git add tests && git commit -m "tests: update" && git push origin main
+	git add tests && git commit -m "tests: update" && git push origin dev
 
 # labber tests — see tests/labber/README.md
 test-labber-unit:
@@ -59,4 +60,4 @@ test-lint:
 ci: test-lint test-labber-unit test-labber-setup test-monitoring test-scripts
 
 $(SERVICES):
-	git add services/$@ && git commit -m "$@: update" && git push origin main
+	git add services/$@ && git commit -m "$@: update" && git push origin dev

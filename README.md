@@ -59,6 +59,12 @@ make hooks                                             # once per clone: the sam
 make ci                                                # everything CI runs on each push
 ```
 
+## Branches
+
+- **`dev`:** where changes go. Every push runs CI.
+- **`main`:** the **stable** branch, which machines install and update from (`labber update`, `labber check-updates`, the one-liners). Only CI moves it, fast-forwarding to a `dev` commit once **every** CI job has passed, so a broken build never reaches a machine.
+- **The pre-push hook** refuses direct pushes to `main`.
+
 ## Conventions
 
 This repo is public. No secrets, real IPs, private hostnames or personal details. Once per clone, run **`make hooks`**: every `git push` then runs the repo lint on the working tree **and on the pushed commits**, and refuses the push if anything slips through. Put your own words (domain, names, e-mail) in `personal/lint-denylist.txt` (gitignored); the hook checks those too. Addresses are written as `192.168.<vlan>.<host>`, and secrets as `{{ name | generate(…) }}` templates in `.env.example`. Anything private lives in gitignored folders. See [CLAUDE.md](CLAUDE.md).
