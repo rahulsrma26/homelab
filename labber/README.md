@@ -118,6 +118,7 @@ Values in a service's `.env.example` (in [`services/`](../services/)) that labbe
 | `{{ name \| generate(hex64) }}` | N random hex characters (`openssl rand -hex 32` → `hex64`); typed: exactly N hex | generates |
 | `{{ name \| generate(base64_32) }}` | N random bytes, base64-encoded | generates |
 | `{{ name \| generate(uuid) }}` | a UUID | generates |
+| `{{ name \| choice(lan,cf) }}` | one of the listed values (e.g. a service's mode); a wrong answer is asked again | — (skip leaves it unset) |
 | `{{ name \| generate([A-Za-z0-9],16) }}` | N random characters from a set (passwords, secrets with a minimum length); typed: at least N | generates |
 
 Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{ paperless_host }}:{{ paperless_port | default(8000) }}`. A name used several times in one `.env` is asked once and filled in everywhere (e.g. `{{ domain }}`).

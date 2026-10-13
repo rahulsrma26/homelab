@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.1.0"
+VERSION="4.2.0"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -443,6 +443,7 @@ labber_file() {
 #   {{ name }}                            you provide it (required)
 #   {{ name | default(8000) }}            asked; Enter keeps the default (default() = empty)
 #   {{ name | generate(hex64) }}          a secret, typed hidden; Enter generates it
+#   {{ name | choice(lan,cf) }}           one of the listed values (Enter = skip, like a required one)
 #       hexN            N random hex characters (typed value: exactly N hex chars)
 #       base64_N        N random bytes, base64-encoded
 #       uuid            a random UUID
@@ -450,7 +451,7 @@ labber_file() {
 #                       (typed value: at least N characters)
 # A name used several times in one .env is asked once and filled in everywhere.
 
-TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate)\(([^}]*)\)[[:space:]]*)?\}\}'
+TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate|choice)\(([^}]*)\)[[:space:]]*)?\}\}'
 
 # N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'.
 # Fails (instead of looping forever) on a set that yields nothing.
@@ -515,6 +516,22 @@ gen_value() {
         *)        local set="${1%,*}"; set="${set#[}"; set="${set%]}"
                   rand_chars "${1##*,}" "$set" ;;
     esac
+}
+
+# choice(a,b,c): the allowed values, one per line (spaces around them ignored)
+choice_values() {
+    local v vals
+    IFS=',' read -ra vals <<< "$1"
+    for v in "${vals[@]}"; do
+        v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+        [[ -n "$v" ]] && echo "$v"
+    done
+}
+
+# a choice(...) spec is usable: at least two distinct, non-empty values
+choice_known() {
+    local n; n=$(choice_values "$1" | sort -u | wc -l)
+    (( n >= 2 ))
 }
 
 # is a typed value acceptable for the generator?
@@ -658,6 +675,15 @@ fill_env_placeholders() {
             default)
                 read -rp "  $n [${arg[$n]}]: " v
                 value[$n]="${v:-${arg[$n]}}" ;;
+            choice)
+                local opts; opts=$(choice_values "${arg[$n]}" | paste -sd'|' -)
+                if ! choice_known "${arg[$n]}"; then warn "$n: choice(${arg[$n]}) needs at least two values — left unset"; continue; fi
+                while true; do
+                    read -rp "  $n ($opts), Enter to skip: " v
+                    if [[ -z "$v" ]]; then warn "$n left unset"; break; fi
+                    if choice_values "${arg[$n]}" | grep -qxF -- "$v"; then value[$n]="$v"; break; fi
+                    warn "$n must be one of: $opts — try again"
+                done ;;
             *)
                 read -rp "  $n (required), Enter to skip: " v
                 if [[ -n "$v" ]]; then value[$n]="$v"; else warn "$n left unset"; fi ;;
@@ -2614,6 +2640,7 @@ ${W}Commands:${N}
 ${W}.env templates${N} (in .env.example — filled in on install/update/start):
   {{ name }}                        you provide it
   {{ name | default(8000) }}        asked; Enter keeps 8000
+  {{ name | choice(lan,cf) }}       pick one of the listed values
   {{ name | generate(hex64) }}      secret; Enter generates it — also base64_32, uuid,
                                     [A-Za-z0-9],16 (16 chars from that set)
   Placeholders can sit inside a value: http://{{ host }}:{{ port | default(80) }}
