@@ -1,0 +1,14 @@
+# Trilium Notes (TriliumNext). Everything is in its data folder (SQLite + attachments).
+services:
+  trilium:
+    image: triliumnext/trilium:${TRILIUM_VERSION}
+    container_name: trilium
+    restart: unless-stopped
+    environment:
+      - TRILIUM_DATA_DIR=/home/node/trilium-data
+    ports:
+      - "${PORT:-8085}:8080"
+    volumes:
+      - ./data:/home/node/trilium-data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro

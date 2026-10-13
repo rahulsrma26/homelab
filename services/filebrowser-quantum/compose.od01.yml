@@ -1,0 +1,10 @@
+# od01 (the "files" LXC): its bind mounts of spool/encrypted/{vault,media,files}.
+# vault is read-only (Immich and Paperless own those files). Sources: config.od01.yaml.
+services:
+  filebrowser:
+    volumes:
+      - ./cache:/cache
+      - /mnt/vault:/srv/vault:ro
+      - /mnt/media:/srv/media
+      - /mnt/files:/srv/files
+      - ./config.od01.yaml:/home/filebrowser/data/config.yaml:ro

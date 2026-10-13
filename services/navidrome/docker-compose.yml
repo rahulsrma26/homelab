@@ -1,0 +1,17 @@
+# Navidrome — music server (web UI + Subsonic API for apps). The music library is
+# mounted read-only; Navidrome keeps its database and cache in ./data.
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    ports:
+      - "${PORT:-4533}:4533"
+    environment:
+      - ND_LOGLEVEL=warning
+      - ND_SCANNER_GROUPALBUMRELEASES=true
+      - TZ=${TZ}
+    volumes:
+      - ./data:/data
+      - ${MUSIC_DIR}:/music:ro

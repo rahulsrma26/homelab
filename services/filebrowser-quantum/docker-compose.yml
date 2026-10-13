@@ -1,13 +1,14 @@
+# Filebrowser Quantum — web file browser. The folders it shows depend on the machine,
+# chosen at install (COMPOSE_FILE in .env):
+#   w680  TrueNAS NFS mounts + the local ZFS pool          → compose.w680.yml
+#   od01  od01's datasets (vault read-only, media, files)  → compose.od01.yml
+# This file holds what both share.
 services:
   filebrowser:
     image: gtstef/filebrowser:stable
     container_name: filebrowser-quantum
     restart: unless-stopped
     volumes:
-      - /mysatapool/cache:/cache
-      - /mysatapool/zdata:/srv/zpool
-      - /mnt/media:/srv/media
-      - /mnt/extra:/srv/extra
       - ./data:/home/filebrowser/data
     ports:
       - "${PORT:-8448}:80"

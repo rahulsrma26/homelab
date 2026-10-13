@@ -1,0 +1,12 @@
+server:
+  cacheDir: /cache
+  sources:
+    - path: /srv/files
+      config:
+        defaultEnabled: true
+    - path: /srv/media
+      config:
+        defaultEnabled: true
+    - path: /srv/vault
+      config:
+        defaultEnabled: true

@@ -1,0 +1,8 @@
+# w680: TrueNAS datasets (NFS on the host) and the local pool. Sources: data/config.yaml.
+services:
+  filebrowser:
+    volumes:
+      - /mysatapool/cache:/cache
+      - /mysatapool/zdata:/srv/zpool
+      - /mnt/media:/srv/media
+      - /mnt/extra:/srv/extra

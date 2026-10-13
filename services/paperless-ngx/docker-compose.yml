@@ -15,10 +15,10 @@ services:
     ports:
       - "${PORT:-8075}:8000"
     volumes:
-      - ./data:/usr/src/paperless/data
-      - ./media:/usr/src/paperless/media
-      - ./export:/usr/src/paperless/export
-      - ./consume:/usr/src/paperless/consume
+      - ${PAPERLESS_DIR}/data:/usr/src/paperless/data
+      - ${PAPERLESS_DIR}/media:/usr/src/paperless/media
+      - ${PAPERLESS_DIR}/export:/usr/src/paperless/export
+      - ${CONSUME_DIR}:/usr/src/paperless/consume
     env_file: .env
     environment:
       PAPERLESS_REDIS: redis://broker:6379
@@ -37,6 +37,49 @@ services:
   tika:
     image: docker.io/apache/tika:latest
     restart: unless-stopped
+
+  # ── optional, each asked yes/no at install (COMPOSE_PROFILES in .env) ──
+
+  # Paperless-GPT: LLM-generated titles, tags, correspondents, and LLM OCR (:3002).
+  # Uses PAPERLESS_API_TOKEN and the LLM settings from .env.
+  paperless-gpt:
+    profiles: [gpt-yes]
+    image: icereed/paperless-gpt:latest
+    container_name: paperless-gpt
+    restart: unless-stopped
+    ports:
+      - "${GPT_PORT:-3002}:8080"
+    env_file: .env
+    environment:
+      PAPERLESS_BASE_URL: http://webserver:8000
+    volumes:
+      - ./paperless-gpt/prompts:/app/prompts
+    depends_on:
+      - webserver
+
+  # Paperless-AI: automatic tagging + chat with your documents (:3003). Connect it to
+  # Paperless and to an LLM in its web UI on first start (stored in ./paperless-ai).
+  paperless-ai:
+    profiles: [ai-yes]
+    image: clusterzx/paperless-ai:latest
+    container_name: paperless-ai
+    restart: unless-stopped
+    ports:
+      - "${AI_PORT:-3003}:3000"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      PAPERLESS_AI_PORT: 3000
+      RAG_SERVICE_URL: http://localhost:8000
+      RAG_SERVICE_ENABLED: "true"
+    volumes:
+      - ./paperless-ai:/app/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges=true
+    depends_on:
+      - webserver
 
 volumes:
   redisdata:

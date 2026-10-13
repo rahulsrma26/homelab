@@ -1,6 +1,13 @@
 # filebrowser-quantum
 
-Web-based file browser for accessing TrueNAS datasets mounted on the host via NFS.
+Web-based file browser. Which folders it shows depends on the machine, chosen at install (`filebrowser_host` → `COMPOSE_FILE` in `.env`):
+
+| Variant | Folders | Sources (config) |
+|---|---|---|
+| `w680` | TrueNAS datasets via NFS (`/mnt/media`, `/mnt/extra`) + the local pool (`/mysatapool/zdata`) | `data/config.yaml` |
+| `od01` | the `files` LXC's mounts: `/mnt/files`, `/mnt/media`, `/mnt/vault` (**read-only**: Immich and Paperless own those files) | `config.od01.yaml` |
+
+An install from before the variants existed is asked `filebrowser_host` on its next `labber update`: answer `w680` there.
 
 Source: https://github.com/gtsteffaniak/filebrowser
 
