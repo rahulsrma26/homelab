@@ -3,7 +3,7 @@
 # labber has to be able to fill in. Needs bash 4+ (run it with tests/repo/run.sh on a Mac).
 #   - .env.example: only {{ }} templates as placeholders (no changeme, no <...>), each one
 #     well-formed, every generate(...) one labber knows
-#   - docker-compose.yml: every ${VAR} without a default is in the service's .env.example
+#   - docker-compose.yml and compose.<variant>.yml: every ${VAR} without a default is in the service's .env.example
 #   - no private IP addresses (use 192.168.<vlan>.<host> names), no keys, no .env files committed
 set -uo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -27,10 +27,12 @@ while IFS= read -r f; do
         # every {{ must belong to a well-formed template
         rest="$val"
         while [[ "$rest" =~ $TPL_RE ]]; do rest="${rest/"${BASH_REMATCH[0]}"/}"; done
-        if [[ "$rest" == *"{{"* || "$rest" == *"}}"* ]]; then err "$f:$n" "malformed template (names are lowercase; functions: default(...), generate(...))"; fi
+        if [[ "$rest" == *"{{"* || "$rest" == *"}}"* ]]; then err "$f:$n" "malformed template (names are lowercase; functions: default(...), generate(...), choice(...))"; fi
         while IFS=$'\t' read -r name fn arg; do
-            [[ "$fn" == generate ]] || continue
-            gen_known "$arg" || err "$f:$n" "{{ $name }}: unknown generator '$arg'"
+            case "$fn" in
+                generate) gen_known "$arg" || err "$f:$n" "{{ $name }}: unknown generator '$arg'" ;;
+                choice)   choice_known "$arg" || err "$f:$n" "{{ $name }}: choice(...) needs at least two different values" ;;
+            esac
         done < <(tpl_list "$val")
     done < "$f"
 done < <(git ls-files --cached --others --exclude-standard -- '*.env.example')
@@ -45,7 +47,7 @@ while IFS= read -r compose; do
         grep -qx "$var" <<< "$example_keys" || err "$compose" "\${$var} has no default and isn't in .env.example"
     done < <(sed 's/\$\$//g' "$compose" | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*(:?\?[^}]*)?\}' \
                 | sed -E 's/^\$\{([A-Za-z0-9_]+).*/\1/' | sort -u)
-done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml')
+done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml')
 
 echo ":: private IP addresses"
 # documentation ranges (192.0.2.x, 198.51.100.x, 203.0.113.x) and public ones are fine;

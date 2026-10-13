@@ -72,6 +72,29 @@ setup() {
     [ -z "$(env_placeholders .env)" ]
 }
 
+@test "choice: values, validation and template parsing" {
+    run tpl_list 'COMPOSE_FILE=a.yml:compose.{{ mode | choice(lan, cf) }}.yml'
+    [ "$output" = $'mode\tchoice\tlan, cf' ]
+    [ "$(choice_values 'lan, cf ,x' | paste -sd' ' -)" = "lan cf x" ]
+    choice_known 'lan,cf'
+    ! choice_known 'lan' || false
+    ! choice_known 'lan,lan' || false
+    ! choice_known ' , ' || false
+}
+
+@test "fill: choice re-asks on an unknown value, Enter skips" {
+    command -v script >/dev/null || skip "needs script(1)"
+    printf 'F=docker-compose.yml:compose.{{ mode | choice(lan,cf) }}.yml\nG={{ other | choice(a,b) }}\n' > .env
+    printf 'source "%s"; set +u\nfill_env_placeholders .env\n' "$LABBER" > fill.sh
+    # answers: mode: "foo" (rejected) then "cf" · other: Enter (skipped)
+    run script -qefc "bash fill.sh" /dev/null <<< $'foo\ncf\n\n'
+    echo "$output"
+    [ "$(env_get .env F)" = "docker-compose.yml:compose.cf.yml" ]
+    [[ "$output" == *"mode (lan|cf)"* ]]
+    [[ "$output" == *"must be one of: lan|cf"* ]]
+    [ "$(env_placeholders .env)" = G ]
+}
+
 @test "fill: skipping a required value leaves it unset" {
     command -v script >/dev/null || skip "needs script(1)"
     printf 'TOKEN={{ token }}\nURL=http://{{ host | default(h) }}/{{ token }}\n' > .env
