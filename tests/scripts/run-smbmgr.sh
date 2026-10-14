@@ -62,7 +62,8 @@ x 'setpriv --reuid=1000 --regid=1000 --clear-groups rm /srv/st/files/inbox/scan.
 [[ -z "$(x 'find /srv/st -name ".smbmgr-check*"')" ]] || fail "the self-test left a file behind"
 pass "access: -ro reads only, -rw writes, users stay in their own share; writes owned by root"
 
-x "echo 'MySecretPassword123' | smbmgr user add me --rw files,docs --ro vault --password-stdin" >/dev/null || fail "user add"
+out=$(x "echo 'MySecretPassword123' | smbmgr user add me --rw files,docs --ro vault --password-stdin") || fail "user add"
+grep -q "smb://me@$ip/\$" <<<"$out" && grep -q "vault: smb://me@$ip/vault" <<<"$out" || { echo "$out"; fail "user add: no smb:// address"; }
 [[ "$(x "grep -c '^me	' /etc/smbmgr/secrets || true")" == 0 ]] || fail "personal password was stored"
 [[ -z "$(st docs me MySecretPassword123 'put /etc/hostname me.txt')" ]] || fail "me can't write docs"
 [[ "$(st vault me MySecretPassword123 'put /etc/hostname x')" == NT_STATUS_ACCESS_DENIED ]] || fail "me can write vault"

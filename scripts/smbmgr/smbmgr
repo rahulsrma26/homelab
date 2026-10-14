@@ -571,8 +571,20 @@ parse_access() {   # sets RW_LIST, RO_LIST, PW_STDIN from flags
     done
     return 0
 }
+# this machine's address on the network (the default route's source; not a Docker bridge)
+server_ip() {
+    local ip
+    ip=$(ip -4 route get 192.0.2.1 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i+1); exit } }' || true)
+    [[ -n "$ip" ]] || ip=$(hostname -I 2>/dev/null | awk '{ print $1 }' || true)
+    echo "${ip:-<this-machine>}"
+}
+connect_hint() {   # connect_hint <user> <share,share…> — where to point Finder
+    local ip s; ip=$(server_ip)
+    echo "  connect (Finder: ⌘K): smb://$1@$ip/"
+    for s in ${2//,/ }; do echo "    $s: smb://$1@$ip/$s"; done
+}
 cmd_user() {
-    local sub="${1:-}" name="${2:-}" pw
+    local sub="${1:-}" name="${2:-}" pw prw pro
     shift 2 2>/dev/null || true
     case "$sub" in
         add)
@@ -586,7 +598,8 @@ cmd_user() {
             ensure_account "$name"; set_samba_pw "$name" "$pw"
             table_set "$USERS" "$name" "$(printf '%s\t%s\t%s' "$name" "$RW_LIST" "$RO_LIST")"
             apply; audit "personal account added: $name (rw: ${RW_LIST:--}, ro: ${RO_LIST:--})"
-            ok "account $name: read-write ${RW_LIST:--}, read-only ${RO_LIST:--} (password not stored)" ;;
+            ok "account $name: read-write ${RW_LIST:--}, read-only ${RO_LIST:--} (password not stored)"
+            connect_hint "$name" "$(csv_clean "$RW_LIST,$RO_LIST")" ;;
         set)
             [[ -n "$(user_get "$name")" ]] || die "no account $name (smbmgr user list)"
             parse_access "$@"
@@ -598,7 +611,9 @@ cmd_user() {
             [[ -n "$(user_get "$name")" ]] || die "no account $name"
             parse_access "$@"
             pw=$(read_password "$name" "$PW_STDIN"); set_samba_pw "$name" "$pw"
-            audit "password changed: $name"; ok "password changed for $name" ;;
+            audit "password changed: $name"; ok "password changed for $name"
+            IFS=$'\t' read -r _ prw pro <<<"$(user_get "$name")"
+            connect_hint "$name" "$(csv_clean "$prw,$pro")" ;;
         remove|rm)
             [[ -n "$(user_get "$name")" ]] || die "no account $name (smbmgr user list)"
             confirm "Delete account $name? Macs logged in as $name lose access."

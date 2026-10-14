@@ -34,7 +34,7 @@ smbmgr remove docs                       # share gone; its users disabled (--pur
 smbmgr move docs /mnt/files/papers       # a new folder; users and passwords stay
 smbmgr refresh [docs]                    # the mount became writable / read-only → -rw added / disabled
 
-smbmgr user add alice --rw docs,files --ro photos    # a personal account; password asked
+smbmgr user add alice --rw docs,files --ro photos    # a personal account; password asked; prints smb://alice@<ip>/
 smbmgr user set alice --rw docs --ro photos         # change its shares
 smbmgr user passwd alice | user remove alice | user list
 smbmgr user set alice                               # refused: give shares, or user remove
