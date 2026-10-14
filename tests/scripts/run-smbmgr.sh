@@ -23,12 +23,15 @@ image=labber-setup-test c="smbmgr-test-$$"
 trap 'docker rm -f "$c" >/dev/null 2>&1 || true' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok   $*"; }
+# grep that reads all of its input: `… | grep -q` can fail under pipefail when grep
+# quits early and the writer gets SIGPIPE (a flaky "not found")
+has() { grep "$@" >/dev/null; }
 
 docker build -q -t "$image" "$repo/tests/labber/setup" >/dev/null
 docker run -d --name "$c" --hostname "$c" --privileged --cgroupns=host \
     -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock "$image" >/dev/null
 docker cp "$repo/scripts/smbmgr" "$c:/smbmgr-src"
-for _ in $(seq 30); do docker exec "$c" systemctl is-system-running 2>/dev/null | grep -qE "running|degraded" && break; sleep 1; done
+for _ in $(seq 30); do docker exec "$c" systemctl is-system-running 2>/dev/null | has -E "running|degraded" && break; sleep 1; done
 x() { docker exec "$c" bash -c "$1"; }
 x 'apt-get update -qq >/dev/null; mkdir -p /srv/st/files/docs /srv/st/files/inbox /srv/st/vault-src/photos /srv/st/vault
    echo photo > /srv/st/vault-src/photos/img1.jpg; chown 1000:1000 /srv/st/files/inbox
@@ -45,7 +48,7 @@ x 'smbmgr add files /srv/st/files && smbmgr add docs /srv/st/files/docs && smbmg
 [[ "$(x "awk -F'\t' '{print \$1}' /etc/smbmgr/secrets | sort | paste -sd' ' -")" == "docs-ro docs-rw files-ro files-rw vault-ro" ]] \
     || fail "unexpected users (a read-only mount must get no -rw user)"
 [[ "$(x 'stat -c %a /etc/smbmgr/secrets /etc/smbmgr | paste -sd" " -')" == "600 700" ]] || fail "secrets/state not root-only"
-x 'smbmgr show files' | grep -qE 'files-rw +[A-Za-z0-9]{24}' || fail "show doesn't print the stored password"
+x 'smbmgr show files' | has -E 'files-rw +[A-Za-z0-9]{24}' || fail "show doesn't print the stored password"
 pass "add: -ro/-rw per share, no -rw on a read-only mount, nested share, passwords stored root-only"
 
 pw() { x "awk -F'\t' -v u='$1' '\$1 == u {print \$2}' /etc/smbmgr/secrets"; }
@@ -83,7 +86,7 @@ for p in / /etc /etc/smbmgr /var /root /proc; do
 done
 x 'smbmgr user set me' >/dev/null 2>&1 && fail "user set without shares accepted"
 [[ "$(x 'md5sum /etc/smbmgr/* | md5sum')" == "$before" ]] || fail "a refused command changed the state"
-x 'smbmgr add --help' | grep -q 'smbmgr add <name> <path>' || fail "add --help"
+x 'smbmgr add --help' | has 'smbmgr add <name> <path>' || fail "add --help"
 uh=$(x 'smbmgr user --help'); grep -q 'smbmgr user passwd <name>' <<<"$uh" && ! grep -q 'smbmgr add' <<<"$uh" || fail "user --help"
 pass "refused: existing system accounts (kept), system folders, user set without shares; --help per command"
 
@@ -146,7 +149,7 @@ pass "a failed self-test rolls back the state, smb.conf and the new users"
 [[ -n "$(st files guest '' ls)" ]] || fail "guest access allowed"
 [[ -n "$(docker exec "$c" smbclient //127.0.0.1/files -U "files-rw%$(pw files-rw)" -m SMB2_10 -c ls 2>&1 | grep -oE 'NT_STATUS_[A-Z_]+' || true)" ]] \
     || fail "SMB 2.1 accepted"
-x "( (sleep 5; echo exit) | smbclient //127.0.0.1/files -U files-rw%$(pw files-rw) >/dev/null 2>&1 & ); sleep 2; smbstatus -b" | grep -q "SMB3.*AES" \
+x "( (sleep 5; echo exit) | smbclient //127.0.0.1/files -U files-rw%$(pw files-rw) >/dev/null 2>&1 & ); sleep 2; smbstatus -b" | has "SMB3.*AES" \
     || fail "session not SMB3 + AES-encrypted"
 if x 'ss -ltn | grep -q ":139 "'; then fail "something listens on 139"; fi
 pass "refused: wrong password, anonymous, guest, SMB 2.1; SMB3 + AES; nothing on 139"
@@ -156,8 +159,8 @@ x 'smbmgr reset docs-rw' >/dev/null
 [[ "$(st docs docs-rw "$old" ls)" == NT_STATUS_LOGON_FAILURE && -z "$(st docs docs-rw "$(pw docs-rw)" ls)" ]] || fail "reset"
 x 'smbmgr remove docs' >/dev/null
 [[ "$(x "pdbedit -Lw | grep '^docs-ro:' | cut -d: -f5")" == *D* ]] || fail "removed share's users not disabled"
-x 'smbmgr user list' | grep -E '^me ' | grep -q docs && fail "me still lists the removed share"
-x 'smbmgr list' | grep -q "disabled users of removed shares: docs-ro docs-rw" || fail "list doesn't show the removed share's users"
+x 'smbmgr user list' | grep -E '^me ' | has docs && fail "me still lists the removed share"
+x 'smbmgr list' | has "disabled users of removed shares: docs-ro docs-rw" || fail "list doesn't show the removed share's users"
 x 'smbmgr remove docs --purge' >/dev/null || fail "purging a removed share's users"
 x 'id docs-ro' >/dev/null 2>&1 && fail "leftover docs-ro not deleted"
 x 'smbmgr remove vault --purge' >/dev/null
@@ -189,7 +192,7 @@ pass "failed commands leave the state alone; check spots hand edits; apply repai
 x "bash /smbmgr-src/install.sh --yes" >/dev/null 2>&1 || fail "re-running install"
 [[ "$(x 'smbmgr list' | grep -c '^files ')" == 1 && -z "$(st files files-rw "$(pw files-rw)" ls)" ]] || fail "re-install lost state"
 x "smbmgr allow 198.51.100.0/24" >/dev/null       # a documentation range: not ours
-if docker exec "$c" smbclient "//$ip/files" -U "files-rw%$(pw files-rw)" -m SMB3 -c ls 2>&1 | grep -q 't\.txt'; then
+if docker exec "$c" smbclient "//$ip/files" -U "files-rw%$(pw files-rw)" -m SMB3 -c ls 2>&1 | has 't\.txt'; then
     fail "allow didn't block a network that isn't listed"
 fi
 [[ -z "$(st files files-rw "$(pw files-rw)" ls)" ]] || fail "localhost blocked by allow"

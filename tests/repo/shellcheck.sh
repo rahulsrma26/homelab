@@ -11,7 +11,7 @@ while IFS= read -r -d '' f; do [[ -f "$f" ]] && files+=("$f"); done < <(git ls-f
 # scripts without a .sh extension: anything with a bash shebang outside services/ and tools/
 while IFS= read -r -d '' f; do
     [[ -f "$f" && "$f" != *.sh && "$f" != labber/labber && "$f" != services/labber ]] || continue
-    head -c 64 "$f" 2>/dev/null | head -1 | grep -qE '^#!.*\b(bash|sh)\b' && files+=("$f")
+    head -c 64 "$f" 2>/dev/null | head -1 | grep -E '^#!.*\b(bash|sh)\b' >/dev/null && files+=("$f")
 done < <(git ls-files -z --cached --others --exclude-standard -- scripts .githooks)
 docker run --rm -v "$repo:/mnt:ro" -w /mnt "$image" -S warning labber/labber services/labber "${files[@]}"
 echo "shellcheck: ok (${#files[@]} scripts + labber + the forwarder)"
