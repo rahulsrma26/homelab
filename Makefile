@@ -46,10 +46,10 @@ test-labber-vm:
 test-monitoring:
 	tests/monitoring/run.sh
 
-# scripts/ end-to-end in systemd containers: NUT (simulated UPS) and Samba
+# scripts/ end-to-end in systemd containers: NUT (simulated UPS) and smbmgr (Samba)
 test-scripts:
 	tests/scripts/run-nut.sh
-	tests/scripts/run-samba.sh
+	tests/scripts/run-smbmgr.sh
 
 # repo rules (CLAUDE.md) + shellcheck — what CI runs besides the tests above
 test-lint:

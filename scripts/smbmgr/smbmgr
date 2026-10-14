@@ -1,0 +1,729 @@
+#!/usr/bin/env bash
+# smbmgr — manage Samba (SMB) shares and their users on this machine.
+#
+# Every share gets its own users:
+#   <share>-ro  read            (always)
+#   <share>-rw  read + write    (only if the folder is writable — not on a read-only mount)
+# with random passwords, stored root-only so `smbmgr show` can print them again.
+# Personal accounts (`smbmgr user …`, e.g. for a Mac's Finder, which logs in as one user per
+# server) can reach several shares; their password is asked, never stored.
+#
+# State lives in /etc/smbmgr (root only); smb.conf is always generated from it — checked
+# with testparm, backed up, swapped in atomically, and Samba reloaded (open sessions stay).
+# smbmgr only ever touches system accounts it created itself (listed in the state).
+# Set up by scripts/smbmgr/install.sh (homelab repo). Run `smbmgr help`.
+set -euo pipefail
+
+VERSION="1.0.0"
+STATE_DIR="${SMBMGR_STATE_DIR:-/etc/smbmgr}"
+SHARES="$STATE_DIR/shares"        # name<TAB>path<TAB>mode (rw|ro)
+USERS="$STATE_DIR/users"          # name<TAB>rw-shares(,)<TAB>ro-shares(,)
+SECRETS="$STATE_DIR/secrets"      # user<TAB>password   (mode 600)
+ACCOUNTS="$STATE_DIR/accounts"    # the system users smbmgr created, one per line
+CONFIG="$STATE_DIR/config"        # OWNER=… ALLOW=…
+CONF="${SMBMGR_SMB_CONF:-/etc/samba/smb.conf}"
+LOCK=/run/smbmgr.lock
+
+if [[ -t 1 ]]; then R=$'\033[0;31m' G=$'\033[0;32m' Y=$'\033[1;33m' C=$'\033[0;36m' B=$'\033[1m' N=$'\033[0m'; else R='' G='' Y='' C='' B='' N=''; fi
+info() { echo -e "${C}:: $*${N}"; }
+ok()   { echo -e "${G}✓ $*${N}"; }
+warn() { echo -e "${Y}! $*${N}" >&2; }
+die()  { echo -e "${R}error: $*${N}" >&2; exit 1; }
+audit() { logger -t smbmgr "$*" 2>/dev/null || true; }
+
+usage() {
+    cat <<'EOF'
+smbmgr — Samba shares and users
+
+Shares (each gets <name>-ro, and <name>-rw if the folder is writable):
+  smbmgr add <name> <path>          share a folder (any folder or subfolder; nesting is fine)
+  smbmgr remove <name> [--purge]    remove a share; its users are disabled (--purge: deleted)
+  smbmgr move <name> <path>         point a share at another folder; users and passwords stay
+  smbmgr refresh [<name>]           re-detect a writable folder: adds or disables <name>-rw
+  smbmgr list                       shares, folders, mode, users
+  smbmgr show [<name>]              the stored passwords of a share's users (or all)
+  smbmgr reset <user>               new random password for a share user (e.g. docs-rw)
+
+Personal accounts (password asked, never stored):
+  smbmgr user add <name> [--rw a,b] [--ro c]   an account with access to several shares
+  smbmgr user set <name> [--rw a,b] [--ro c]   change which shares it reaches (replaces both)
+  smbmgr user passwd <name>                    change its password
+  smbmgr user remove <name>                    delete it
+  smbmgr user list
+
+Settings:
+  smbmgr allow "<CIDR> …" | --any   only these networks may connect (localhost always)
+  smbmgr owner <user>               owner of everything written over SMB (default root)
+  smbmgr check                      config, smbd, folders, and that every user can log in
+  smbmgr apply                      regenerate smb.conf from the state and reload Samba
+  smbmgr version
+
+Options:
+  --yes             don't ask before deleting (remove --purge, user remove)
+  --no-check        skip the SMB self-test after add, move, refresh
+  --password-stdin  a personal account's password from stdin
+  <command> --help  just that command
+
+Examples:
+  smbmgr add docs /mnt/files/docs
+  smbmgr user add alice --rw docs --ro photos
+  smbmgr remove docs --purge --yes
+EOF
+}
+cmd_usage() {   # cmd_usage [<command>] — that command's lines, else everything
+    local t="${1:-}" lines=""
+    case "$t" in rm) t=remove ;; ls) t=list ;; esac
+    [[ -n "$t" ]] && lines=$(usage | grep -E "^  smbmgr $t( |\$)" || true)
+    if [[ -n "$lines" ]]; then echo "usage:"; echo "$lines"; else usage; fi
+}
+
+# ── state ─────────────────────────────────────────────────────────────────────
+need_root() { (( EUID == 0 )) || die "run as root"; }
+load_config() {
+    OWNER=root ALLOW=""
+    # shellcheck disable=SC1090
+    [[ -f "$CONFIG" ]] && . "$CONFIG"
+    return 0
+}
+save_config() { printf 'OWNER=%q\nALLOW=%q\n' "$OWNER" "$ALLOW" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"; }
+init_state() {
+    install -d -m 700 "$STATE_DIR"
+    local f
+    for f in "$SHARES" "$USERS" "$SECRETS" "$ACCOUNTS"; do [[ -f "$f" ]] || install -m 600 /dev/null "$f"; done
+    chmod 600 "$SECRETS"
+    [[ -f "$CONFIG" ]] || { load_config; save_config; }
+}
+# one change at a time
+take_lock() { exec 9>"$LOCK"; flock -n 9 || { info "waiting for another smbmgr run…"; flock 9; }; }
+
+share_get() { awk -F'\t' -v n="$1" '$1 == n { print; exit }' "$SHARES"; }
+share_exists() { [[ -n "$(share_get "$1")" ]]; }
+share_names() { cut -f1 "$SHARES"; }
+user_get() { awk -F'\t' -v n="$1" '$1 == n { print; exit }' "$USERS"; }
+secret_get() { awk -F'\t' -v u="$1" '$1 == u { print $2; exit }' "$SECRETS"; }
+secret_set() {   # secret_set <user> <password>  (empty password = remove)
+    local tmp; tmp=$(mktemp "$STATE_DIR/.secrets.XXXXXX")
+    awk -F'\t' -v u="$1" '$1 != u' "$SECRETS" > "$tmp"
+    [[ -z "$2" ]] || printf '%s\t%s\n' "$1" "$2" >> "$tmp"
+    chmod 600 "$tmp"; mv "$tmp" "$SECRETS"
+}
+# replace or delete the line for <key> in a tab file: table_set <file> <key> [<line>]
+table_set() {
+    local tmp; tmp=$(mktemp "$STATE_DIR/.tbl.XXXXXX")
+    awk -F'\t' -v k="$2" '$1 != k' "$1" > "$tmp"
+    [[ -z "${3:-}" ]] || printf '%s\n' "$3" >> "$tmp"
+    chmod 600 "$tmp"; mv "$tmp" "$1"
+}
+
+valid_name() { [[ "$1" =~ ^[a-z][a-z0-9_]{0,27}$ ]]; }
+valid_share_name() {
+    valid_name "$1" || die "share name: lowercase letters, digits and _ (start with a letter, max 28)"
+    [[ ! "$1" =~ ^(global|homes|printers)$ ]] || die "\"$1\" is a reserved name in Samba — pick another"
+}
+genpw() { head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+# is the folder writable at all? (read-only mounts, e.g. an LXC bind mount with ro=1)
+folder_writable() { [[ ",$(findmnt -no OPTIONS --target "$1" 2>/dev/null || true)," != *,ro,* ]]; }
+# never share system folders, or a folder holding smbmgr's or Samba's own secrets
+check_path() {
+    local p="$1" s
+    [[ "$p" != / ]] || die "refusing to share / (the whole system)"
+    # smb.conf can't hold these: Samba expands %x, and trims trailing spaces; tabs/newlines break the state
+    [[ "$p" != *%* ]] || die "$p: Samba can't share a path containing % — rename the folder"
+    [[ "$p" != *[[:cntrl:]]* && "$p" != *[[:space:]] ]] || die "$p: control characters or a trailing space in the path — rename the folder"
+    for s in /etc /root /boot /proc /sys /dev /run /usr /bin /sbin /lib /lib64 /var/lib/samba; do
+        [[ "$p" == "$s" || "$p" == "$s"/* ]] && die "refusing to share $p: it's a system folder"
+    done
+    for s in "$STATE_DIR" /etc/samba /var/lib/samba; do
+        [[ "$s" == "$p"/* ]] && die "refusing to share $p: it contains $s (passwords)"
+    done
+    return 0
+}
+# the users a share has: <name>-ro, plus <name>-rw for a read-write share
+share_users() { echo "$1-ro"; [[ "$(share_get "$1" | cut -f3)" != rw ]] || echo "$1-rw"; }
+share_has_user() { local u; for u in $(share_users "$1"); do [[ "$u" != "$2" ]] || return 0; done; return 1; }
+
+# ── accounts: smbmgr only touches system users it created ────────────────────
+# (outputs are captured first: `… | grep -q` can fail under pipefail when grep quits early)
+samba_user_exists() { [[ $'\n'"$(pdbedit -L 2>/dev/null | cut -d: -f1 || true)"$'\n' == *$'\n'"$1"$'\n'* ]]; }
+account_managed() { grep -qx "$1" "$ACCOUNTS"; }
+# may smbmgr use this name? its own, or one nobody has (no system or Samba user)
+account_ok() { account_managed "$1" || { ! id "$1" >/dev/null 2>&1 && ! getent group "$1" >/dev/null && ! samba_user_exists "$1"; }; }
+account_refuse() { die "a system account or group \"$1\" exists already, not made by smbmgr — pick another name"; }
+CREATED=() TOUCHED=()      # users created / whose Samba password or state changed (for rollback)
+ensure_account() {   # the no-login system user, created (and recorded) if needed
+    if ! account_managed "$1"; then
+        account_ok "$1" || account_refuse "$1"
+        CREATED+=("$1")
+        printf '%s\n' "$1" >> "$ACCOUNTS"
+    fi
+    id "$1" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$1"
+}
+delete_account() {   # Samba user, system user and the record — only if smbmgr made it
+    account_managed "$1" || { warn "$1 wasn't made by smbmgr — left alone"; return 0; }
+    smbpasswd -x "$1" >/dev/null 2>&1 || true
+    userdel "$1" 2>/dev/null || true
+    # still there (e.g. a process runs as it)? keep the record, so a later remove can retry
+    if id "$1" >/dev/null 2>&1; then warn "couldn't delete the system user $1 (userdel $1)"; return 0; fi
+    table_set "$ACCOUNTS" "$1"
+}
+set_samba_pw() {   # set_samba_pw <user> <password>  (also enables it)
+    if samba_user_exists "$1"; then printf '%s\n%s\n' "$2" "$2" | smbpasswd -s "$1" >/dev/null
+    else printf '%s\n%s\n' "$2" "$2" | smbpasswd -s -a "$1" >/dev/null; fi
+    smbpasswd -e "$1" >/dev/null
+}
+new_share_pw() {   # new_share_pw <user> → stored first, then set in Samba
+    local pw; pw=$(genpw)
+    TOUCHED+=("$1")
+    secret_set "$1" "$pw"; set_samba_pw "$1" "$pw"
+}
+
+# a change is all or nothing: snapshot the state; if the command fails, restore it, undo the
+# Samba users it created or changed, and put smb.conf back in line with the state
+begin_change() {
+    SNAP=$(mktemp -d -p /run smbmgr-snap.XXXXXX)     # tmpfs: the secrets never touch a disk
+    cp -a "$STATE_DIR"/. "$SNAP"/
+    trap rollback EXIT
+    trap 'exit 130' INT TERM HUP      # Ctrl-C, kill, a dropped SSH session: roll back too
+}
+rollback() {
+    local rc=$? u share
+    trap '' INT TERM HUP              # finish the rollback, whatever comes
+    if (( rc != 0 )) && [[ -n "${SNAP:-}" ]] && { (( ${#CREATED[@]} + ${#TOUCHED[@]} )) || ! diff -rq "$SNAP" "$STATE_DIR" >/dev/null 2>&1; }; then
+        cp -a "$SNAP"/. "$STATE_DIR"/ || true
+        for u in "${CREATED[@]}"; do
+            smbpasswd -x "$u" >/dev/null 2>&1 || true; userdel "$u" 2>/dev/null || true
+        done
+        for u in "${TOUCHED[@]}"; do
+            [[ " ${CREATED[*]} " == *" $u "* ]] && continue
+            share="${u%-r[ow]}"
+            if share_exists "$share" && share_has_user "$share" "$u"; then
+                ( set_samba_pw "$u" "$(secret_get "$u")" ) || true
+            else
+                smbpasswd -d "$u" >/dev/null 2>&1 || true
+            fi
+        done
+        ( apply ) >/dev/null 2>&1 || warn "couldn't restore smb.conf — run: smbmgr apply"
+        warn "rolled back: shares, users and smb.conf are as they were before this command"
+    fi
+    rm -rf "${SNAP:-}"
+    return "$rc"
+}
+
+csv_clean() { tr ',' '\n' <<<"$1" | awk 'NF && !seen[$0]++' | paste -sd, -; }   # no empties, no repeats
+csv_has() { [[ ",$1," == *",$2,"* ]]; }
+csv_drop() { local out="" x; IFS=',' read -ra xs <<<"$1"; for x in "${xs[@]}"; do [[ -n "$x" && "$x" != "$2" ]] && out+="${out:+,}$x"; done; echo "$out"; }
+
+# ── smb.conf ──────────────────────────────────────────────────────────────────
+render() {
+    load_config
+    cat <<'EOF'
+# generated by smbmgr — change shares with smbmgr, not here (smbmgr help)
+[global]
+   server role = standalone server
+   server string = %h
+   workgroup = WORKGROUP
+   # SMB over 445 only: no NetBIOS name service, no port 139
+   disable netbios = yes
+   smb ports = 445
+   server min protocol = SMB3_00
+   smb encrypt = desired
+   # no guests, no anonymous listing
+   map to guest = never
+   restrict anonymous = 2
+   usershare allow guests = no
+   # no printers
+   load printers = no
+   printing = bsd
+   printcap name = /dev/null
+   disable spoolss = yes
+   logging = systemd
+   log level = 1
+   # macOS: Finder metadata and resource forks in extended attributes, odd file names
+   vfs objects = catia fruit streams_xattr
+   fruit:metadata = stream
+   fruit:model = MacSamba
+   fruit:posix_rename = yes
+   fruit:veto_appledouble = no
+   fruit:wipe_intentionally_left_blank_rfork = yes
+   fruit:delete_empty_adfiles = yes
+   # no DOS archive flag → no executable bit on every file
+   map archive = no
+EOF
+    if [[ -n "$ALLOW" ]]; then
+        echo "   hosts allow = 127.0.0.1 ::1 $ALLOW"
+        echo "   hosts deny = ALL"
+    fi
+    local name path mode valid write pname prw pro grp
+    grp=$(id -gn "$OWNER" 2>/dev/null) || die "the owner $OWNER doesn't exist any more — smbmgr owner <user>"
+    while IFS=$'\t' read -r name path mode; do
+        [[ -n "$name" ]] || continue
+        valid="$name-ro"; write=""
+        [[ "$mode" == rw ]] && { valid+=" $name-rw"; write="$name-rw"; }
+        while IFS=$'\t' read -r pname prw pro; do
+            [[ -n "$pname" ]] || continue
+            if [[ "$mode" == rw ]] && csv_has "$prw" "$name"; then valid+=" $pname"; write+="${write:+ }$pname"
+            elif csv_has "$prw" "$name" || csv_has "$pro" "$name"; then valid+=" $pname"; fi
+        done < "$USERS"
+        echo
+        echo "[$name]"
+        echo "   path = $path"
+        echo "   browseable = yes"
+        echo "   read only = yes"
+        echo "   valid users = $valid"
+        [[ -z "$write" ]] || echo "   write list = $write"
+        # everyone works as the owner: reads don't depend on file modes, writes are owned alike
+        echo "   force user = $OWNER"
+        echo "   force group = $grp"
+    done < "$SHARES"
+}
+
+apply() {
+    local tmp; tmp=$(mktemp)
+    render > "$tmp"
+    if ! testparm -s "$tmp" >/dev/null 2>&1; then
+        testparm -s "$tmp" 2>&1 | tail -5 >&2; rm -f "$tmp"
+        die "the generated smb.conf doesn't pass testparm"
+    fi
+    if [[ -f "$CONF" ]] && cmp -s "$tmp" "$CONF"; then rm -f "$tmp"; return 0; fi
+    [[ -f "$CONF" ]] && cp -a "$CONF" "$CONF.bak-$(date +%F-%H%M%S-%N)"
+    install -m 644 "$tmp" "$CONF.new"; rm -f "$tmp"
+    mv "$CONF.new" "$CONF"
+    # keep the 10 newest backups
+    find "$(dirname "$CONF")" -maxdepth 1 -name "$(basename "$CONF").bak-*" -printf '%T@\t%p\n' \
+        | sort -rn | tail -n +11 | cut -f2- | xargs -r -d '\n' rm -f
+    if systemctl is-active --quiet smbd; then
+        smbcontrol smbd reload-config >/dev/null 2>&1 || systemctl reload smbd
+    fi
+}
+
+# ── checks ────────────────────────────────────────────────────────────────────
+# smbc <share> <user> <password> <commands> → smbclient's output, never fails. The password
+# goes through a root-only credentials file, so it never shows up in `ps`.
+smbc() {
+    local cred out
+    cred=$(mktemp "$STATE_DIR/.cred.XXXXXX")
+    printf 'username = %s\npassword = %s\n' "$2" "$3" > "$cred"
+    out=$(smbclient "//127.0.0.1/$1" -A "$cred" -m SMB3 -c "$4" 2>&1 || true)
+    rm -f "$cred"
+    printf '%s\n' "$out"
+}
+nt_status() { grep -o 'NT_STATUS_[A-Z_]*' <<<"$1" | head -1; }
+selftest_share() {   # selftest_share <name> — the share's users do what they should
+    local name="$1" mode out pw
+    # hidden, and no document/photo extension: apps watching the folder (Paperless, Immich) skip it
+    local f=".smbmgr-check-$$.tmp" src=/etc/hostname
+    [[ -r "$src" ]] || src=/etc/os-release
+    mode=$(share_get "$name" | cut -f3)
+    pw=$(secret_get "$name-ro")
+    out=$(smbc "$name" "$name-ro" "$pw" ls)
+    [[ "$out" != *NT_STATUS_* ]] || { warn "$name-ro can't read $name: $(nt_status "$out")"; load_config; warn "is the folder readable for $OWNER?"; return 1; }
+    out=$(smbc "$name" "$name-ro" "$pw" "put $src $f")
+    [[ "$out" == *NT_STATUS_ACCESS_DENIED* ]] || { smbc "$name" "$name-ro" "$pw" "rm $f" >/dev/null; warn "$name-ro could write to $name"; return 1; }
+    if [[ "$mode" == rw ]]; then
+        pw=$(secret_get "$name-rw")
+        out=$(smbc "$name" "$name-rw" "$pw" "put $src $f; rm $f")
+        if [[ "$out" == *NT_STATUS_* ]]; then
+            warn "$name-rw can't write to $name: $(nt_status "$out")"
+            load_config
+            [[ "$out" != *NT_STATUS_ACCESS_DENIED* ]] || warn "is the folder writable for $OWNER? (in an unprivileged LXC, host files must belong to 100000+uid)"
+            return 1
+        fi
+        [[ ! -e "$(share_get "$name" | cut -f2)/$f" ]] || warn "couldn't remove the test file $f from $name — delete it by hand"
+    fi
+    if [[ "$mode" == rw ]]; then ok "checked: $name-ro reads and can't write, $name-rw writes"
+    else ok "checked: $name-ro reads and can't write"; fi
+}
+selftest_or_die() {   # selftest_or_die <name> <what was done>
+    if (( NOCHECK )); then warn "$1 not tested over SMB (--no-check)"; return 0; fi
+    selftest_share "$1" || die "$2, but its users don't work as expected (see above)"
+}
+
+# ── commands ──────────────────────────────────────────────────────────────────
+cmd_add() {
+    local name="${1:-}" path="${2:-}" mode=ro u
+    [[ -n "$name" && -n "$path" && $# -le 2 ]] || die "usage: smbmgr add <name> <path>  (quote paths with spaces)"
+    valid_share_name "$name"
+    [[ -d "$path" ]] || die "$path is not a folder"
+    path=$(realpath -e "$path")
+    check_path "$path"
+    share_exists "$name" && die "share \"$name\" exists already (smbmgr list)"
+    [[ -z "$(user_get "$name")" ]] || die "\"$name\" is a personal account's name"
+    folder_writable "$path" && mode=rw
+    table_set "$SHARES" "$name" "$(printf '%s\t%s\t%s' "$name" "$path" "$mode")"
+    for u in $(share_users "$name"); do account_ok "$u" || account_refuse "$u"; done
+    for u in $(share_users "$name"); do ensure_account "$u"; new_share_pw "$u"; done
+    apply
+    audit "share added: $name → $path ($mode)"
+    if [[ "$mode" == rw ]]; then ok "share $name → $path (read-write)"
+    else ok "share $name → $path (read-only: the folder is on a read-only mount, so no $name-rw)"; fi
+    selftest_or_die "$name" "share $name was added"
+    cmd_show "$name"
+}
+
+cmd_remove() {
+    local name="" purge=0 a u line pname prw pro users
+    for a in "$@"; do
+        case "$a" in
+            --purge) purge=1 ;;
+            -*) die "unknown option: $a" ;;
+            *) [[ -z "$name" ]] || die "usage: smbmgr remove <name> [--purge]  (one at a time)"; name="$a" ;;
+        esac
+    done
+    [[ -n "$name" ]] || die "usage: smbmgr remove <name> [--purge]"
+    if ! share_exists "$name"; then
+        # a share removed earlier keeps its users, disabled: --purge deletes them now
+        users=$(leftover_users "$name")
+        [[ -n "$users" && "$purge" == 1 ]] || die "no share \"$name\" (smbmgr list)"
+        confirm "Delete the disabled users $users and their stored passwords?"
+        for u in $users; do delete_account "$u"; secret_set "$u" ""; ok "user $u deleted"; done
+        audit "leftover users of $name purged"
+        return 0
+    fi
+    users=$(share_users "$name" | paste -sd' ' -); users="${users/ /, }"
+    if (( purge )); then confirm "Delete $users and their stored passwords? Apps and Macs using them stop working."; fi
+    table_set "$SHARES" "$name"
+    # personal accounts lose it too
+    while IFS= read -r line; do
+        IFS=$'\t' read -r pname prw pro <<<"$line"
+        if csv_has "$prw" "$name" || csv_has "$pro" "$name"; then
+            prw=$(csv_drop "$prw" "$name") pro=$(csv_drop "$pro" "$name")
+            table_set "$USERS" "$pname" "$(printf '%s\t%s\t%s' "$pname" "$prw" "$pro")"
+            info "$pname no longer reaches $name"
+            [[ -n "$prw$pro" ]] || warn "$pname now reaches no shares (smbmgr user set $pname … / user remove $pname)"
+        fi
+    done < <(cat "$USERS")
+    apply
+    for u in "$name-ro" "$name-rw"; do
+        samba_user_exists "$u" || continue
+        if (( purge )); then
+            delete_account "$u"; secret_set "$u" ""
+            ok "user $u deleted"
+        else
+            TOUCHED+=("$u"); smbpasswd -d "$u" >/dev/null
+            ok "user $u disabled (adding the share again re-enables it, with new passwords)"
+        fi
+    done
+    audit "share removed: $name$( ((purge)) && echo ' (purged)')"
+    ok "share $name removed (the folder itself is untouched)"
+}
+
+# refresh_share <name> — re-detect whether the folder is writable; returns 1 if nothing changed
+# a removed share's users, kept disabled: leftover_users [<share>]
+leftover_users() {
+    local u out=""
+    while IFS= read -r u; do
+        [[ "$u" =~ ^(.+)-r[ow]$ ]] || continue
+        [[ -z "${1:-}" || "${BASH_REMATCH[1]}" == "$1" ]] || continue
+        share_exists "${BASH_REMATCH[1]}" || out+="${out:+ }$u"
+    done < "$ACCOUNTS"
+    echo "$out"
+}
+refresh_share() {
+    local name="$1" path mode new pname prw pro line
+    IFS=$'\t' read -r _ path mode <<<"$(share_get "$name")"
+    [[ -d "$path" ]] || { warn "share $name: folder $path is missing — skipped"; return 1; }
+    new=ro; folder_writable "$path" && new=rw
+    [[ "$new" != "$mode" ]] || return 1
+    if [[ "$new" == rw ]]; then
+        account_ok "$name-rw" || account_refuse "$name-rw"
+        table_set "$SHARES" "$name" "$(printf '%s\t%s\t%s' "$name" "$path" rw)"
+        ensure_account "$name-rw"; new_share_pw "$name-rw"
+        ok "share $name is writable now: $name-rw added"
+    else
+        table_set "$SHARES" "$name" "$(printf '%s\t%s\t%s' "$name" "$path" ro)"
+        # personal accounts that wrote here can only read now
+        while IFS= read -r line; do
+            IFS=$'\t' read -r pname prw pro <<<"$line"
+            csv_has "$prw" "$name" || continue
+            table_set "$USERS" "$pname" "$(printf '%s\t%s\t%s' "$pname" "$(csv_drop "$prw" "$name")" "${pro:+$pro,}$name")"
+            info "$pname can only read $name now"
+        done < <(cat "$USERS")
+        if samba_user_exists "$name-rw"; then TOUCHED+=("$name-rw"); smbpasswd -d "$name-rw" >/dev/null; fi
+        secret_set "$name-rw" ""
+        ok "share $name is read-only now: $name-rw disabled"
+    fi
+    audit "share $name: $mode → $new"
+}
+cmd_refresh() {
+    local names name changed=()
+    if [[ -n "${1:-}" ]]; then share_exists "$1" || die "no share \"$1\" (smbmgr list)"; names="$1"; else names=$(share_names); fi
+    for name in $names; do refresh_share "$name" && changed+=("$name"); done
+    (( ${#changed[@]} )) || { ok "nothing changed: every share's mode matches its folder"; return 0; }
+    apply
+    for name in "${changed[@]}"; do
+        selftest_or_die "$name" "share $name was updated"
+        [[ "$(share_get "$name" | cut -f3)" != rw ]] || cmd_show "$name"
+    done
+}
+
+cmd_move() {
+    local name="${1:-}" path="${2:-}" old
+    [[ -n "$name" && -n "$path" && $# -le 2 ]] || die "usage: smbmgr move <name> <path>  (quote paths with spaces)"
+    share_exists "$name" || die "no share \"$name\" (smbmgr list)"
+    [[ -d "$path" ]] || die "$path is not a folder"
+    path=$(realpath -e "$path")
+    check_path "$path"
+    old=$(share_get "$name" | cut -f2)
+    [[ "$path" != "$old" ]] || { ok "share $name is at $path already"; return 0; }
+    table_set "$SHARES" "$name" "$(printf '%s\t%s\t%s' "$name" "$path" "$(share_get "$name" | cut -f3)")"
+    refresh_share "$name" || true
+    apply
+    audit "share moved: $name: $old → $path"
+    ok "share $name → $path (was $old; users and passwords unchanged)"
+    selftest_or_die "$name" "share $name was moved"
+}
+
+cmd_list() {
+    if [[ ! -s "$SHARES" ]]; then echo "no shares yet — smbmgr add <name> <path>"; return; fi
+    local name path mode state
+    printf "${B}%-14s %-6s %-36s %s${N}\n" SHARE MODE FOLDER USERS
+    while IFS=$'\t' read -r name path mode; do
+        [[ -n "$name" ]] || continue
+        state=""; [[ -d "$path" ]] || state=" ${R}(folder missing)${N}"
+        printf "%-14s %-6s %-36s %s%b\n" "$name" "$mode" "$path" "$(share_users "$name" | paste -sd' ' -)$(personal_for "$name")" "$state"
+    done < "$SHARES"
+    if [[ -s "$USERS" ]]; then
+        echo; printf "${B}%-14s %-24s %s${N}\n" PERSONAL READ-WRITE READ-ONLY
+        local pname prw pro
+        while IFS=$'\t' read -r pname prw pro; do
+            [[ -n "$pname" ]] && printf "%-14s %-24s %s\n" "$pname" "${prw:--}" "${pro:--}"
+        done < "$USERS"
+    fi
+    local left; left=$(leftover_users)
+    [[ -z "$left" ]] || { echo; echo "disabled users of removed shares: $left  (smbmgr remove <share> --purge deletes them)"; }
+    load_config
+    echo; echo "networks: ${ALLOW:-any}   ·   writes owned by: $OWNER"
+}
+personal_for() {
+    local pname prw pro out=""
+    while IFS=$'\t' read -r pname prw pro; do
+        [[ -n "$pname" ]] || continue
+        if csv_has "$prw" "$1" || csv_has "$pro" "$1"; then out+=" $pname"; fi
+    done < "$USERS"
+    echo "$out"
+}
+
+cmd_show() {
+    local names name u
+    (( $# <= 1 )) || die "usage: smbmgr show [<share> | <share user>]"
+    if [[ "${1:-}" =~ ^(.+)-r[ow]$ ]] && share_has_user "${BASH_REMATCH[1]}" "$1"; then
+        printf '  %-20s %s\n' "$1" "$(secret_get "$1")"; return 0
+    fi
+    if [[ -n "${1:-}" ]]; then share_exists "$1" || die "no share or share user \"$1\""; names="$1"; else names=$(share_names); fi
+    [[ -n "$names" ]] || { echo "no shares yet"; return; }
+    echo "${B}passwords (keep them safe — this machine's root can read them too)${N}"
+    for name in $names; do
+        for u in $(share_users "$name"); do
+            printf '  %-20s %s\n' "$u" "$(secret_get "$u")"
+        done
+    done
+}
+
+cmd_reset() {
+    local u="${1:-}" share
+    (( $# <= 1 )) || die "usage: smbmgr reset <user>  (one at a time)"
+    [[ "$u" =~ ^(.+)-(ro|rw)$ ]] || die "usage: smbmgr reset <share>-ro|<share>-rw  (personal accounts: smbmgr user passwd)"
+    share="${BASH_REMATCH[1]}"
+    share_exists "$share" || die "no share \"$share\""
+    share_has_user "$share" "$u" || die "no user $u (a read-only share has no -rw user)"
+    ensure_account "$u"; new_share_pw "$u"
+    audit "password reset: $u"
+    ok "new password for $u"
+    printf '  %-20s %s\n' "$u" "$(secret_get "$u")"
+}
+
+confirm() {   # confirm <question> — asks in a terminal unless --yes; scripts (no terminal) go ahead
+    { (( YES )) || [[ ! -t 0 ]]; } && return 0
+    local a; read -rp "$1 [y/N] " a </dev/tty || true
+    [[ "$a" == [yY]* ]] || die "cancelled — nothing changed"
+}
+read_password() {   # read_password <user> <from-stdin 0|1> → prints the password
+    local p1 p2
+    if [[ "$2" == 1 ]]; then IFS= read -r p1 || true; p1="${p1%$'\r'}"
+    else
+        { : </dev/tty; } 2>/dev/null || die "no terminal to ask the password — pipe it in with --password-stdin"
+        read -rsp "Password for $1: " p1 </dev/tty; echo >/dev/tty
+        read -rsp "Again: " p2 </dev/tty; echo >/dev/tty
+        [[ "$p1" == "$p2" ]] || die "the passwords don't match"
+    fi
+    (( ${#p1} >= 12 )) || die "use at least 12 characters"
+    printf '%s' "$p1"
+}
+parse_access() {   # sets RW_LIST, RO_LIST, PW_STDIN from flags
+    RW_LIST="" RO_LIST="" PW_STDIN=0
+    while (( $# )); do
+        case "$1" in
+            --rw|--ro)
+                [[ -n "${2:-}" && "${2:-}" != -* ]] || die "$1 needs a comma-separated list of shares, e.g. $1 docs,photos"
+                if [[ "$1" == --rw ]]; then RW_LIST="$2"; else RO_LIST="$2"; fi
+                shift ;;
+            --password-stdin) PW_STDIN=1 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+    local s
+    RW_LIST=$(csv_clean "$RW_LIST") RO_LIST=$(csv_clean "$RO_LIST")
+    for s in ${RW_LIST//,/ } ${RO_LIST//,/ }; do share_exists "$s" || die "no share \"$s\" (smbmgr list)"; done
+    for s in ${RW_LIST//,/ }; do
+        [[ "$(share_get "$s" | cut -f3)" == rw ]] || die "share \"$s\" is read-only — give it with --ro"
+        csv_has "$RO_LIST" "$s" && die "\"$s\" is in both --rw and --ro"
+    done
+    return 0
+}
+cmd_user() {
+    local sub="${1:-}" name="${2:-}" pw
+    shift 2 2>/dev/null || true
+    case "$sub" in
+        add)
+            valid_name "$name" || die "account name: lowercase letters, digits and _ (start with a letter)"
+            [[ -z "$(user_get "$name")" ]] || die "account $name exists (smbmgr user set / passwd)"
+            share_exists "$name" && die "\"$name\" is a share's name"
+            account_ok "$name" || account_refuse "$name"
+            parse_access "$@"
+            [[ -n "$RW_LIST$RO_LIST" ]] || die "give it some shares: --rw a,b and/or --ro c"
+            pw=$(read_password "$name" "$PW_STDIN")
+            ensure_account "$name"; set_samba_pw "$name" "$pw"
+            table_set "$USERS" "$name" "$(printf '%s\t%s\t%s' "$name" "$RW_LIST" "$RO_LIST")"
+            apply; audit "personal account added: $name (rw: ${RW_LIST:--}, ro: ${RO_LIST:--})"
+            ok "account $name: read-write ${RW_LIST:--}, read-only ${RO_LIST:--} (password not stored)" ;;
+        set)
+            [[ -n "$(user_get "$name")" ]] || die "no account $name (smbmgr user list)"
+            parse_access "$@"
+            [[ -n "$RW_LIST$RO_LIST" ]] || die "give it some shares: --rw a,b and/or --ro c (to delete it: smbmgr user remove $name)"
+            table_set "$USERS" "$name" "$(printf '%s\t%s\t%s' "$name" "$RW_LIST" "$RO_LIST")"
+            apply; audit "personal account changed: $name (rw: ${RW_LIST:--}, ro: ${RO_LIST:--})"
+            ok "account $name: read-write ${RW_LIST:--}, read-only ${RO_LIST:--}" ;;
+        passwd)
+            [[ -n "$(user_get "$name")" ]] || die "no account $name"
+            parse_access "$@"
+            pw=$(read_password "$name" "$PW_STDIN"); set_samba_pw "$name" "$pw"
+            audit "password changed: $name"; ok "password changed for $name" ;;
+        remove|rm)
+            [[ -n "$(user_get "$name")" ]] || die "no account $name (smbmgr user list)"
+            confirm "Delete account $name? Macs logged in as $name lose access."
+            table_set "$USERS" "$name"; apply
+            delete_account "$name"
+            audit "personal account removed: $name"; ok "account $name removed" ;;
+        list|ls|"")
+            if [[ ! -s "$USERS" ]]; then echo "no personal accounts — smbmgr user add <name> --rw … --ro …"; return; fi
+            local pname prw pro
+            printf "${B}%-14s %-24s %s${N}\n" ACCOUNT READ-WRITE READ-ONLY
+            while IFS=$'\t' read -r pname prw pro; do [[ -n "$pname" ]] && printf "%-14s %-24s %s\n" "$pname" "${prw:--}" "${pro:--}"; done < "$USERS" ;;
+        *) die "usage: smbmgr user add|set|passwd|remove|list … (smbmgr user --help)" ;;
+    esac
+}
+
+valid_cidr() {
+    local ip="${1%/*}" bits="" o
+    [[ "$1" == */* ]] && bits="${1#*/}"
+    if [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        for o in "${BASH_REMATCH[@]:1}"; do (( 10#$o <= 255 )) || return 1; done
+        [[ -z "$bits" ]] || { [[ "$bits" =~ ^[0-9]{1,2}$ ]] && (( 10#$bits <= 32 )); }
+    elif [[ "$ip" =~ ^[0-9a-fA-F:]+$ && "$ip" == *:*:* ]]; then
+        [[ -z "$bits" ]] || { [[ "$bits" =~ ^[0-9]{1,3}$ ]] && (( 10#$bits <= 128 )); }
+    else return 1; fi
+}
+cmd_allow() {
+    load_config
+    case "${1:-}" in
+        --any) ALLOW="" ;;
+        "") echo "networks: ${ALLOW:-any}"; return ;;
+        *) (( $# == 1 )) || die "usage: smbmgr allow \"<CIDR> <CIDR> …\"  (one quoted list, space-separated)"
+           local c; for c in $1; do valid_cidr "$c" || die "\"$c\" isn't an IP or CIDR (e.g. 192.0.2.0/24)"; done
+           ALLOW=$(tr -s ' ' <<<"$1" | sed 's/^ //; s/ $//') ;;
+    esac
+    save_config; apply; audit "networks: ${ALLOW:-any}"; ok "networks: ${ALLOW:-any} (localhost always)"
+}
+cmd_owner() {
+    load_config
+    [[ -n "${1:-}" ]] || { echo "writes owned by: $OWNER"; return; }
+    id "$1" >/dev/null 2>&1 || die "no local user $1"
+    OWNER="$1"; save_config; apply; audit "owner: $OWNER"; ok "new files and folders will be owned by: $OWNER"
+    [[ ! -s "$SHARES" ]] || info "files already there keep their owner — to change them too: chown -R $OWNER:$(id -gn "$OWNER") <folder>"
+}
+
+cmd_check() {
+    local bad=0 smbd_up=0 name path mode u pw out flags pdb pname prw pro
+    if testparm -s "$CONF" >/dev/null 2>&1; then ok "smb.conf passes testparm"; else warn "smb.conf doesn't pass testparm"; bad=1; fi
+    if systemctl is-active --quiet smbd; then ok "smbd running"; smbd_up=1; else warn "smbd isn't running (systemctl status smbd)"; bad=1; fi
+    if [[ -n "$(ss -ltnH 'sport = :445' 2>/dev/null || true)" ]]; then ok "listening on 445"; else warn "nothing listens on 445"; bad=1; smbd_up=0; fi
+    if systemctl is-active --quiet nmbd; then warn "nmbd is running (NetBIOS should be off)"; bad=1; fi
+    if ! render | cmp -s - "$CONF"; then warn "smb.conf differs from the state (edited by hand?) — smbmgr apply rewrites it"; bad=1; fi
+    pdb=$(pdbedit -Lw 2>/dev/null || true)
+    user_state() {   # user_state <user> → "" if it's a working account, else what's wrong
+        id "$1" >/dev/null 2>&1 || { echo "its system user is missing"; return; }
+        flags=$(awk -F: -v u="$1" '$1 == u { print $5 }' <<<"$pdb")
+        [[ -n "$flags" ]] || { echo "it isn't a Samba user"; return; }
+        [[ "$flags" != *D* ]] || echo "it's disabled"
+    }
+    while IFS=$'\t' read -r name path mode; do
+        [[ -n "$name" ]] || continue
+        [[ -d "$path" ]] || { warn "share $name: folder $path is missing (smbmgr move $name <path> / remove $name)"; bad=1; continue; }
+        if [[ "$mode" == rw ]] && ! folder_writable "$path"; then
+            warn "share $name: $path is read-only now, so $name-rw can't write — smbmgr refresh $name"; bad=1
+        elif [[ "$mode" == ro ]] && folder_writable "$path"; then
+            warn "share $name: $path is writable now — smbmgr refresh $name adds $name-rw"
+        fi
+        for u in $(share_users "$name"); do
+            out=$(user_state "$u")
+            [[ -z "$out" ]] || { warn "share $name: $u: $out — smbmgr reset $u"; bad=1; continue; }
+            (( smbd_up )) || continue
+            pw=$(secret_get "$u")
+            out=$(smbc "$name" "$u" "$pw" ls)
+            if [[ "$out" == *NT_STATUS_LOGON_FAILURE* ]]; then
+                warn "share $name: $u can't log in with its stored password — smbmgr reset $u"; bad=1
+            elif [[ "$out" == *NT_STATUS_* ]]; then
+                warn "share $name: $u logs in but can't open it ($(nt_status "$out"))"; bad=1
+            fi
+        done
+    done < "$SHARES"
+    while IFS=$'\t' read -r pname prw pro; do
+        [[ -n "$pname" ]] || continue
+        out=$(user_state "$pname")
+        [[ -z "$out" ]] || { warn "account $pname: $out — smbmgr user passwd $pname"; bad=1; }
+        [[ -n "$prw$pro" ]] || warn "account $pname reaches no shares (smbmgr user set / user remove)"
+    done < "$USERS"
+    if (( bad == 0 )); then if [[ -s "$SHARES" ]]; then ok "all good: every share's users log in"; else ok "all good"; fi; fi
+    return "$bad"
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+cmd="${1:-help}"; shift || true
+YES=0 NOCHECK=0 args=()
+for a in "$@"; do
+    case "$a" in
+        --yes|-y) YES=1 ;;
+        --no-check) NOCHECK=1 ;;
+        -h|--help) cmd_usage "$cmd"; exit 0 ;;
+        *) args+=("$a") ;;
+    esac
+done
+set -- ${args[@]+"${args[@]}"}
+case "$cmd" in
+    help|-h|--help) cmd_usage "${1:-}"; exit 0 ;;
+    version|--version) echo "smbmgr $VERSION"; exit 0 ;;
+esac
+need_root
+command -v testparm >/dev/null || die "Samba isn't installed — run scripts/smbmgr/install.sh"
+take_lock
+init_state
+case "$cmd" in
+    add|remove|rm|move|mv|refresh|reset|user|allow|owner)
+        [[ "$cmd" == user && "${1:-list}" =~ ^(list|ls)$ ]] || begin_change ;;
+esac
+case "$cmd" in
+    add) cmd_add "$@" ;;
+    remove|rm) cmd_remove "$@" ;;
+    move|mv) cmd_move "$@" ;;
+    refresh) cmd_refresh "$@" ;;
+    list|ls) cmd_list ;;
+    show) cmd_show "$@" ;;
+    reset) cmd_reset "$@" ;;
+    user) cmd_user "$@" ;;
+    allow) cmd_allow "$@" ;;
+    owner) cmd_owner "$@" ;;
+    check) cmd_check ;;
+    apply) apply; ok "smb.conf regenerated from the state" ;;
+    *) die "unknown command: $cmd (smbmgr help)" ;;
+esac
