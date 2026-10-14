@@ -32,7 +32,10 @@ Restoring a backup (e.g. moving Immich to a new machine):
          | sed "s/SELECT pg_catalog.set_config('search_path', '', false);/SELECT pg_catalog.set_config('search_path', 'public, pg_catalog', true);/g" \
          | docker exec -i immich_postgres psql --dbname=postgres --username=immich
   5. Start everything (labber immich start), log in, check albums, people, shared links.
-  6. Then upgrade: IMMICH_VERSION one release at a time (labber immich update).
+  6. Then upgrade (labber immich update after changing IMMICH_VERSION). Within a major
+     version (v3) every update is safe; for a new major version, read its breaking changes
+     (GitHub discussions, label changelog:breaking-change) and the extras' requirements
+     (Kiosk ≥ Immich v3.2, ImmichFrame ≥ v3). Update the mobile apps first.
   Restore the database and library as a pair from one point in time: the dump inside
   the library you restored, not a database backup from another day.
 
