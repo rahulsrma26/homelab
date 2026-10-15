@@ -1,6 +1,22 @@
 # lan mode: reverse proxy for the homelab (LAN + Tailscale). See docker-compose.yml.
 services:
+  # turns DASHBOARD_PASSWORD (.env) into the hashed file Traefik's basic auth reads, on
+  # every start, so changing the password is: edit .env, labber traefik restart
+  dashboard-auth:
+    image: httpd:2.4-alpine
+    container_name: traefik-dashboard-auth
+    restart: "no"
+    environment:
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+    entrypoint: ["sh", "-c", 'test -n "$$DASHBOARD_PASSWORD" && htpasswd -nbB admin "$$DASHBOARD_PASSWORD" > /auth/dashboard']
+    volumes:
+      - ./auth:/auth
+    network_mode: none
+
   traefik:
+    depends_on:
+      dashboard-auth:
+        condition: service_completed_successfully
     ports:
       - "80:80"
       - "443:443"
@@ -30,3 +46,4 @@ services:
     volumes:
       - ./dynamic:/etc/traefik/dynamic:ro
       - ./letsencrypt:/letsencrypt
+      - ./auth:/etc/traefik/auth:ro

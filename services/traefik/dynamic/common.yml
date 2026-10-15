@@ -1,6 +1,11 @@
 # Shared pieces the routes in routes.yml can use.
 http:
   middlewares:
+    # login for the dashboard: user admin, DASHBOARD_PASSWORD from .env (lan mode)
+    dashboard-auth:
+      basicAuth:
+        usersFile: /etc/traefik/auth/dashboard
+
     secure-headers:
       headers:
         frameDeny: true

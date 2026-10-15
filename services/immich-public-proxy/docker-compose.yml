@@ -29,6 +29,7 @@ services:
       - proxy
     labels:
       - traefik.enable=true
+      - homelab.exposure=public    # the public Traefik only publishes containers with this
       - traefik.http.routers.immich-public-proxy.rule=Host(`${PUBLIC_HOSTNAME}`)
       - traefik.http.routers.immich-public-proxy.entrypoints=web
       - traefik.http.services.immich-public-proxy.loadbalancer.server.port=3000
@@ -41,6 +42,9 @@ services:
       - traefik.http.middlewares.ipp-rate-limit.ratelimit.average=100
       - traefik.http.middlewares.ipp-rate-limit.ratelimit.burst=50
       - traefik.http.middlewares.ipp-rate-limit.ratelimit.period=60s
+      # per visitor: every request reaches Traefik from Docker's gateway, so without this
+      # all visitors would share one limit
+      - traefik.http.middlewares.ipp-rate-limit.ratelimit.sourcecriterion.requestheadername=CF-Connecting-IP
     logging:
       driver: "json-file"
       options:

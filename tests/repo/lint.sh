@@ -44,12 +44,13 @@ all_lines() {
 LINES=$(mktemp); trap 'rm -f "$LINES"' EXIT
 all_lines > "$LINES"
 # matches <ERE> (RE env, POSIX awk ERE) in the text of each line → "where<TAB>match".
-# CI=1: case-insensitive. EXCL: skip lines whose "where" matches it.
+# CI=1: case-insensitive. EXCL: skip lines whose "where" matches it. STRIP: removed from
+# each line's text before matching (so it can't hide another match on the same line).
 find_all() {
-    RE="$1" CI="${2:-0}" EXCL="${3:-^\$}" awk -F'\t' '
-        BEGIN { re = ENVIRON["RE"]; ci = ENVIRON["CI"] == "1"; ex = ENVIRON["EXCL"]; if (ci) re = tolower(re) }
+    RE="$1" CI="${2:-0}" EXCL="${3:-^\$}" STRIP="${4:-^\$}" awk -F'\t' '
+        BEGIN { re = ENVIRON["RE"]; ci = ENVIRON["CI"] == "1"; ex = ENVIRON["EXCL"]; st = ENVIRON["STRIP"]; if (ci) re = tolower(re) }
         $1 ~ ex { next }
-        { t = $2; if (ci) t = tolower(t); if (match(t, re)) print $1 "\t" substr($2, RSTART, RLENGTH) }
+        { t = $2; while (gsub(st, " ", t)) ; if (ci) t = tolower(t); if (match(t, re)) print $1 "\t" substr(t, RSTART, RLENGTH) }
     ' "$LINES"
 }
 
@@ -92,10 +93,13 @@ fi   # tree-only checks
 
 echo ":: private IP addresses"
 # documentation ranges (192.0.2.x, 198.51.100.x, 203.0.113.x) and public ones are fine;
-# the unit tests use 10.0.0.x as made-up data
+# the unit tests use 10.0.0.x as made-up data. Wide generic ranges (a.b.0.0/16 or wider,
+# e.g. Docker's 172.16.0.0/12) say nothing about a network and are fine too; a /24 or a
+# host is not.
 while IFS=$'\t' read -r where ip; do
     err "$where" "private IP ${ip//[^0-9.]/} — write 192.168.<vlan>.<host> instead"
-done < <(find_all '(^|[^0-9.])(192[.]168|10[.][0-9]{1,3}|172[.](1[6-9]|2[0-9]|3[01]))[.][0-9]{1,3}[.][0-9]{1,3}([^0-9.]|$)' 0 '^(tests/labber/unit[.]bats|[0-9a-f]+ tests/labber/unit[.]bats)')
+done < <(find_all '(^|[^0-9.])(192[.]168|10[.][0-9]{1,3}|172[.](1[6-9]|2[0-9]|3[01]))[.][0-9]{1,3}[.][0-9]{1,3}([^0-9.]|$)' 0 '^(tests/labber/unit[.]bats|[0-9a-f]+ tests/labber/unit[.]bats)' \
+    '(^|[^0-9.])[0-9]{1,3}[.][0-9]{1,3}[.]0[.]0/([0-9]|1[0-6])([^0-9]|$)')
 
 echo ":: keys"
 # private keys never; SSH public keys don't belong here either (tests make their own)

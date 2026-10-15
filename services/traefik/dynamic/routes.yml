@@ -1,7 +1,7 @@
 # Routes: one router + one service per app. Edit this file in the installed service folder
 # (labber keeps your edits on update); Traefik reloads it by itself, no restart needed.
-# {{ env "DOMAIN" }} is filled in by Traefik from .env. The DNS name (<name>.DOMAIN) must
-# resolve to this LXC (local DNS / UniFi / Technitium).
+# {{ env "DOMAIN" }} is filled in by Traefik from .env (the homelab sub-domain, e.g.
+# home.<your-domain>). *.DOMAIN must resolve to this LXC in the local DNS (UniFi / Technitium).
 #
 # Pattern — copy for each app:
 #   routers:   <name>: rule Host(`<name>.{{ env "DOMAIN" }}`), entryPoints [websecure], service <name>
@@ -12,7 +12,7 @@ http:
       entryPoints: [websecure]
       rule: Host(`traefik.{{ env "DOMAIN" }}`)
       service: api@internal
-      middlewares: [secure-headers]
+      middlewares: [dashboard-auth, secure-headers]
 
     example:
       entryPoints: [websecure]
