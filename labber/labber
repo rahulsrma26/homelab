@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.6"
+VERSION="4.2.7"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -510,6 +510,8 @@ labber_file() {
 #       uuid            a random UUID
 #       [set],N         N random characters from a tr-style set, e.g. [A-Za-z0-9],16
 #                       (typed value: at least N characters)
+#                       A typed value that doesn't meet the rule can still be kept after a
+#                       warning ("use it anyway?"), e.g. an existing password a dump expects
 # A name used several times in one .env is asked once and filled in everywhere.
 
 TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate|choice)\(([^}]*)\)[[:space:]]*)?\}\}'
@@ -730,7 +732,10 @@ fill_env_placeholders() {
                     read -rsp "  $n ($(gen_desc "${arg[$n]}")), Enter to generate: " v; echo
                     [[ -n "$v" ]] || v=$(gen_value "${arg[$n]}")
                     gen_valid "${arg[$n]}" "$v" && break
-                    warn "needs $(gen_desc "${arg[$n]}") — try again"
+                    # e.g. an existing password a restored database expects: your call
+                    warn "that doesn't meet $(gen_desc "${arg[$n]}")"
+                    read -rp "  use it anyway? (e.g. an existing password that must match) [y/N] " ans
+                    [[ "$ans" =~ ^[Yy] ]] && { warn "$n: kept as typed (weaker than the generated kind)"; break; }
                 done
                 value[$n]="$v"; ok "$n set" ;;
             default)

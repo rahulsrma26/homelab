@@ -144,6 +144,8 @@ Values in a service's `.env.example` (in [`services/`](../services/)) that labbe
 | `{{ name \| choice(lan,cf) }}` | one of the listed values (e.g. a service's mode); a wrong answer is asked again | — (skip leaves it unset) |
 | `{{ name \| generate([A-Za-z0-9],16) }}` | N random characters from a set (passwords, secrets with a minimum length); typed: at least N | generates |
 
+A typed value that doesn't meet its generator's rule (too short, not hex, …) gets a warning and **use it anyway? [y/N]**: **y** keeps it — for an existing password a restored database or another system expects — and **n** asks again.
+
 Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{ paperless_host }}:{{ paperless_port | default(8000) }}`. A name used several times in one `.env` is asked once and filled in everywhere (e.g. `{{ domain }}`).
 
 labber first asks once whether to generate all the secrets (it lists them); answer no to go through them one by one. Values only you can provide are asked one by one; secrets are typed hidden and checked against their rule. Anything left unset is listed before starting, and labber asks before starting anyway.
