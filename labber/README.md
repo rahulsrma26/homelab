@@ -24,6 +24,29 @@ apt update && apt install -y curl
 bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber) setup
 ```
 
+**Unattended** — every answer can be given up front, and `--yes` asks nothing at all (no terminal needed), so a new machine is one pasted line:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber) setup \
+  --yes --docker yes --prometheus http://<monitoring>:9090 --with fail2ban
+```
+
+| Flag | Answers | Without it, under `--yes` |
+|---|---|---|
+| `--docker yes\|no` | Docker host? | last answer, else yes |
+| `--with` / `--without STEP,…` | the checklist (`update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck alloy zsh labber fzf nfs fail2ban network`) | the pre-selected steps (optional ones — nfs, fail2ban, swap — off) |
+| `--admin NAME` | admin user (VM) | last answer; a new user gets no password (SSH is by key; set one with `passwd` for sudo) |
+| `--hostname` / `--timezone` / `--locale` | | unchanged / last answer, else what the machine has (a fresh LXC/VM: `Etc/UTC`) / `en_US.UTF-8` |
+| `--ssh-key 'ssh-ed25519 …'` | key, if none is installed | none: password logins stay on |
+| `--swap 1\|2\|3` | swap (VM); also checks the swap step | 1 (zram) |
+| `--network reservation\|skip` | fixed IP; also checks the network step | last answer, else reservation (changes nothing). A static IP is interactive only |
+| `--prometheus URL` / `--loki URL` | Alloy | `--loki` defaults to the Prometheus host, port 3100; neither → the Alloy step is skipped |
+| `--virt lxc\|vm` | only if detection fails | last answer |
+
+**`--dry-run`** shows what a run would do — the machine type, Docker yes/no, the checklist, and each answer with where it comes from (your flag, the remembered answer, or the default) — and changes nothing, not even the remembered answers. Check a command line with it, then run it without `--dry-run`.
+
+Without `--yes`, flags answer their questions and the rest is asked as usual. With `--yes` on a VM, key-only SSH isn't test-logged-in first: the Proxmox console is the way back if the key is wrong.
+
 It detects whether it's in an LXC or a VM and asks whether the machine will run **Docker services** — answer no for, say, a plain web server, and the Docker steps are left out (asked on every run, with your last answer as the default; answering no never uninstalls anything). It then shows a checklist with each step's current state and pre-selects what still needs doing. Toggle steps by number, then press Enter.
 
 | Step | LXC | VM | What it does |
@@ -34,7 +57,7 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Admin user | — | ✓ | asks for a name, adds it to `sudo`, copies root's SSH keys |
 | Hostname + timezone | ✓ | ✓ | sets them on a VM; for an LXC prints the `pct` command (Proxmox owns the LXC hostname) |
 | Time sync | — | ✓ | makes sure `systemd-timesyncd` (or chrony) is running; LXCs use the host's clock |
-| SSH: key-only logins | ✓ | ✓ | only once a key is installed; root is key-only in an LXC and off in a VM; you confirm a test login from a second terminal, or it reverts |
+| SSH: key-only logins | ✓ | ✓ | only once a key is installed (e.g. pasted at `pct create`); root is key-only in an LXC and off in a VM. On a VM you confirm a test login from a second terminal, or it reverts; an LXC can't lock you out (`pct enter` on the host), so it just prints how to undo |
 | Automatic security updates | ✓ | ✓ | `unattended-upgrades`, Debian security updates only, no auto-reboot |
 | Journal limit | ✓ | ✓ | systemd journal capped at 200 MB |
 | Swap | — | optional | asks: **1** zram only — turns off disk swap, so no swap writes to the SSD (also sets `RESUME=none` so boot doesn't wait for the old partition) · **2** zram first, disk swap as overflow · **3** disk swap only. LXC swap is set in Proxmox (`pct set <ID> --swap 0` saves host SSD writes) |
@@ -42,7 +65,7 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
 | Reboot/update checks | ✓ | ✓ | hourly and after every `apt` run: newer kernel installed (VMs), services on outdated libraries (`needrestart`, list-only), pending security updates. Shown at login, and exported as metrics for alerts |
-| Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki ([`services/monitoring`](../services/monitoring/)); asks for the URLs. Unlike the Proxmox hosts (full metrics), guests send only what's useful: VMs ~300 series (CPU, memory, load, disk I/O, real filesystems and NICs, pressure, failed services, health); LXCs even less (failed services, health, `/`, boot time — Proxmox already reports their CPU/memory/network). The config is checked with `alloy fmt` before it's applied. On **Docker hosts** it also sends per-container CPU, memory, network, restarts and OOM kills, plus container logs to Loki (Alloy runs as root there: container metrics need the containerd socket) |
+| Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki ([`services/monitoring`](../services/monitoring/)); asks for the URLs (or takes `--prometheus` / `--loki`). Unlike the Proxmox hosts (full metrics), guests send only what's useful: VMs ~300 series (CPU, memory, load, disk I/O, real filesystems and NICs, pressure, failed services, health); LXCs even less (failed services, health, `/`, boot time — Proxmox already reports their CPU/memory/network). The config is checked with `alloy fmt` before it's applied. On **Docker hosts** it also sends per-container CPU, memory, network, restarts and OOM kills, plus container logs to Loki (Alloy runs as root there: container metrics need the containerd socket) |
 | zsh + powerlevel10k | ✓ | ✓ | for the admin user (root on an LXC): zsh + p10k + autosuggestions + syntax highlighting; uses `tools/zsh/p10k.zsh` if present; labber and fzf work in it. Needs a Nerd Font in your terminal |
 | labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services`; on Docker hosts also a daily `labber check-updates` (shown in Grafana) |
 | fzf | ✓ | ✓ | from `tools/fzf.sh` |

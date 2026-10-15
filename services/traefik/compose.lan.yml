@@ -31,6 +31,10 @@ services:
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
+      # drop request headers that alias one Traefik sets (X_Forwarded_For for X-Forwarded-For):
+      # backends like Django/WSGI would read them as the real one
+      - --entrypoints.web.http.aliasHeadersStrategy=delete
+      - --entrypoints.websecure.http.aliasHeadersStrategy=delete
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443

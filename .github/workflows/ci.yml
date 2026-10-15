@@ -45,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [lxc, vm]
+        mode: [lxc, vm, auto]
     steps:
       - uses: actions/checkout@v5
       - run: tests/labber/run-setup.sh ${{ matrix.mode }}

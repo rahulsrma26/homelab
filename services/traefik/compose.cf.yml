@@ -80,6 +80,8 @@ services:
       # so traefik.enable alone never makes something public)
       - --providers.docker.constraints=Label(`homelab.exposure`,`public`)
       - --entrypoints.web.address=:80
+      # drop request headers that alias one Traefik sets (X_Forwarded_For for X-Forwarded-For)
+      - --entrypoints.web.http.aliasHeadersStrategy=delete
       # cloudflared runs on this VM and reaches Traefik through Docker's gateway, never from
       # a Cloudflare IP: trust Docker's private ranges, so the visitor's IP and https from
       # cloudflared reach the apps. Safe: port 80 is published on 127.0.0.1 only, so only

@@ -5,13 +5,14 @@
 # nothing left to do. Tests the working tree; needs only Docker (and internet: setup
 # installs packages, Alloy, Docker and zsh plugins).
 #
-#   tests/labber/run-setup.sh [lxc|vm|both]     (default: both, a few minutes)
+#   tests/labber/run-setup.sh [lxc|vm|auto|both]     (default: both = all three, a few minutes)
 #
 #   lxc  root only, no Docker — like a new Proxmox LXC
 #   vm   treated as a VM: an admin user (created beforehand, as the Debian installer
 #        does) gets sudo and becomes the user labber, zsh and fzf are set up for; root
 #        SSH off; Docker (nested, on its own storage volume); the second run goes
 #        through `sudo labber setup` as that user
+#   auto the lxc case as one unattended command: --yes and flags, no terminal, no input
 #
 # A container can't cover (the real VM tests do — see run-vm.sh): time sync, swap/zram,
 # the guest agent actually talking to Proxmox, and static IPs.
@@ -21,7 +22,7 @@ export COPYFILE_DISABLE=1
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
-modes="${1:-both}"; [[ "$modes" == both ]] && modes="lxc vm"
+modes="${1:-both}"; [[ "$modes" == both ]] && modes="lxc vm auto"
 image=labber-setup-test
 
 # what setup downloads, from the working tree: labber's tarball (LABBER_URL) and a
@@ -65,9 +66,9 @@ run_mode() {
 
     if [[ "$mode" == lxc ]]; then
         # treat it as a VM? n (→ LXC) · Docker services? n · checklist: a (all), Enter (run)
-        # locale: Enter · timezone, hostname: Enter · SSH key: paste · logged in? y
-        # Prometheus URL · Loki URL: Enter · network: 3 (skip)
-        answers=$'n\nn\na\n\n'$'\n'$'\n\n'"$key"$'\ny\n'$'http://127.0.0.1:9090\n\n'$'3\n'
+        # locale: Enter · timezone, hostname: Enter · SSH key: paste (an LXC has no test
+        # login) · Prometheus URL · Loki URL: Enter · network: 3 (skip)
+        answers=$'n\nn\na\n\n'$'\n'$'\n\n'"$key"$'\n'$'http://127.0.0.1:9090\n\n'$'3\n'
     else
         # the user the Debian installer creates on a VM; setup adds it to sudo
         docker exec "$name" useradd -m -s /bin/bash admin
@@ -78,6 +79,31 @@ run_mode() {
         answers=$'y\n\n6 20\n\n'$'\n'$'admin\n'$'\n\n'"$key"$'\ny\n'$'http://127.0.0.1:9090\n\n'
     fi
     echo ":: [$mode] labber setup in a fresh container"
+    if [[ "$mode" == auto ]]; then
+        # first --dry-run: it shows the plan and must change nothing at all
+        local dry
+        dry=$(docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+            bash -c "bash <(cat /t/labber) setup --dry-run --virt lxc --docker no --with nfs,fail2ban \
+                --ssh-key '$key' --prometheus http://127.0.0.1:9090 --network skip </dev/null" 2>&1 | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g')
+        echo "$dry" | grep -E 'dry-run|Prometheus|Loki|SSH key|network|timezone' | head -8
+        grep -q 'nothing was changed' <<< "$dry" && grep -q 'http://127.0.0.1:9090  (--prometheus)' <<< "$dry" \
+            && grep -q 'skip  (--network)' <<< "$dry" && grep -q -- '--ssh-key) → key-only' <<< "$dry" \
+            || { echo "$dry"; echo "FAIL: --dry-run didn't show the plan"; return 1; }
+        if docker exec "$name" sh -c 'test -e /var/lib/labber/setup.state || command -v alloy || command -v fail2ban-client || test -e /etc/ssh/sshd_config.d/10-labber.conf'; then
+            echo "FAIL: --dry-run changed something"; return 1
+        fi
+        echo "ok   --dry-run: plan shown, nothing changed"
+        # the same LXC as above, but one pasted command: every answer a flag, --yes, no
+        # terminal and no input at all
+        docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+            bash -c "bash <(cat /t/labber) setup --yes --virt lxc --docker no --with nfs,fail2ban \
+                --ssh-key '$key' --prometheus http://127.0.0.1:9090 --network skip </dev/null" 2>&1 \
+            | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee "$tmp/setup-$mode.log" | grep -E '^(::|✓|!|error)' || true
+        docker cp "$tmp/setup-$mode.log" "$name:/root/setup1.log"
+        echo ":: [$mode] checking the result (the LXC checks)"
+        docker exec "$name" bats "/t/setup-lxc.bats"
+        return
+    fi
     docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo -i "$name" \
         script -qefc 'bash -c "bash <(cat /t/labber) setup"' /dev/null <<< "$answers" \
         | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r' | tee "$tmp/setup-$mode.log" \

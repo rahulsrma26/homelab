@@ -800,6 +800,42 @@ history_repo() {
     done
 }
 
+@test "setup --prometheus/--loki: Alloy's URLs without questions; bad input refused" {
+    ask() { echo "ASKED" >&2; echo ""; }          # any question would show up here
+    SETUP_PROM="" SETUP_LOKI=""
+    setup_args --prometheus http://mon.example:9090/ --loki http://mon.example:3100
+    run alloy_urls; [ "$status" -eq 0 ]; [[ "$output" != *ASKED* ]]
+    alloy_urls; [ "$ALLOY_PROM" = http://mon.example:9090 ] && [ "$ALLOY_LOKI" = http://mon.example:3100 ]
+    # --prometheus alone: Loki on the same host, port 3100, still no question
+    SETUP_PROM="" SETUP_LOKI=""; setup_args --prometheus http://10.9.9.9:9090
+    run alloy_urls; [[ "$output" != *ASKED* ]]; alloy_urls; [ "$ALLOY_LOKI" = http://10.9.9.9:3100 ]
+    # nothing given: asked as before (Enter on the Prometheus question = skip)
+    SETUP_PROM="" SETUP_LOKI=""; run alloy_urls; [ "$status" -eq 1 ]; [[ "$output" == *ASKED* ]]
+    # refused: not a URL, a missing value, an unknown option
+    run setup_args --prometheus mon:9090; [ "$status" -ne 0 ]; [[ "$output" == *"needs an http"* ]]
+    run setup_args --loki; [ "$status" -ne 0 ]
+    run setup_args --promethus http://x:9090; [ "$status" -ne 0 ]; [[ "$output" == *"unknown setup option"* ]]
+}
+
+@test "setup flags: each answers its question; --yes never reads; bad values refused" {
+    ask_read=0; read() { ask_read=1; command read "$@"; }       # a keyboard read would set this
+    SETUP_YES=0; SETUP_ANS=(); SETUP_WITH="" SETUP_WITHOUT=""
+    setup_args --docker no --admin ops --hostname box1 --timezone Etc/GMT-1 --locale de_DE.UTF-8 \
+        --ssh-key 'ssh-ed25519 AAAAC3Nza test' --swap 2 --network skip --virt lxc --with fail2ban,nfs --without zsh
+    [ "${SETUP_ANS[docker]}" = no ] && [ "${SETUP_ANS[admin]}" = ops ] && [ "${SETUP_ANS[timezone]}" = Etc/GMT-1 ]
+    [ "${SETUP_ANS[network]}" = 3 ] && [ "${SETUP_ANS[swap]}" = 2 ] && [[ " $SETUP_WITH " == *" fail2ban nfs "* && " $SETUP_WITH " == *" network "* && " $SETUP_WITH " == *" swap "* ]] && [ "$(echo $SETUP_WITHOUT)" = zsh ]
+    # a flag answers without asking, even without --yes
+    [ "$(answer hostname "hostname" old </dev/null 2>/dev/null)" = box1 ] && [ "$ask_read" = 0 ]
+    # --yes: no flag → the default, without reading
+    SETUP_YES=1; [ "$(answer nothing "q" dflt </dev/null 2>/dev/null)" = dflt ] && [ "$ask_read" = 0 ]
+    yesno "q?" y </dev/null 2>/dev/null; ! yesno "q?" n </dev/null 2>/dev/null; [ "$ask_read" = 0 ]
+    # refused, with a message
+    for bad in "--docker maybe" "--swap 4" "--network static" "--virt docker" "--admin root" "--timezone Mars/Base" \
+               "--ssh-key notakey" "--with fail2ban,nosuchstep" "--admin" "--frobnicate x"; do
+        run setup_args $bad; [ "$status" -ne 0 ] || { echo "accepted: $bad"; false; }
+    done
+}
+
 @test "preflight creates .env from .env.example when there's none yet" {
     mkdir svc; printf 'K=1\n' > svc/.env.example
     sync_env_keys svc >/dev/null

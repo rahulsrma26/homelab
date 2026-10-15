@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.5"
+VERSION="4.2.6"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1529,6 +1529,12 @@ SETUP_NOTES=()         # anything else the user needs to do
 SETUP_NET_PENDING=0    # a static-IP change is waiting for confirmation
 SETUP_NET_NEW=""       # the address it changes to
 SETUP_DOCKER=1         # 0: not a Docker host — Docker steps are left out
+SETUP_PROM=""          # --prometheus URL: Alloy's Prometheus, without asking
+SETUP_LOKI=""          # --loki URL: Alloy's Loki, without asking
+SETUP_YES=0            # --yes: never ask — flags, else the remembered/default answers
+declare -A SETUP_ANS=()   # answers given as flags (setup_args), by question
+SETUP_WITH="" SETUP_WITHOUT=""   # --with / --without: steps added to / removed from the checklist
+SETUP_DRY=0            # --dry-run: show what would be done and with which answers; change nothing
 
 # small key=value store so re-runs remember choices (admin user, network choice)
 state_get() {
@@ -1536,6 +1542,7 @@ state_get() {
         "$LABBER_STATE_DIR/setup.state" 2>/dev/null || true
 }
 state_set() {
+    (( SETUP_DRY )) && return 0          # --dry-run remembers nothing
     local f="$LABBER_STATE_DIR/setup.state"
     mkdir -p "$LABBER_STATE_DIR"; touch "$f"
     { grep -v "^$1=" "$f" || true; echo "$1=$2"; } > "$f.tmp"
@@ -1560,18 +1567,26 @@ apt_get() { DEBIAN_FRONTEND=noninteractive apt-get "$@" < /dev/null; }
 apt_install() { apt_get install -y -q "$@"; }
 user_home() { getent passwd "$1" | cut -d: -f6; }
 
-# ask "question" [default] → prints the answer (prompt goes to stderr)
+# ask "question" [default] → prints the answer (prompt goes to stderr). With --yes it
+# never reads: the default is the answer (shown, so the log says what was chosen)
 ask() {
     local ans
+    if (( SETUP_YES )); then echo "  $1: ${2:-(none)}  [--yes]" >&2; echo "${2:-}"; return; fi
     read -rp "  $1${2:+ [$2]}: " ans
     echo "${ans:-${2:-}}"
 }
 # yesno "question" y|n → exit status
 yesno() {
     local ans def="${2:-n}"
+    if (( SETUP_YES )); then echo "  $1 $def  [--yes]" >&2; [[ "$def" == y ]]; return; fi
     read -rp "  $1 [$([[ $def == y ]] && echo Y/n || echo y/N)] " ans
     ans="${ans:-$def}"
     [[ "$ans" =~ ^[Yy] ]]
+}
+# answer KEY "question" [default]: the --flag for KEY if given (not asked), else ask
+answer() {
+    if [[ -n "${SETUP_ANS[$1]:-}" ]]; then echo "  $2: ${SETUP_ANS[$1]}  [--${1//_/-}]" >&2; echo "${SETUP_ANS[$1]}"
+    else ask "$2" "${3:-}"; fi
 }
 
 valid_ipv4() {
@@ -1699,13 +1714,20 @@ st_admin_status() {
 st_admin_run() {
     local name
     while true; do
-        name=$(ask "admin username (you'll SSH in as this user)" "$(state_get admin)")
+        name=$(answer admin "admin username (you'll SSH in as this user)" "$(state_get admin)")
         [[ "$name" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$name" != root ]] && break
         warn "use lowercase letters, digits, - or _"
+        if (( SETUP_YES )) || [[ -n "${SETUP_ANS[admin]:-}" ]]; then warn "no valid --admin — skipped"; return 1; fi
     done
     if ! id "$name" &>/dev/null; then
-        info "creating $name — choose a password (it's used for sudo)"
-        adduser --gecos "" "$name" || return 1
+        if (( SETUP_YES )); then
+            # no terminal to type a password into: no password yet (SSH is by key anyway)
+            adduser --disabled-password --gecos "" "$name" || return 1
+            SETUP_NOTES+=("$name has no password yet; sudo needs one: as root, passwd $name")
+        else
+            info "creating $name — choose a password (it's used for sudo)"
+            adduser --gecos "" "$name" || return 1
+        fi
     fi
     usermod -aG sudo "$name" || return 1
     if getent group _ssh >/dev/null; then usermod -aG _ssh "$name"; fi
@@ -1739,7 +1761,7 @@ st_hostname_run() {
     cur_tz=$(current_tz)
     # suggest what the machine has; a fresh LXC/VM is usually on UTC — type yours, e.g. Region/City
     def_tz=$(state_get timezone | grep . || echo "${cur_tz:-Etc/UTC}")
-    tz=$(ask "timezone (Region/City — list: timedatectl list-timezones)" "$def_tz")
+    tz=$(answer timezone "timezone (Region/City — list: timedatectl list-timezones)" "$def_tz")
     if [[ -f "/usr/share/zoneinfo/$tz" ]]; then
         ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime
         echo "$tz" > /etc/timezone
@@ -1750,7 +1772,7 @@ st_hostname_run() {
     fi
 
     local cur new; cur=$(hostname)
-    new=$(ask "hostname" "$cur")
+    new=$(answer hostname "hostname" "$cur")
     if [[ ! "$new" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
         warn "invalid hostname '$new' — skipped"
     elif [[ "$new" != "$cur" ]]; then
@@ -1786,7 +1808,7 @@ st_ssh_run() {
     local user; user=$(setup_login_user)
     if ! has_ssh_key "$user"; then
         warn "no SSH key installed for $user — password logins stay on until there is one"
-        local key; key=$(ask "paste your public key (ssh-ed25519 …), or Enter to skip")
+        local key; key=$(answer ssh_key "paste your public key (ssh-ed25519 …), or Enter to skip")
         if [[ "$key" =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)[[:space:]]+[A-Za-z0-9+/=]+ ]]; then
             add_ssh_key "$user" "$key"; ok "key added for $user"
         else
@@ -1819,10 +1841,20 @@ EOF
         return 1
     fi
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || systemctl restart ssh
-    echo
-    info "keep this session open, and from a SECOND terminal on your Mac run:"
-    echo -e "    ${W}ssh $user@$(primary_ip)${N}"
-    if yesno "did that log in without asking for a password?" n; then
+    if [[ "$SETUP_VIRT" != lxc ]]; then
+        echo
+        info "keep this session open, and from a SECOND terminal on your Mac run:"
+        echo -e "    ${W}ssh $user@$(primary_ip)${N}"
+    fi
+    # an LXC can't lock you out (pct enter on the host always works): no test needed
+    if [[ "$SETUP_VIRT" == lxc ]]; then
+        ok "SSH is key-only (root: $root_policy)"
+        SETUP_NOTES+=("SSH is key-only now. If your key doesn't get you in: on the Proxmox host, pct enter <CTID>, then rm $SETUP_SSH_CONF && systemctl reload ssh")
+    elif (( SETUP_YES )); then
+        # --yes: no second terminal to test from; the Proxmox console is the way back in
+        ok "SSH is key-only (root: $root_policy)"
+        SETUP_NOTES+=("SSH is key-only now (--yes: not test-logged-in). If your key doesn't get you in: Proxmox console → rm $SETUP_SSH_CONF && systemctl reload ssh")
+    elif yesno "did that log in without asking for a password?" n; then
         ok "SSH is key-only (root: $root_policy)"
     else
         rm -f "$SETUP_SSH_CONF"
@@ -2006,7 +2038,7 @@ st_locale_status() {
 locale_norm() { echo "$1" | sed -E 's/\.UTF-?8$/.utf8/I'; }
 st_locale_run() {
     local loc line
-    loc=$(ask "locale" "$(state_get locale | grep . || echo en_US.UTF-8)")
+    loc=$(answer locale "locale" "$(state_get locale | grep . || echo en_US.UTF-8)")
     line=$(grep -m1 -E "^${loc//./\\.}[[:space:]]" /usr/share/i18n/SUPPORTED 2>/dev/null || true)
     if [[ -z "$line" ]]; then
         pkg_installed locales || apt_install locales || return 1
@@ -2070,7 +2102,7 @@ st_swap_run() {
     echo "  1) zram only — no disk swap, so no swap writes to the SSD"
     echo "  2) zram first, disk swap as overflow"
     echo "  3) disk swap only (no zram)"
-    local choice; choice=$(ask "swap" "$(state_get swap | grep -E '^[123]$' || echo 1)")
+    local choice; choice=$(answer swap "swap" "$(state_get swap | grep -E '^[123]$' || echo 1)")
     [[ "$choice" =~ ^[123]$ ]] || { warn "pick 1, 2 or 3"; return 1; }
     state_set swap "$choice"
 
@@ -2177,20 +2209,26 @@ st_alloy_status() {
     if systemctl is-active --quiet alloy 2>/dev/null && grep -qs 'managed by labber setup' /etc/alloy/config.alloy
     then echo "done: $(state_get alloy_prometheus)"; else echo "todo"; fi
 }
+# Alloy's two URLs → ALLOY_PROM / ALLOY_LOKI: from --prometheus / --loki when given (no
+# questions), else asked (Enter keeps the last answer). Returns 1 when skipped.
+alloy_urls() {
+    local prom="$SETUP_PROM" loki="$SETUP_LOKI"
+    while [[ -z "$prom" ]] || [[ ! "$prom" =~ ^https?://[^[:space:]]+$ ]]; do
+        prom=$(ask "Prometheus URL (e.g. http://<monitoring-host>:9090)" "$(state_get alloy_prometheus)")
+        [[ -z "$prom" ]] && { warn "no Prometheus URL — skipped"; return 1; }
+        [[ "$prom" =~ ^https?://[^[:space:]]+$ ]] || warn "needs an http:// or https:// URL"
+    done
+    if [[ -z "$loki" && -n "$SETUP_PROM" ]]; then loki="${prom%:*}:3100"; fi   # --prometheus alone: Loki on the same host
+    while [[ ! "$loki" =~ ^https?://[^[:space:]]+$ ]]; do
+        loki=$(ask "Loki URL" "$(state_get alloy_loki | grep . || echo "${prom%:*}:3100")")
+        [[ "$loki" =~ ^https?://[^[:space:]]+$ ]] || warn "needs an http:// or https:// URL"
+    done
+    ALLOY_PROM="${prom%/}"; ALLOY_LOKI="${loki%/}"
+}
 st_alloy_run() {
     local prom loki
-    while true; do
-        prom=$(ask "Prometheus URL (e.g. http://<monitoring-host>:9090)" "$(state_get alloy_prometheus)")
-        [[ "$prom" =~ ^https?://[^[:space:]]+$ ]] && break
-        [[ -z "$prom" ]] && { warn "no Prometheus URL — skipped"; return 0; }
-        warn "needs an http:// or https:// URL"
-    done
-    while true; do
-        loki=$(ask "Loki URL" "$(state_get alloy_loki | grep . || echo "${prom%:*}:3100")")
-        [[ "$loki" =~ ^https?://[^[:space:]]+$ ]] && break
-        warn "needs an http:// or https:// URL"
-    done
-    prom="${prom%/}"; loki="${loki%/}"
+    alloy_urls || return 0
+    prom="$ALLOY_PROM"; loki="$ALLOY_LOKI"
 
     if ! pkg_installed alloy; then
         install -m 0755 -d /etc/apt/keyrings
@@ -2395,7 +2433,10 @@ st_network_run() {
         echo "  2) static IP on this machine (rolls back unless you confirm from the new IP)"
     fi
     echo "  3) skip"
-    local choice; choice=$(ask "choice" "$(state_get network_choice | grep -E '^[123]$' || echo 1)")
+    local choice; choice=$(answer network "choice" "$(state_get network_choice | grep -E '^[123]$' || echo 1)")
+    if [[ "$choice" == 2 ]] && (( SETUP_YES )); then
+        warn "a static IP needs the interactive setup (it rolls back unless confirmed) — skipped"; return 0
+    fi
     state_set network_choice "$choice"
     case "$choice" in
         1)
@@ -2537,7 +2578,10 @@ setup_ask_docker() {
     last=$(state_get docker)
     [[ "$last" == no ]] && def=n
     [[ -n "$last" ]] && hint=" (last answer: $last)"
-    if yesno "Will this machine run Docker services?$hint" "$def"; then
+    if [[ -n "${SETUP_ANS[docker]:-}" ]]; then
+        def="${SETUP_ANS[docker]:0:1}"; echo "  Will this machine run Docker services? ${SETUP_ANS[docker]}  [--docker]" >&2
+    fi
+    if [[ -n "${SETUP_ANS[docker]:-}" && "$def" == y ]] || { [[ -z "${SETUP_ANS[docker]:-}" ]] && yesno "Will this machine run Docker services?$hint" "$def"; }; then
         SETUP_DOCKER=1; state_set docker yes
     else
         SETUP_DOCKER=0; state_set docker no
@@ -2545,9 +2589,88 @@ setup_ask_docker() {
     fi
 }
 
+# setup's answers given up front, so they aren't asked (`labber help` lists them). With
+# --yes nothing is asked at all: what no flag answers takes its remembered/default answer.
+SETUP_USAGE="setup [--dry-run] [--yes] [--docker yes|no] [--with STEP,…] [--without STEP,…] [--admin NAME]
+      [--hostname NAME] [--timezone Region/City] [--locale LOCALE] [--ssh-key 'ssh-ed25519 …']
+      [--swap 1|2|3] [--network reservation|skip] [--virt lxc|vm] [--prometheus URL] [--loki URL]"
+setup_args() {
+    local v
+    while (( $# )); do
+        [[ -n "$1" ]] || { shift; continue; }
+        case "$1" in
+            --yes|-y) SETUP_YES=1; shift; continue ;;
+            # never asks either: what isn't given shows its remembered/default answer
+            --dry-run|-n) SETUP_DRY=1; SETUP_YES=1; shift; continue ;;
+        esac
+        v="${2:-}"; [[ -n "$v" && "$v" != --* ]] || die "$1 needs a value — $SETUP_USAGE"
+        case "$1" in
+            --prometheus|--loki)
+                [[ "$v" =~ ^https?://[^[:space:]]+$ ]] || die "$1 needs an http:// or https:// URL"
+                if [[ "$1" == --prometheus ]]; then SETUP_PROM="${v%/}"; else SETUP_LOKI="${v%/}"; fi ;;
+            --docker)   [[ "$v" =~ ^(yes|no)$ ]] || die "--docker yes|no"; SETUP_ANS[docker]="$v" ;;
+            --virt)     [[ "$v" =~ ^(lxc|vm)$ ]] || die "--virt lxc|vm"; SETUP_ANS[virt]="$v" ;;
+            # these two also check their step: giving the answer means you want it done
+            --swap)     [[ "$v" =~ ^[123]$ ]] || die "--swap 1|2|3 (1 zram, 2 zram + disk, 3 disk)"; SETUP_ANS[swap]="$v"; SETUP_WITH+=" swap" ;;
+            --network)  case "$v" in reservation) SETUP_ANS[network]=1 ;; skip) SETUP_ANS[network]=3 ;;
+                            *) die "--network reservation|skip (a static IP is set interactively)" ;; esac
+                        SETUP_WITH+=" network" ;;
+            --admin)    [[ "$v" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$v" != root ]] || die "--admin: lowercase letters, digits, - or _ (not root)"
+                        SETUP_ANS[admin]="$v" ;;
+            --hostname) SETUP_ANS[hostname]="$v" ;;
+            --timezone) [[ -f "/usr/share/zoneinfo/$v" ]] || die "--timezone: unknown zone '$v' (Region/City, see timedatectl list-timezones)"; SETUP_ANS[timezone]="$v" ;;
+            --locale)   SETUP_ANS[locale]="$v" ;;
+            --ssh-key)  [[ "$v" =~ ^(ssh-(ed25519|rsa)|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)[[:space:]]+[A-Za-z0-9+/=]+ ]] \
+                            || die "--ssh-key: a public key line (ssh-ed25519 AAAA…), quoted"
+                        SETUP_ANS[ssh_key]="$v" ;;
+            --with|--without)
+                local st
+                for st in ${v//,/ }; do
+                    [[ " ${SETUP_STEPS[*]} " == *" $st "* ]] || die "$1: no step '$st' (steps: ${SETUP_STEPS[*]})"
+                done
+                if [[ "$1" == --with ]]; then SETUP_WITH+=" ${v//,/ }"; else SETUP_WITHOUT+=" ${v//,/ }"; fi ;;
+            *) die "unknown setup option '$1' — $SETUP_USAGE" ;;
+        esac
+        shift 2
+    done
+}
+# --dry-run: the answers each checked step would use, and where they come from
+setup_plan() {
+    local ids=() sels=() i id
+    while [[ "$1" != -- ]]; do ids+=("$1"); shift; done; shift; sels=("$@")
+    src() {   # src KEY remembered default → "value  (flag|remembered|default)"
+        if [[ -n "${SETUP_ANS[$1]:-}" ]]; then echo "${SETUP_ANS[$1]}  (--${1//_/-})"
+        elif [[ -n "$2" ]]; then echo "$2  (remembered)"
+        else echo "${3:-—}  (default)"; fi
+    }
+    echo -e "\n${W}--dry-run: nothing was changed. A run would answer:${N}"
+    for i in "${!ids[@]}"; do
+        (( sels[i] )) || continue
+        id="${ids[$i]}"
+        case "$id" in
+            admin)    echo "  admin user      $(src admin "$(state_get admin)" "— (no admin: step skipped)")" ;;
+            hostname) echo "  timezone        $(src timezone "$(state_get timezone)" "$(current_tz)")"
+                      echo "  hostname        $(src hostname "" "$(hostname)")" ;;
+            locale)   echo "  locale          $(src locale "$(state_get locale)" en_US.UTF-8)" ;;
+            ssh)      if has_ssh_key "$(setup_login_user)"; then echo "  SSH key         already installed → key-only logins"
+                      elif [[ -n "${SETUP_ANS[ssh_key]:-}" ]]; then echo "  SSH key         ${SETUP_ANS[ssh_key]:0:40}…  (--ssh-key) → key-only logins"
+                      else echo "  SSH key         none → password logins stay on (give --ssh-key)"; fi ;;
+            swap)     echo "  swap            $(src swap "$(state_get swap)" "1") (1 zram, 2 zram + disk, 3 disk)" ;;
+            network)  local nc; nc=$(src network "$(state_get network_choice)" 1)
+                      case "${nc%% *}" in 1) nc="reservation: no change here ${nc#* }" ;; 2) nc="static IP (asked: not with --yes) ${nc#* }" ;; 3) nc="skip ${nc#* }" ;; esac
+                      echo "  network         $nc" ;;
+            alloy)    if [[ -n "$SETUP_PROM" ]]; then echo "  Prometheus      $SETUP_PROM  (--prometheus)"
+                                                   echo "  Loki            ${SETUP_LOKI:-${SETUP_PROM%:*}:3100}  (${SETUP_LOKI:+--loki}${SETUP_LOKI:-from --prometheus})"
+                      elif [[ -n "$(state_get alloy_prometheus)" ]]; then echo "  Prometheus      $(state_get alloy_prometheus)  (remembered)"
+                      else echo "  Prometheus      none → the Alloy step is skipped (give --prometheus)"; fi ;;
+        esac
+    done
+    echo -e "\n  remove --dry-run to do it (with --yes: without any question)"
+}
 do_setup() {
     if [[ "${1:-}" == --confirm-ip ]]; then setup_confirm_ip; return; fi
-    interactive || die "setup is interactive — run it in a terminal"
+    setup_args "$@"
+    interactive || (( SETUP_YES )) || die "setup is interactive — run it in a terminal, or give the answers with --yes (labber help)"
     if (( EUID != 0 )); then
         # re-run under sudo when labber is a real file (not `bash <(curl …)`)
         if [[ -f "$0" && "$0" != /dev/* && "$0" != /proc/* ]]; then exec sudo bash "$0" setup; fi
@@ -2558,7 +2681,9 @@ do_setup() {
     labber_need_files
 
     SETUP_VIRT=$(detect_virt)
-    if [[ "$SETUP_VIRT" != lxc && "$SETUP_VIRT" != vm ]]; then
+    if [[ -n "${SETUP_ANS[virt]:-}" && "$SETUP_VIRT" != lxc && "$SETUP_VIRT" != vm ]]; then
+        SETUP_VIRT="${SETUP_ANS[virt]}"; state_set virt "$SETUP_VIRT"
+    elif [[ "$SETUP_VIRT" != lxc && "$SETUP_VIRT" != vm ]]; then
         warn "couldn't tell whether this is an LXC or a VM (detected: $SETUP_VIRT)"
         local last_virt; last_virt=$(state_get virt)
         if yesno "treat it as a VM?${last_virt:+ (last answer: $last_virt)}" "$([[ $last_virt == lxc ]] && echo n || echo y)"; then
@@ -2578,6 +2703,9 @@ do_setup() {
         s=$("st_${id}_status")
         ids+=("$id"); stat+=("$s")
         if [[ "$s" == todo* ]] && ! step_optional "$id"; then sel+=(1); else sel+=(0); fi
+        # --with / --without: chosen up front (a step that doesn't apply here is ignored)
+        [[ " $SETUP_WITH " == *" $id "* ]] && sel[-1]=1
+        [[ " $SETUP_WITHOUT " == *" $id "* ]] && sel[-1]=0
     done
 
     local n i input
@@ -2589,6 +2717,8 @@ do_setup() {
             printf "  %2d %b %-50s %b%s%b\n" "$((i+1))" "$mark" "$(step_title "${ids[$i]}")" "$sc" "${stat[$i]}" "$N"
         done
         echo
+        if (( SETUP_DRY )); then setup_plan "${ids[@]}" -- "${sel[@]}"; return 0; fi
+        if (( SETUP_YES )); then info "--yes: running the checked steps"; break; fi
         read -rp "toggle by number (e.g. 3 5), a = all, n = none, Enter = run, q = quit: " input
         case "$input" in
             "") break ;;
@@ -2697,6 +2827,10 @@ ${W}Commands:${N}
   [svc] status      show container status
   [svc] go          cd to service directory
   setup             prepare this fresh LXC/VM (interactive checklist; re-runnable)
+                    --dry-run: show the steps and answers a run would use, change nothing
+                    answers up front: --yes (ask nothing) --docker yes|no --with/--without STEP,…
+                    --admin --hostname --timezone --locale --ssh-key --swap 1|2|3
+                    --network reservation|skip --virt lxc|vm --prometheus URL --loki URL
   ls                list services: containers up, health, ports, updates
   check-updates     check images and repo config for updates (cron-able)
   clean             remove all unused containers, images, networks, and volumes
@@ -2728,6 +2862,8 @@ ${W}Note:${N}
 ${W}Fresh LXC/VM${N} (as root — only curl needed):
   apt update && apt install -y curl
   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber) setup
+  … setup --yes --docker yes --prometheus http://<monitoring>:9090 --with fail2ban
+                                                     (one paste, no questions; see "setup" above)
 
 ${W}Just install labber:${N}
   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber) install
@@ -2772,7 +2908,7 @@ labber_main() {
         status)    do_status    "$SVC" ;;
         ls)        do_ls ;;
         check-updates) do_check_updates ;;
-        setup)     do_setup     "$SVC" ;;
+        setup)     do_setup     "$SVC" "$@" ;;
         go)        do_go        "$SVC" ;;
         clean)     do_clean ;;
         tool)      do_tool      "$SVC" ;;
