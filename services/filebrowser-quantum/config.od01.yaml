@@ -1,12 +1,19 @@
+# od01 (the files LXC). Each source's defaultPermissions are what a new user gets there;
+# existing users keep theirs (Settings → User Management → a user → its sources).
 server:
   cacheDir: /cache
   sources:
     - path: /srv/files
       config:
         defaultEnabled: true
+        defaultPermissions: {view: true, download: true, create: true, modify: true, delete: true, configured: true}
     - path: /srv/media
       config:
         defaultEnabled: true
+        defaultPermissions: {view: true, download: true, create: true, modify: true, delete: true, configured: true}
+    # read-only: Immich and Paperless own these files (the mount is read-only too)
     - path: /srv/vault
       config:
         defaultEnabled: true
+        readOnly: true
+        defaultPermissions: {view: true, download: true, create: false, modify: false, delete: false, configured: true}
