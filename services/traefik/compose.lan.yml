@@ -40,8 +40,11 @@ services:
       - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
-      # check the TXT record against public resolvers, not the local DNS
-      - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+      # don't check the TXT record from here: a router that intercepts all DNS (UniFi ad
+      # blocking / content filtering / DNS redirect) answers in Cloudflare's place and never
+      # shows it. Let's Encrypt checks from the internet; wait a minute before asking it to.
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.propagation.disableChecks=true
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.propagation.delayBeforeChecks=60s
       - --api.dashboard=true
     volumes:
       - ./dynamic:/etc/traefik/dynamic:ro

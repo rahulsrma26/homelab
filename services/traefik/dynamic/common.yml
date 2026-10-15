@@ -1,6 +1,12 @@
 # Shared pieces the routes in routes.yml can use.
 http:
   middlewares:
+    # the dashboard lives at /dashboard/: send the bare address (and /dashboard) there
+    dashboard-redirect:
+      redirectRegex:
+        regex: "^(https?://[^/]+)(/|/dashboard)?$"
+        replacement: "${1}/dashboard/"
+
     # login for the dashboard: user admin, DASHBOARD_PASSWORD from .env (lan mode)
     dashboard-auth:
       basicAuth:

@@ -12,7 +12,7 @@ http:
       entryPoints: [websecure]
       rule: Host(`traefik.{{ env "DOMAIN" }}`)
       service: api@internal
-      middlewares: [dashboard-auth, secure-headers]
+      middlewares: [dashboard-redirect, dashboard-auth, secure-headers]
 
     example:
       entryPoints: [websecure]
