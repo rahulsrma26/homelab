@@ -53,22 +53,26 @@ setup() {
 @test "fill: each name asked once, defaults, generated secrets, typed values" {
     command -v script >/dev/null || skip "needs script(1)"
     printf '%s\n' 'S={{ s | generate(hex64) }}' 'P={{ p | generate([A-Za-z0-9],16) }}   # note' \
+        'OLD={{ old | generate([A-Za-z0-9],32) }}' \
         'TOKEN={{ token }}' 'URL=http://{{ host }}:{{ port | default(8000) }}/v1' 'URL2=http://{{ host }}/x' 'KEEP=1' > .env
     printf 'source "%s"; set +u\nfill_env_placeholders .env\n' "$LABBER" > fill.sh
-    # answers: generate s and p? no · s (typed, too short → asked again) · s · p: Enter → generated ·
+    # answers: generate s, p and old? no · s: too short → use anyway? n → asked again · s ·
+    # p: Enter → generated · old: an existing 10-character password → use anyway? y ·
     # token · host (asked once) · port: Enter → 8000
-    run script -qefc "bash fill.sh" /dev/null <<< $'n\nshort\nbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef\n\nmy-token\n10.0.0.9\n\n'
+    run script -qefc "bash fill.sh" /dev/null <<< $'n\nshort\nn\nbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef\n\nOldPass123\ny\nmy-token\n10.0.0.9\n\n'
     echo "$output"
     [ "$(env_get .env S)" = beefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeefbeef ]
     [[ "$(env_get .env P)" =~ ^[A-Za-z0-9]{16}$ ]]
+    [ "$(env_get .env OLD)" = OldPass123 ]
+    [[ "$output" == *"use it anyway?"* && "$output" == *"old: kept as typed"* ]]
     grep -q '# note' .env
     [ "$(env_get .env TOKEN)" = my-token ]
     [ "$(env_get .env URL)" = "http://10.0.0.9:8000/v1" ]
     [ "$(env_get .env URL2)" = "http://10.0.0.9/x" ]
     [ "$(env_get .env KEEP)" = 1 ]
     [ "$(grep -c 'host (required)' <<< "$output")" -eq 1 ]
-    [[ "$output" == *"needs 64 hex characters"* ]]
-    [[ "$output" == *"Generate s p?"* ]]
+    [[ "$output" == *"doesn't meet 64 hex characters"* ]]
+    [[ "$output" == *"Generate s p old?"* ]]
     [ -z "$(env_placeholders .env)" ]
 }
 
