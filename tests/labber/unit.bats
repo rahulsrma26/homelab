@@ -748,6 +748,58 @@ make_bundle() {
     [ -f svc/.labber-base ]
 }
 
+# a repo with history: services/demo/app.yml was v1, is v2 now. Sets REPO; $SRC = a fresh
+# fetch of services/ (like an update), with services/demo inside
+history_repo() {
+    git init -q "$T/hist"; mkdir -p "$T/hist/services/demo"
+    gc() { git -C "$T/hist" add -A && git -C "$T/hist" -c user.name=t -c user.email=t@t commit -qm "$1"; }
+    printf 'v: 1\n' > "$T/hist/services/demo/app.yml"; printf 'x\n' > "$T/hist/services/demo/other.yml"; gc one
+    printf 'v: 2\n' > "$T/hist/services/demo/app.yml"; gc two
+    REPO="file://$T/hist"; CLONE_RETRY_DELAY=0
+    SRC=$(clone_repo_dir services/)/services/demo
+}
+
+@test "update before .labber-base: a file that is an old repo version is replaced, not kept" {
+    history_repo
+    mkdir svc; printf 'v: 1\n' > svc/app.yml; printf 'x\n' > svc/other.yml     # installed at v1, no record
+    run copy_svc_files "$SRC" svc
+    [ "$status" -eq 0 ]
+    [ "$(cat svc/app.yml)" = 'v: 2' ]
+    [ ! -e svc/app.yml.labber-new ]
+    [[ "$output" != *"kept your edits"* ]]
+    [ -z "$(find /tmp -maxdepth 1 -name 'homelab-history-*' -newer "$T" 2>/dev/null)" ]   # history clone removed
+}
+
+@test "update before .labber-base: a real local edit (in no repo version) is still kept" {
+    history_repo
+    mkdir svc; printf 'v: 1\nmine: yes\n' > svc/app.yml
+    run copy_svc_files "$SRC" svc
+    grep -q 'mine: yes' svc/app.yml
+    [ "$(cat svc/app.yml.labber-new)" = 'v: 2' ]
+    [[ "$output" == *"kept your edits"* ]]
+}
+
+@test "update in a terminal asks about an edited file the repo changed: repo's, keep, cancel" {
+    history_repo
+    interactive() { true; }
+    setup_svc() { rm -rf svc; mkdir svc; printf 'v: 1\nmine: yes\n' > svc/app.yml; printf 'x\n' > svc/other.yml; }
+    # r: the repo's version, yours saved as .labber-bak
+    setup_svc; run copy_svc_files "$SRC" svc <<< r
+    [ "$status" -eq 0 ] && [ "$(cat svc/app.yml)" = 'v: 2' ] && grep -q 'mine: yes' svc/app.yml.labber-bak
+    [[ "$output" == *"+v: 2"* ]]                                   # it showed the diff
+    # k: yours stays, the repo's goes next to it
+    setup_svc; run copy_svc_files "$SRC" svc <<< k
+    [ "$status" -eq 0 ] && grep -q 'mine: yes' svc/app.yml && [ "$(cat svc/app.yml.labber-new)" = 'v: 2' ]
+    # c (and plain Enter): cancelled before anything was touched
+    for a in c ''; do
+        setup_svc; printf 'x2\n' > "$SRC/other.yml"               # a change that must NOT be applied either
+        run copy_svc_files "$SRC" svc <<< "$a"
+        [ "$status" -eq 2 ] && [[ "$output" == *"cancelled"* ]]
+        grep -q 'mine: yes' svc/app.yml && [ "$(cat svc/other.yml)" = x ]
+        [ ! -e svc/app.yml.labber-new ] && [ ! -e svc/.labber-base ]
+    done
+}
+
 @test "preflight creates .env from .env.example when there's none yet" {
     mkdir svc; printf 'K=1\n' > svc/.env.example
     sync_env_keys svc >/dev/null

@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.4"
+VERSION="4.2.5"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -163,12 +163,35 @@ record_base() {
     give_back "$dest/$BASE_FILE"
 }
 
-# was installed file $2 (relative to $1) changed since labber put it there?
-# Without a record (installed before labber kept one) any difference counts as an edit.
+# was installed file $2 (relative to $1) changed since labber put it there? $3: the
+# file's folder in the repo (e.g. services/x), to check installs that have no record.
+# Without a record (installed before labber kept one), a file that is exactly an earlier
+# repo version wasn't edited here; anything else counts as an edit.
 locally_edited() {
     local dest="$1" f="$2" b; b=$(base_sum "$dest" "$f")
-    if [[ -n "$b" ]]; then [[ "$(file_sum "$dest/$f")" != "$b" ]]; else return 0; fi
+    if [[ -n "$b" ]]; then [[ "$(file_sum "$dest/$f")" != "$b" ]]; return; fi
+    if [[ -n "${3:-}" ]] && was_repo_version "$3/$f" "$dest/$f"; then return 1; fi
+    return 0
 }
+
+# is file $2 byte-for-byte some version $1 (a path in the repo) ever had? Compares git
+# object ids only (the file's hash vs that path's blob in each commit), from a clone of
+# commits and trees: old file contents are never downloaded. Cloned once per run.
+HIST_DIR=""
+was_repo_version() {
+    if [[ -z "$HIST_DIR" ]]; then
+        HIST_DIR=$(mktemp -d /tmp/homelab-history-XXXXXX)
+        git clone --bare --filter=blob:none -q "$REPO" "$HIST_DIR" < /dev/null >/dev/null 2>&1 \
+            || { rm -rf "$HIST_DIR"; HIST_DIR=none; }
+    fi
+    [[ "$HIST_DIR" != none && -f "$2" ]] || return 1
+    local id c; id=$(git hash-object "$2") || return 1
+    while IFS= read -r c; do
+        [[ "$(git -C "$HIST_DIR" rev-parse -q --verify "$c:$1" 2>/dev/null)" == "$id" ]] && return 0
+    done < <(git -C "$HIST_DIR" log --format=%H -- "$1" 2>/dev/null)
+    return 1
+}
+drop_history() { [[ -z "$HIST_DIR" || "$HIST_DIR" == none ]] || rm -rf "$HIST_DIR"; HIST_DIR=""; }
 
 # under sudo, hand a file labber created back to the person who ran sudo
 give_back() { if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then chown "$SUDO_USER:" "$1" 2>/dev/null || true; fi; }
@@ -181,14 +204,39 @@ give_back() { if (( EUID == 0 )) && [[ -n "${SUDO_USER:-}" ]]; then chown "$SUDO
 # The .env backup sits next to .env (same owner and permissions) rather than in /tmp,
 # and is left behind if anything fails, so the .env is never lost.
 copy_svc_files() {
-    local src="$1" dest="$2" mode="${3:-update}" f b kept=() saved=()
+    local src="$1" dest="$2" mode="${3:-update}" f b prefix ans kept=() saved=() conflicts=()
+    local -A use_repo=()
+    prefix=$(git -C "$src" rev-parse --show-prefix 2>/dev/null || true); prefix="${prefix%/}"
+    # files the repo replaces as a matter of course (labber's own), or that are unchanged
+    repo_wins() { [[ ! -e "$dest/$1" ]] || cmp -s "$src/$1" "$dest/$1" || [[ "$1" == .env.example || "$1" == README.txt ]]; }
+    # update: a file edited here that the repo has changed too is a conflict. In a
+    # terminal, ask before anything is touched (so cancelling changes nothing)
+    if [[ "$mode" == update ]]; then
+        while IFS= read -r f; do
+            repo_wins "$f" && continue
+            locally_edited "$dest" "$f" "$prefix" || continue
+            b=$(base_sum "$dest" "$f")
+            [[ -z "$b" || "$(file_sum "$src/$f")" != "$b" ]] && conflicts+=("$f")
+        done < <(repo_files "$src")
+        if (( ${#conflicts[@]} )) && interactive; then
+            for f in "${conflicts[@]}"; do
+                echo; warn "$f: changed here, and the repo has a new version (yours → repo's):"
+                diff -u --label "$f (yours)" --label "$f (repo)" "$dest/$f" "$src/$f" | head -40 >&2 || true
+                read -rp "  [r] use the repo's (yours saved as $f.labber-bak)  [k] keep yours  [c] cancel the update (Enter = cancel): " ans || ans=c
+                case "$ans" in
+                    r|R) use_repo["$f"]=1 ;;
+                    c|C|"") drop_history; info "update cancelled — nothing changed"; return 2 ;;
+                    *) ;;
+                esac
+            done
+        fi
+    fi
     [[ -f "$dest/.env" ]] && cp -p "$dest/.env" "$dest/.env.labber-bak"
     while IFS= read -r f; do
         mkdir -p "$(dirname "$dest/$f")"
-        if [[ ! -e "$dest/$f" ]] || cmp -s "$src/$f" "$dest/$f" \
-            || [[ "$f" == .env.example || "$f" == README.txt ]] || ! locally_edited "$dest" "$f"; then
+        if repo_wins "$f" || ! locally_edited "$dest" "$f" "$prefix"; then
             cp "$src/$f" "$dest/$f"
-        elif [[ "$mode" == reinstall ]]; then
+        elif [[ "$mode" == reinstall || -n "${use_repo[$f]:-}" ]]; then
             cp -p "$dest/$f" "$dest/$f.labber-bak"; give_back "$dest/$f.labber-bak"
             cp "$src/$f" "$dest/$f"; saved+=("$f")
         else
@@ -199,12 +247,14 @@ copy_svc_files() {
             fi
         fi
     done < <(repo_files "$src")
+    drop_history
     if [[ -f "$dest/.env.labber-bak" ]]; then mv -f "$dest/.env.labber-bak" "$dest/.env"; fi
     record_base "$src" "$dest"
     if (( ${#kept[@]} )); then
         warn "kept your edits — the repo changed these too; its version is next to each as .labber-new:"
         printf "    %s\n" "${kept[@]}" >&2
         warn "compare with: diff $dest/<file> $dest/<file>.labber-new"
+        warn "the service runs with YOUR version: if the repo's change is needed (e.g. by another service), merge it"
     fi
     if (( ${#saved[@]} )); then
         warn "replaced your edited files with the repo's — yours are saved as .labber-bak:"
@@ -1132,7 +1182,9 @@ do_svc_upgrade() {
     # the files it replaces are kept until the update is known to be good (rollback)
     local bak; bak=$(backup_svc_files "$src" "$dir") || die "could not back up $dir"
     trap "rm -rf '$tmpdir' '$bak'" EXIT
-    copy_svc_files "$src" "$dir"
+    local rc=0; copy_svc_files "$src" "$dir" || rc=$?
+    (( rc != 2 )) || return 0          # cancelled at the question: nothing was changed
+    (( rc == 0 )) || die "could not update the files of $svc"
     give_back_files "$src" "$dir"
 
     preflight "$dir" || { info "files updated but not restarted — run: labber $svc start"; return; }
