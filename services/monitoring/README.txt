@@ -38,6 +38,9 @@ Dashboards (Grafana → Homelab folder, provisioned from config/grafana/provisio
   Containers   per-container CPU, memory, network, restarts, OOM kills; service updates
   Logs         journal + container logs from all machines, filter by host/source/text
   Proxmox      all guests from pve-exporter + the Proxmox hosts
+  Disks        every disk on the hosts with smartctl_exporter (SATA and NVMe): health,
+               warnings, bad blocks, error logs, temperatures (smartctl + each NVMe sensor),
+               wear, data written, power-on time; raw SATA SMART attributes
 
 Container metrics for this host's own containers come from Alloy, like on every other
 Docker host — set up this LXC/VM with `labber setup` and answer yes to Docker.

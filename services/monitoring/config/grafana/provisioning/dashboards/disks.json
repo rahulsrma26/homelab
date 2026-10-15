@@ -1,0 +1,1694 @@
+{
+  "uid": "labber-disks",
+  "title": "Disks",
+  "tags": [
+    "homelab",
+    "labber"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "1m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "description": "SMART data of every disk on the hosts running smartctl_exporter (Proxmox hosts): health, errors, temperatures, wear, writes",
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Machine",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": "label_values(smartctl_device, instance)",
+        "definition": "label_values(smartctl_device, instance)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Disks",
+      "description": "Disks smartctl_exporter reports, on the selected machines",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(((last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}))",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "SMART failed",
+      "description": "Disks whose overall SMART self-assessment says FAILED",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(((last_over_time(smartctl_device_smart_status{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}) == 0) or vector(0)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Warnings",
+      "description": "NVMe critical-warning bits, plus SATA attributes at or below their failure threshold",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(((max by (instance, device) (last_over_time(smartctl_device_critical_warning{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or count by (instance, device) ((last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"value\"}[15m]) <= ignoring(attribute_value_type) last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"thresh\"}[15m])) and ignoring(attribute_value_type) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"thresh\"}[15m]) > 0)) or max by (instance, device) (last_over_time(smartctl_device_smart_status{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) * 0) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) or vector(0)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Bad blocks",
+      "description": "NVMe media errors + ATA reallocated, pending and uncorrectable sectors",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(((max by (instance, device) (last_over_time(smartctl_device_media_errors{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or sum by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_id=~\"5|187|197|198\",attribute_value_type=\"raw\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) or vector(0)",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Hottest",
+      "description": "Highest current disk temperature (smartctl)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(((last_over_time(smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"}[15m])) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}))",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 55
+              },
+              {
+                "color": "red",
+                "value": 65
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "celsius"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Most worn",
+      "description": "Highest wear used: NVMe percentage used; SATA 100 minus the life-left attribute",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(((max by (instance, device) (last_over_time(smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or max by (instance, device) (100 - last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}))",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Disks",
+      "description": "One row per disk. Health = the drive's own SMART verdict. Warnings = NVMe critical-warning bits, or SATA attributes at/below their failure threshold. Bad blocks = NVMe media errors, or ATA reallocated + pending + uncorrectable sectors. Error log = entries in the drive's error log (Samsung PM983s count harmless ones: watch Bad blocks and Warnings instead). Wear used: NVMe 'percentage used'; SATA SSDs 100 minus their life-left attribute. Written: NVMe in bytes; SATA from the vendor's write counter (Intel: Host_Writes_32MiB). Last checked = the newest smartctl reading (every 5 min).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((max by (instance, device, protocol, model_name, serial_number, firmware_version) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_smart_status{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_rotation_rate{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or max by (instance, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",protocol=\"NVMe\"}[15m])) * 0) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "E",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "F",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=~\"lifetime_max|power_cycle_max\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "G",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or max by (instance, device) (100 - last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "H",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or max by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}[15m])) * 33554432 or max by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}[15m])) * 512 or max by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}[15m])) * 1073741824 or max by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}[15m])) * 1073741824 or max by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}[15m])) * 1073741824) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "J",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_power_on_seconds{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "K",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_power_cycle_count{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "M",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_critical_warning{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or count by (instance, device) ((last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"value\"}[15m]) <= ignoring(attribute_value_type) last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"thresh\"}[15m])) and ignoring(attribute_value_type) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\".+\",attribute_value_type=\"thresh\"}[15m]) > 0)) or max by (instance, device) (last_over_time(smartctl_device_smart_status{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) * 0) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "N",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_media_errors{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or sum by (instance, device) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_id=~\"5|187|197|198\",attribute_value_type=\"raw\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "O",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_num_err_log_entries{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) or max by (instance, device) (last_over_time(smartctl_device_error_log_count{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "P",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_self_test_log_error_count{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "refId": "Q",
+          "expr": "((max by (instance, device) (max_over_time(timestamp(smartctl_device_smart_status{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})[15m:1m])) * 1000) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "instance": 0,
+              "device": 1,
+              "protocol": 2,
+              "Kind": 3,
+              "model_name": 4,
+              "Capacity": 5,
+              "Health": 6,
+              "Warnings": 7,
+              "Bad blocks": 8,
+              "Error log": 9,
+              "Self-test errors": 10,
+              "Temp": 11,
+              "Max temp": 12,
+              "Wear used": 13,
+              "Written": 14,
+              "Power on": 15,
+              "Power cycles": 16,
+              "serial_number": 17,
+              "firmware_version": 18,
+              "Last checked": 19,
+              "Value #B": 6,
+              "Value #C": 3,
+              "Value #D": 5,
+              "Value #E": 11,
+              "Value #F": 12,
+              "Value #G": 13,
+              "Value #H": 14,
+              "Value #J": 15,
+              "Value #K": 16,
+              "Value #M": 7,
+              "Value #N": 8,
+              "Value #O": 9,
+              "Value #P": 10,
+              "Value #Q": 19
+            },
+            "renameByName": {
+              "instance": "Node",
+              "device": "Device",
+              "protocol": "Type",
+              "model_name": "Model",
+              "serial_number": "Serial",
+              "firmware_version": "Firmware",
+              "Value #B": "Health",
+              "Value #C": "Kind",
+              "Value #D": "Capacity",
+              "Value #E": "Temp",
+              "Value #F": "Max temp",
+              "Value #G": "Wear used",
+              "Value #H": "Written",
+              "Value #J": "Power on",
+              "Value #K": "Power cycles",
+              "Value #M": "Warnings",
+              "Value #N": "Bad blocks",
+              "Value #O": "Error log",
+              "Value #P": "Self-test errors",
+              "Value #Q": "Last checked"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "minWidth": 50
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Health"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "PASSED",
+                        "color": "green"
+                      },
+                      "0": {
+                        "text": "FAILED",
+                        "color": "red"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Kind"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "SSD"
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 1,
+                      "to": 100000,
+                      "result": {
+                        "text": "HDD"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Capacity"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Temp"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "orange",
+                      "value": 55
+                    },
+                    {
+                      "color": "red",
+                      "value": 65
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max temp"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 60
+                    },
+                    {
+                      "color": "red",
+                      "value": 70
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Wear used"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "orange",
+                      "value": 70
+                    },
+                    {
+                      "color": "red",
+                      "value": 90
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Written"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Power on"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Warnings"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 85
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bad blocks"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Self-test errors"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last checked"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              },
+              {
+                "id": "custom.width",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Node"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Device"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Type"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Kind"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Model"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Capacity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Health"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error log"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Power cycles"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 105
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Serial"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 135
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Firmware"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Node"
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Temperature (smartctl, every 5 min)",
+      "description": "The drive's own reading, every disk",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((max by (instance, device) (smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "{{instance}} {{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "range": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "spanNulls": 900000,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 55
+              },
+              {
+                "color": "red",
+                "value": 65
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "NVMe sensors (kernel, every 15 s)",
+      "description": "Every NVMe sensor the kernel exposes: Composite (what the drive reports) plus Sensor 1, 2\u2026 (controller, NAND). SATA disks have one sensor, in the left panel. For SATA here as well: modprobe drivetemp.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_hwmon_temp_celsius{job=\"proxmox-node-exporters\",instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",chip=~\"nvme.*\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{job=\"proxmox-node-exporters\",instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",chip=~\"nvme.*\"}",
+          "legendFormat": "{{instance}} {{chip}} {{label}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "range": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "spanNulls": 900000,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Wear used",
+      "description": "NVMe 'percentage used'; SATA SSDs 100 minus their life-left attribute. Changes slowly.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((max by (instance, device) (smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (100 - smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "{{instance}} {{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "range": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "spanNulls": 900000,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Written in the previous 24 h",
+      "description": "Host writes per disk over a rolling 24 h. For ZFS pools, every member of a mirror/raidz writes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((max by (instance, device) (increase(smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[1d])) or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}[1d])) * 33554432 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}[1d])) * 512 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "legendFormat": "{{instance}} {{device}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "range": true,
+          "format": "time_series",
+          "interval": "1h"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "spanNulls": 900000,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "row",
+      "title": "SATA SMART attributes",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "panels": [
+        {
+          "id": 100,
+          "type": "table",
+          "title": "SMART attributes (ATA)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "description": "Value/Worst count down; a Value at or below Threshold (when Threshold > 0) means that attribute has failed. Raw is the vendor's own counter.",
+          "gridPos": {
+            "h": 14,
+            "w": 24,
+            "x": 0,
+            "y": 31
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "((max by (instance, device, attribute_id, attribute_name) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"value\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true,
+              "range": false,
+              "format": "table"
+            },
+            {
+              "refId": "B",
+              "expr": "((max by (instance, device, attribute_id, attribute_name) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"worst\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true,
+              "range": false,
+              "format": "table"
+            },
+            {
+              "refId": "C",
+              "expr": "((max by (instance, device, attribute_id, attribute_name) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"thresh\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true,
+              "range": false,
+              "format": "table"
+            },
+            {
+              "refId": "D",
+              "expr": "((max by (instance, device, attribute_id, attribute_name) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"raw\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true,
+              "range": false,
+              "format": "table"
+            },
+            {
+              "refId": "E",
+              "expr": "((max by (instance, device, attribute_id, attribute_name) (((last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"value\"}[15m]) <= ignoring(attribute_value_type) last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"thresh\"}[15m])) and ignoring(attribute_value_type) (last_over_time(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_value_type=\"thresh\"}[15m]) > 0)) * 0 + 1)) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+              "legendFormat": "",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "prometheus"
+              },
+              "instant": true,
+              "range": false,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "indexByName": {
+                  "instance": 0,
+                  "device": 1,
+                  "attribute_id": 2,
+                  "attribute_name": 3,
+                  "Value #A": 4,
+                  "Value #B": 5,
+                  "Value #C": 6,
+                  "Value #D": 7,
+                  "Value #E": 8
+                },
+                "renameByName": {
+                  "instance": "Node",
+                  "device": "Device",
+                  "attribute_id": "ID",
+                  "attribute_name": "Attribute",
+                  "Value #A": "Value",
+                  "Value #B": "Worst",
+                  "Value #C": "Threshold",
+                  "Value #D": "Raw",
+                  "Value #E": "Failing"
+                }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "auto",
+                "filterable": true
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Failing"
+                },
+                "properties": [
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "1": {
+                            "text": "FAILING",
+                            "color": "red"
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "transparent",
+                          "value": null
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm",
+            "sortBy": [
+              {
+                "displayName": "Failing",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
