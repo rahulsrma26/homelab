@@ -24,7 +24,7 @@ service:
 	git add services && git commit -m "services: update" && git push origin dev
 
 labber:
-	git add labber && git commit -m "labber: update" && git push origin dev
+	git add labber tests && git commit -m "labber: update" && git push origin dev
 
 tool:
 	git add tools && git commit -m "tools: update" && git push origin dev

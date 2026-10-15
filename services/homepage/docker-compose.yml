@@ -1,0 +1,18 @@
+# Homepage — the start page with links and widgets for every app. Its config is a few
+# YAML files (services.yaml, bookmarks.yaml, settings.yaml, widgets.yaml); keep them
+# where you can edit them easily (on od01: a folder on the "common" dataset, editable in
+# Filebrowser). Homepage reloads them by itself.
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
+      PUID: ${PUID}
+      PGID: ${PGID}
+    volumes:
+      - ${HOMEPAGE_CONFIG}:/app/config
+      - ${HOMEPAGE_IMAGES}:/app/public/images

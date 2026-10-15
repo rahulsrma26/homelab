@@ -42,7 +42,7 @@ Full guide: [labber/README.md](labber/README.md).
 | Documents | Paperless-ngx, Paperless-GPT |
 | AI | llama.cpp (CUDA, plus a TurboQuant build), LibreChat, voice assistant agent |
 | Cameras | Frigate |
-| Utilities | Homepage, Joplin Server, it-tools, Stirling PDF, OpenSpeedTest, SearXNG, Termix |
+| Utilities | Homepage, Joplin Server, it-tools, omni-tools, BentoPDF, OpenSpeedTest, SearXNG, Termix |
 
 Details and conventions for adding a service: [services/README.md](services/README.md).
 

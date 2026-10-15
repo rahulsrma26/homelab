@@ -1,42 +1,31 @@
-# Stateless tools + Homepage. Nothing here holds important data: Homepage's config and
-# Stirling PDF's settings are small folders in this service folder.
+# Stateless tools. Nothing here holds important data. Homepage has its own service:
+# services/homepage.
 services:
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
-    restart: unless-stopped
-    ports:
-      - "${HOMEPAGE_PORT:-3000}:3000"
-    environment:
-      HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
-      PUID: 1000
-      PGID: 1000
-    volumes:
-      - ./homepage/config:/app/config
-      - ./homepage/images:/app/public/images
-
+  # IT-Tools, the maintained fork (the original image hasn't been rebuilt since 2024);
+  # it listens on 8080, not 80
   it-tools:
-    image: ghcr.io/corentinth/it-tools:latest
+    image: ghcr.io/sharevb/it-tools:latest
     container_name: it-tools
     restart: unless-stopped
     ports:
-      - "8081:80"
+      - "${IT_TOOLS_PORT:-8081}:8080"
 
-  stirling-pdf:
-    image: stirlingtools/stirling-pdf:latest
-    container_name: stirling-pdf
+  # omni-tools: more everyday tools in the browser (images, video, audio, PDF, text, …)
+  omni-tools:
+    image: iib0011/omni-tools:latest
+    container_name: omni-tools
     restart: unless-stopped
     ports:
-      - "8082:8080"
-    environment:
-      - DISABLE_ADDITIONAL_FEATURES=false
-      - LANGS=${STIRLING_LANGS}
-      - TZ=${TZ}
-    volumes:
-      - ./stirling-pdf/trainingData:/usr/share/tessdata    # extra OCR languages
-      - ./stirling-pdf/extraConfigs:/configs
-      - ./stirling-pdf/customFiles:/customFiles/
-      - ./stirling-pdf/pipeline:/pipeline/
+      - "${OMNI_TOOLS_PORT:-8084}:80"
+
+  # BentoPDF: PDF tools that run in the browser (merge, split, edit, sign, compress, OCR…).
+  # The "simple" build = the self-hosted app without the bentopdf.com marketing pages
+  bentopdf:
+    image: ghcr.io/alam00000/bentopdf-simple:latest
+    container_name: bentopdf
+    restart: unless-stopped
+    ports:
+      - "${BENTOPDF_PORT:-8083}:8080"
 
   openspeedtest:
     image: openspeedtest/latest
