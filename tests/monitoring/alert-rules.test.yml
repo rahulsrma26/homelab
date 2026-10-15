@@ -193,3 +193,71 @@ tests:
               state: degraded
             exp_annotations:
               summary: "ZFS pool spool on od01 is degraded"
+
+  # disk space steps: 50% → 85% → 92% → 97% used, an hour each (size 100, so avail = 100 - used)
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{instance="od01",mountpoint="/data",fstype="zfs"}'
+        values: '100x240'
+      - series: 'node_filesystem_avail_bytes{instance="od01",mountpoint="/data",fstype="zfs"}'
+        values: '50x60 15x60 8x60 3x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: DiskSpaceLow
+        exp_alerts: []
+      - eval_time: 80m            # 85% for 19 min: not yet (30 min)
+        alertname: DiskSpaceLow
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: DiskSpaceLow
+        exp_alerts:
+          - exp_labels: {severity: warning, mountpoint: /data, fstype: zfs, instance: od01}
+            exp_annotations: {summary: "Disk /data on od01 at 85%, filling up"}
+      - eval_time: 100m
+        alertname: DiskSpaceCritical
+        exp_alerts: []
+      - eval_time: 130m
+        alertname: DiskSpaceCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, mountpoint: /data, fstype: zfs, instance: od01}
+            exp_annotations: {summary: "Disk /data on od01 at 92%"}
+      - eval_time: 130m
+        alertname: DiskSpaceFull
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: DiskSpaceFull
+        exp_alerts:
+          - exp_labels: {severity: critical, mountpoint: /data, fstype: zfs, instance: od01}
+            exp_annotations: {summary: "Disk /data on od01 nearly full: 97%"}
+
+  # filling fast: 60% used and losing 1 a minute (empty in ~7 h) must alert after an hour;
+  # a steady 70% disk and a slowly filling one (a year to go) must not
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{instance="od01",mountpoint="/fast",fstype="zfs"}'
+        values: '1000x400'
+      - series: 'node_filesystem_avail_bytes{instance="od01",mountpoint="/fast",fstype="zfs"}'
+        values: '400-1x380'
+      - series: 'node_filesystem_size_bytes{instance="od01",mountpoint="/steady",fstype="zfs"}'
+        values: '1000000x400'
+      - series: 'node_filesystem_avail_bytes{instance="od01",mountpoint="/steady",fstype="zfs"}'
+        values: '300000x400'
+      - series: 'node_filesystem_size_bytes{instance="od01",mountpoint="/slow",fstype="zfs"}'
+        values: '1000000x400'
+      - series: 'node_filesystem_avail_bytes{instance="od01",mountpoint="/slow",fstype="zfs"}'
+        values: '400000-1x400'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DiskFillingFast
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: DiskFillingFast
+        exp_alerts:
+          - exp_labels: {severity: critical, mountpoint: /fast, fstype: zfs, instance: od01}
+            exp_annotations: {summary: "Disk /fast on od01 will be full within a day at the rate of the last 6 h"}
+      - eval_time: 300m
+        alertname: DiskFillingFast
+        exp_alerts:
+          - exp_labels: {severity: critical, mountpoint: /fast, fstype: zfs, instance: od01}
+            exp_annotations: {summary: "Disk /fast on od01 will be full within a day at the rate of the last 6 h"}
+

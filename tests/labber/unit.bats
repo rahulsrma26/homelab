@@ -796,3 +796,36 @@ make_bundle() {
     [ -z "$(ls -A "$SERVICE_BASE" | grep -v '^\.labber-updates$' || true)" ]    # no temp files left
     rm -rf "$SERVICE_BASE"
 }
+
+# ── fetching the repo ─────────────────────────────────────────────────────────
+
+make_repo() {   # a local git repo with services/<name>/, served as file://
+    git init -q "$T/origin"
+    mkdir -p "$T/origin/services/demo" && echo x > "$T/origin/services/demo/f"
+    git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
+    REPO="file://$T/origin"
+}
+
+@test "clone_repo_dir fetches just the asked-for folder" {
+    make_repo; CLONE_RETRY_DELAY=0
+    dir=$(clone_repo_dir services/) && [ -f "$dir/services/demo/f" ]
+    rm -rf "$dir"
+}
+
+@test "clone_repo_dir retries a failed fetch (a network hiccup isn't a failure)" {
+    make_repo; CLONE_RETRY_DELAY=0
+    git() { if [[ "$1" == clone && ! -f "$T/failed-once" ]]; then touch "$T/failed-once"; echo "fatal: unable to access: timeout" >&2; return 128; fi; command git "$@"; }
+    run clone_repo_dir services/
+    [ "$status" -eq 0 ] && [ -f "$T/failed-once" ]
+    [[ "$output" == *"retrying"* ]]
+    [ -f "${lines[-1]}/services/demo/f" ]
+}
+
+@test "clone_repo_dir gives up after 3 attempts, with git's reason" {
+    CLONE_RETRY_DELAY=0; REPO="file://$T/nowhere"
+    run clone_repo_dir services/
+    [ "$status" -eq 1 ]
+    [ "$(grep -c retrying <<<"$output")" -eq 2 ]
+    [[ "$output" == *"could not fetch file://$T/nowhere:"*"repository"* ]]
+    [ -z "$(find /tmp -maxdepth 1 -name 'homelab-deploy-*' -newer "$T" 2>/dev/null)" ]   # no temp dirs left
+}

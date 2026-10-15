@@ -18,6 +18,14 @@ After deployment:
   label kind=lxc|vm) plus a health check that exports labber_reboot_required,
   labber_restart_required_services and labber_security_updates_pending.
 
+Alerts to Telegram (config/alertmanager/alertmanager.yml), two speeds:
+  critical  HostDown, HostNotReporting, DiskSpaceCritical, DiskSpaceFull, DiskFillingFast,
+            SmartHealthFailed, ZfsPoolNotOnline, MemoryUncorrectableError: at once, then
+            every 6 h while it lasts
+  warning   the rest: one daily digest at 15:00 UTC with whatever is still firing then
+  info      ServiceUpdateAvailable: at the digest, then a weekly reminder
+  Everything is in Grafana / Alertmanager (:9093) right away, whatever its delivery time.
+
 Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   HostDown             a target Prometheus scrapes is down
   HostNotReporting     a host/guest that pushes via Alloy stopped sending metrics
@@ -25,6 +33,10 @@ Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   RebootRequired       newer kernel installed for over a day
   ServicesNeedRestart  services on outdated libraries for over a day
   SecurityUpdatesStuck security updates pending for a week
+  DiskSpaceLow         a filesystem over 80% for 30 min (warning: the daily digest)
+  DiskSpaceCritical    over 90% (critical)
+  DiskSpaceFull        over 95% (critical); only the highest of the three is sent
+  DiskFillingFast      over half full and, at the last 6 h's rate, full within a day (critical)
   MemoryUncorrectableError  an uncorrectable ECC / IB-ECC error (EDAC) on a Proxmox host
   MemoryCorrectableErrors   more than 3 corrected ECC errors in 24h (a failing module)
   ZfsPoolNotOnline     a ZFS pool degraded/faulted for 5 min

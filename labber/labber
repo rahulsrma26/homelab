@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.3"
+VERSION="4.2.4"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -116,17 +116,28 @@ resolve_svc() {
 #   trap "rm -rf '$tmpdir'" EXIT
 # (a trap that refers to a function-local variable runs after the function has
 # returned, when the variable no longer exists, so it would delete nothing)
+# a short network or GitHub hiccup shouldn't fail a command (or page you from the daily
+# check-updates timer): 3 attempts, waiting CLONE_RETRY_DELAY, then twice that, between them
+CLONE_RETRY_DELAY="${CLONE_RETRY_DELAY:-15}"
 clone_repo_dir() {
-    local tmpdir; tmpdir=$(mktemp -d /tmp/homelab-deploy-XXXXXX)
-    # set -e doesn't apply inside $(...), so fail explicitly. stdin from /dev/null: git
-    # must never eat answers typed ahead for labber's prompts; output is just progress
-    if ! git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir" < /dev/null >/dev/null 2>&1 \
-        || ! git -C "$tmpdir" sparse-checkout set "$1" < /dev/null >/dev/null 2>&1; then
+    local tmpdir err="" attempt
+    for attempt in 1 2 3; do
+        tmpdir=$(mktemp -d /tmp/homelab-deploy-XXXXXX)
+        # set -e doesn't apply inside $(...), so fail explicitly. stdin from /dev/null: git
+        # must never eat answers typed ahead for labber's prompts; stdout is just progress
+        if err=$(git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir" < /dev/null 2>&1 >/dev/null) \
+            && err=$(git -C "$tmpdir" sparse-checkout set "$1" < /dev/null 2>&1 >/dev/null); then
+            echo "$tmpdir"
+            return 0
+        fi
         rm -rf "$tmpdir"
-        echo -e "${R}error: could not fetch $REPO${N}" >&2
-        return 1
-    fi
-    echo "$tmpdir"
+        if (( attempt < 3 )); then
+            echo -e "${Y}fetching $REPO failed, retrying in $(( attempt * CLONE_RETRY_DELAY )) s…${N}" >&2
+            sleep $(( attempt * CLONE_RETRY_DELAY ))
+        fi
+    done
+    echo -e "${R}error: could not fetch $REPO: $(tail -1 <<<"$err")${N}" >&2
+    return 1
 }
 
 # ── repo files vs your edits ──

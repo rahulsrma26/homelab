@@ -1,6 +1,12 @@
 global:
   resolve_timeout: 5m
 
+# Two speeds:
+#   critical (host down, pool degraded, disk failing, disk full, uncorrectable ECC):
+#     at once, then every 6 h while it lasts
+#   warnings: once a day at 15:00 UTC, as one digest — still firing then = one message;
+#     a warning that comes and goes between digests is only in Grafana. Resolved notices
+#     for them also wait for the digest. Notes (info): at the digest, then weekly.
 route:
   group_by: ['alertname', 'instance']
   group_wait: 30s
@@ -8,21 +14,30 @@ route:
   repeat_interval: 6h
   receiver: 'telegram'
   routes:
-    - match:
-        severity: critical
-      repeat_interval: 2h
-      receiver: 'telegram'
-    - match:
-        severity: warning
+    - matchers: ['severity = critical']
       repeat_interval: 6h
       receiver: 'telegram'
-    # notes such as "update available": once, then a reminder weekly
-    - match:
-        severity: info
-      group_by: ['alertname']
-      group_wait: 5m
-      repeat_interval: 168h
+    # one message per digest with every warning that is firing
+    - matchers: ['severity = warning']
+      group_by: ['severity']
+      active_time_intervals: ['daily-digest']
+      # just under a day, so yesterday's alert is due again when the window opens
+      repeat_interval: 23h
       receiver: 'telegram'
+    # notes such as "update available": at the digest, then a reminder weekly
+    - matchers: ['severity = info']
+      group_by: ['severity']
+      active_time_intervals: ['daily-digest']
+      repeat_interval: 167h
+      receiver: 'telegram'
+
+time_intervals:
+  - name: daily-digest
+    time_intervals:
+      - times:
+          - start_time: '15:00'
+            end_time: '15:30'
+        location: 'UTC'
 
 inhibit_rules:
   - source_match:
@@ -30,6 +45,13 @@ inhibit_rules:
     target_match:
       severity: 'warning'
     equal: ['alertname', 'instance']
+  # disk space: only the highest step for a disk (Full > Critical > Low)
+  - source_matchers: ['alertname = DiskSpaceFull']
+    target_matchers: ['alertname =~ "DiskSpaceCritical|DiskSpaceLow"']
+    equal: ['instance', 'mountpoint']
+  - source_matchers: ['alertname = DiskSpaceCritical']
+    target_matchers: ['alertname = DiskSpaceLow']
+    equal: ['instance', 'mountpoint']
 
 receivers:
   - name: 'telegram'

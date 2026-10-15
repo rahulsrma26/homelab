@@ -70,11 +70,20 @@ groups:
         annotations:
           summary: "High memory on {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%"
 
-      - alert: DiskSpaceCritical
-        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 85
-        for: 5m
+      # disk space in steps: an early note in the daily digest, then critical (at once)
+      - alert: DiskSpaceLow
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 80
+        for: 30m
         labels:
           severity: warning
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} at {{ $value | printf \"%.0f\" }}%, filling up"
+
+      - alert: DiskSpaceCritical
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
         annotations:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} at {{ $value | printf \"%.0f\" }}%"
 
@@ -85,6 +94,18 @@ groups:
           severity: critical
         annotations:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} nearly full: {{ $value | printf \"%.0f\" }}%"
+
+      # a runaway log or copy: at the rate of the last 6 h, full within a day (only disks
+      # already over half full, and only a trend that holds for an hour)
+      - alert: DiskFillingFast
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs"}[6h], 24 * 3600) < 0
+          and (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 50
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} will be full within a day at the rate of the last 6 h"
 
       - alert: SmartDriveWear
         expr: smartctl_device_percentage_used > 80
