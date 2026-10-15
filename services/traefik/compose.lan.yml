@@ -34,6 +34,9 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
+      # no time limit on reading a request: Traefik v3 cuts uploads off after 60 s by
+      # default (a large file in Filebrowser, a long video into Immich). LAN-only proxy
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
       - --entrypoints.websecure.http.tls.certresolver=cloudflare
       - --entrypoints.websecure.http.tls.domains[0].main=${DOMAIN}
       - --entrypoints.websecure.http.tls.domains[0].sans=*.${DOMAIN}
