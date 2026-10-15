@@ -1,9 +1,9 @@
-# od01 (the files LXC). Each source's defaultPermissions are what a new user gets there;
+# od01 (FilesOd01). Each source's defaultPermissions are what a new user gets there;
 # existing users keep theirs (Settings → User Management → a user → its sources).
 server:
   cacheDir: /cache
   sources:
-    - path: /srv/files
+    - path: /srv/common
       config:
         defaultEnabled: true
         defaultPermissions: {view: true, download: true, create: true, modify: true, delete: true, configured: true}
