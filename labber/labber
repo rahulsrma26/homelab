@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.3.0"
+VERSION="4.3.1"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -844,25 +844,29 @@ ensure_bind_dirs() {
     done < <(cfg_bind_sources "$cfg")
 }
 
+# the host ports in docker ps's Ports column (stdin), one per line. Docker shows
+# consecutive ports as a range (0.0.0.0:8888-8889->8888-8889/tcp): expanded here
+host_ports() {
+    local a b
+    tr ',' '\n' | sed -nE 's/.*:([0-9]+(-[0-9]+)?)->.*/\1/p' | while IFS=- read -r a b || [[ -n "$a" ]]; do seq "$a" "${b:-$a}"; done
+}
+
 # who is already using a host port, ignoring this project's own containers.
 # Prints "container <name>" or "a process on this host", or nothing if free.
 port_user() {
-    local port="$1" project="$2" line proj name ports
+    local port="$1" project="$2" proj name ports nl=$'\n'
     # "|" not tab: read collapses whitespace separators, so a container without a
     # compose project (empty first field) would shift every field by one
     while IFS='|' read -r proj name ports; do
         [[ -n "$project" && "$proj" == "$project" ]] && continue
-        if [[ "$ports" =~ :${port}-\> ]]; then echo "container $name"; return; fi
+        if [[ "$nl$(host_ports <<< "$ports")$nl" == *"$nl$port$nl"* ]]; then echo "container $name"; return; fi
     done < <(docker ps --format '{{.Label "com.docker.compose.project"}}|{{.Names}}|{{.Ports}}' 2>/dev/null)
     command -v ss &>/dev/null || return 0
     # ports this project already publishes show up in ss too (docker-proxy) — skip those
-    if docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Ports}}' 2>/dev/null \
-        | grep -qE ":${port}->"; then
-        return
-    fi
-    if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; then
-        echo "a process on this host"
-    fi
+    local own; own=$(docker ps --filter "label=com.docker.compose.project=$project" --format '{{.Ports}}' 2>/dev/null | host_ports)
+    [[ "$nl$own$nl" == *"$nl$port$nl"* ]] && return
+    local listening; listening=$(ss -ltnH 2>/dev/null | awk '{ sub(/.*[:.]/, "", $4); print $4 }')
+    if [[ "$nl$listening$nl" == *"$nl$port$nl"* ]]; then echo "a process on this host"; fi
 }
 
 # warn about published ports that are already taken; returns 1 if the user aborts

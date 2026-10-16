@@ -258,6 +258,27 @@ EOF
     [ -z "$(port_user 9999 demo)" ]
 }
 
+@test "port_user reads port ranges: a project's own consecutive ports aren't a conflict" {
+    # regression: docker ps shows 8888 and 8889 as 0.0.0.0:8888-8889->8888-8889/tcp, which
+    # wasn't recognised, so the project's own ports were reported as "a process on this host"
+    docker() {
+        case "$*" in
+            *--filter*) printf '%s\n' '0.0.0.0:8008->8008/tcp, [::]:8008->8008/tcp, 0.0.0.0:8888-8889->8888-8889/tcp, [::]:8888-8889->8888-8889/tcp' ;;
+            *) printf '%s\n' 'ss|soulsync|0.0.0.0:8008->8008/tcp, 0.0.0.0:8888-8889->8888-8889/tcp' \
+                             'other|other-1|0.0.0.0:7000-7002->7000-7002/tcp, 9000/tcp' ;;
+        esac
+    }
+    ss() { printf '%s\n' 'LISTEN 0 4096 0.0.0.0:8888 0.0.0.0:*' 'LISTEN 0 4096 [::]:8889 [::]:*' \
+                         'LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:*' 'LISTEN 0 4096 [::]:18888 [::]:*'; }
+    [ -z "$(port_user 8888 ss)" ] && [ -z "$(port_user 8889 ss)" ] && [ -z "$(port_user 8008 ss)" ]
+    [ "$(port_user 7001 ss)" = "container other-1" ]      # inside another container's range
+    [ -z "$(port_user 9000 ss)" ]                          # exposed, not published
+    [ "$(port_user 5432 ss)" = "a process on this host" ]
+    [ -z "$(port_user 888 ss)" ] && [ -z "$(port_user 1888 ss)" ]   # no partial matches (18888)
+    [ "$(port_user 18888 ss)" = "a process on this host" ]
+    [ "$(printf '%s' '0.0.0.0:3080-3081->3080-3081/tcp, :::5030->5030/tcp' | host_ports | paste -sd' ')" = "3080 3081 5030" ]
+}
+
 @test "data_owner prefers PUID/PGID, then UID/GID" {
     mkdir a b
     printf 'PUID=1234\nPGID=2345\nUID=1\n' > a/.env
