@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nut-setup.sh — set up NUT (Network UPS Tools) on a Proxmox host or any Debian machine
+# scripts/nut — set up NUT (Network UPS Tools) on a Proxmox host or any Debian machine
 # (e.g. an Orange Pi), so it shuts down cleanly on a power cut and other hosts on the
 # same UPS can follow.
 #
@@ -27,7 +27,7 @@
 # Datacenter → Notifications, so they arrive wherever that sends them (e.g. Telegram).
 #
 # Usage (as root):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/nut-setup.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/nut/install.sh)
 #   ... --role server --policy lb
 #   ... --role client --server <server-ip> --policy timer --timer 180
 #   ... --role monitor
@@ -51,7 +51,7 @@ while (( $# )); do
         --listen) LISTEN="${2:-}"; shift ;;
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
-        -h|--help) usage; echo "usage: nut-setup.sh [--role server|client|monitor] [--policy …] [--timer s] [--ups name] [--server ip] [--password pw] [--listen ip] [--dry-run] [--yes]"; exit 0 ;;
+        -h|--help) usage; echo "usage: install.sh [--role server|client|monitor] [--policy …] [--timer s] [--ups name] [--server ip] [--password pw] [--listen ip] [--dry-run] [--yes]"; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 1 ;;
     esac
     shift
@@ -220,7 +220,7 @@ if (( ! DRY )); then
     [[ -d /etc/nut ]] && cp -a /etc/nut "/etc/nut.bak-$(date +%F-%H%M%S)"
 fi
 
-hdr="# managed by nut-setup.sh ($ROLE${POLICY:+/$POLICY}) — re-run the script rather than editing"
+hdr="# managed by homelab scripts/nut ($ROLE${POLICY:+/$POLICY}) — re-run the script rather than editing"
 
 put /etc/nut/nut.conf 640 <<EOF
 $hdr
@@ -395,7 +395,7 @@ if [[ "$ROLE" != client ]]; then
         echo "  passwords unchanged (see /etc/nut/upsd.users)"
     fi
     echo
-    echo "  clients on this UPS:  nut-setup.sh --role client --server ${ip:-<this-ip>} --ups $UPS"
+    echo "  clients on this UPS:  scripts/nut/install.sh --role client --server ${ip:-<this-ip>} --ups $UPS"
     echo "  Home Assistant:       NUT integration → host ${ip:-<this-ip>}, port 3493, user homeassistant"
 fi
 echo "  check:                upsc $target; journalctl -t nut -b"

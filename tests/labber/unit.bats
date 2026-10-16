@@ -840,6 +840,65 @@ history_repo() {
     done
 }
 
+@test "a global command after a word is refused, not run as if the word weren't there" {
+    run labber_main tools ls
+    [ "$status" -ne 0 ] && [[ "$output" == *"'ls' takes no service name ('tools')"*"labber tool ls"* ]]
+    run labber_main somesvc check-updates
+    [ "$status" -ne 0 ] && [[ "$output" == *"'check-updates' takes no service name ('somesvc')"* ]]
+}
+
+@test "ls -r: the repo's services (installed ones marked) and tools, with descriptions" {
+    git init -q "$T/origin"; mkdir -p "$T/origin/services/alpha" "$T/origin/services/beta" "$T/origin/tools/gamma" "$T/origin/tools/zsh"
+    printf 'image: x\n' > "$T/origin/services/alpha/docker-compose.yml"; printf '# alpha\n\nAlpha does things.\n' > "$T/origin/services/alpha/README.md"
+    printf 'services:\n  b:\n    image: example/beta:1\n' > "$T/origin/services/beta/docker-compose.yml"
+    printf '#!/usr/bin/env bash\n# Gamma — a handy tool\necho hi\n' > "$T/origin/tools/gamma/install.sh"
+    echo cfg > "$T/origin/tools/zsh/p10k.zsh"                       # a folder without install.sh: not a tool
+    git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
+    REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
+    SERVICE_BASE="$T/svcs"; mkdir -p "$SERVICE_BASE/alpha" && touch "$SERVICE_BASE/alpha/docker-compose.yml"
+    run labber_main ls --remote
+    [ "$status" -eq 0 ]
+    out=$(sed 's/\x1b\[[0-9;]*m//g' <<< "$output")
+    [[ "$out" == *"● alpha"*"Alpha does things"* ]]                 # installed here, README's prose line
+    grep -qE '^    beta +image: example/beta:1$' <<< "$out"         # not installed, no README: its image
+    grep -qE '^    gamma +Gamma — a handy tool$' <<< "$out"         # a tool, its header comment
+    ! grep -qE '^    zsh' <<< "$out"                                # config folders aren't listed as tools
+    run labber_main ls -x; [ "$status" -ne 0 ]
+}
+
+@test "tool: ls lists folders with install.sh; runs it from its folder; refuses bad names and reports failures" {
+    git init -q "$T/origin"; mkdir -p "$T/origin/tools/gamma" "$T/origin/tools/zsh" "$T/origin/tools/bad" "$T/origin/scripts/x"
+    printf '#!/usr/bin/env bash\n# Gamma — a handy tool\ncat data.txt > "%s/ran"\n' "$T" > "$T/origin/tools/gamma/install.sh"
+    echo gamma-data > "$T/origin/tools/gamma/data.txt"             # a file next to install.sh
+    printf '#!/usr/bin/env bash\nexit 3\n' > "$T/origin/tools/bad/install.sh"
+    echo cfg > "$T/origin/tools/zsh/p10k.zsh"
+    printf '#!/usr/bin/env bash\ntouch "%s/escaped"\n' "$T" > "$T/origin/scripts/x/install.sh"
+    git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
+    REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
+    run do_tool ls
+    [ "$status" -eq 0 ]
+    out=$(sed 's/\x1b\[[0-9;]*m//g' <<< "$output")
+    grep -qE '^  gamma +Gamma — a handy tool$' <<< "$out"
+    grep -qE '^  bad +$' <<< "$out"                                 # no header comment: name only
+    ! grep -q zsh <<< "$out"
+    run do_tool gamma
+    [ "$status" -eq 0 ] && [ "$(cat "$T/ran")" = gamma-data ]
+    run do_tool bad
+    [ "$status" -ne 0 ] && [[ "$output" == *"bad: install.sh failed (exit 3)"* ]]
+    run do_tool zsh
+    [ "$status" -ne 0 ] && [[ "$output" == *"tool 'zsh' not found"* ]]
+    for n in ../scripts/x . .. 'a/b' '-x' ''; do run do_tool "$n"; [ "$status" -ne 0 ]; done
+    [ ! -e "$T/escaped" ]
+}
+
+@test "tool: an empty tools/ says so instead of failing" {
+    git init -q "$T/origin"; mkdir -p "$T/origin/tools/zsh"; echo cfg > "$T/origin/tools/zsh/p10k.zsh"
+    git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
+    REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
+    run do_tool ls
+    [ "$status" -eq 0 ] && [[ "$output" == *"no tools found"* ]]
+}
+
 @test "preflight creates .env from .env.example when there's none yet" {
     mkdir svc; printf 'K=1\n' > svc/.env.example
     sync_env_keys svc >/dev/null

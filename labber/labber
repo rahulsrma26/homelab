@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.2.7"
+VERSION="4.3.0"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -126,7 +126,7 @@ clone_repo_dir() {
         # set -e doesn't apply inside $(...), so fail explicitly. stdin from /dev/null: git
         # must never eat answers typed ahead for labber's prompts; stdout is just progress
         if err=$(git clone --depth=1 --sparse --filter=blob:none -q "$REPO" "$tmpdir" < /dev/null 2>&1 >/dev/null) \
-            && err=$(git -C "$tmpdir" sparse-checkout set "$1" < /dev/null 2>&1 >/dev/null); then
+            && err=$(git -C "$tmpdir" sparse-checkout set "$@" < /dev/null 2>&1 >/dev/null); then
             echo "$tmpdir"
             return 0
         fi
@@ -1415,26 +1415,28 @@ do_update() {
 do_tool() {
     local tool="${1:-}"
     [[ -n "$tool" ]] || die "usage: labber tool <name>  |  labber tool ls"
+    [[ "$tool" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "not a tool name: '$tool' — run: labber tool ls"
 
     local tmpdir; tmpdir=$(clone_repo_dir tools/)
     trap "rm -rf '$tmpdir'" EXIT
 
     if [[ "$tool" == "ls" || "$tool" == "list" ]]; then
-        local available
-        mapfile -t available < <(find "$tmpdir/tools" -maxdepth 1 -name "*.sh" \
-            -exec basename {} .sh \; | sort)
+        local available t
+        mapfile -t available < <(repo_tools "$tmpdir")
         (( ${#available[@]} > 0 )) || { warn "no tools found in repo"; return; }
         echo
         echo -e "${W}available tools:${N}"
-        for t in "${available[@]}"; do printf "  %s\n" "$t"; done
+        for t in "${available[@]}"; do printf "  %-22s %s\n" "$t" "$(tool_desc "$tmpdir/tools/$t/install.sh")"; done
         return
     fi
 
-    local script="$tmpdir/tools/${tool}.sh"
+    local script="$tmpdir/tools/${tool}/install.sh"
     [[ -f "$script" ]] || die "tool '$tool' not found — run: labber tool ls"
 
     info "installing $tool..."
-    bash "$script"
+    local rc=0
+    (cd "$tmpdir/tools/$tool" && bash ./install.sh) || rc=$?   # from its folder: it can use files next to it
+    (( rc == 0 )) || die "$tool: install.sh failed (exit $rc)"
     ok "$tool installed"
 }
 
@@ -1448,8 +1450,54 @@ do_clean() {
 }
 
 do_ls() {
+    case "${1:-}" in
+        "") echo; show_overview ;;
+        -r|--remote) ls_remote ;;
+        *) die "usage: labber ls [-r|--remote]" ;;
+    esac
+}
+
+# a one-line description from a service's README: README.txt's first line, or README.md's
+# first line of prose (not a heading, table or code)
+readme_desc() {
+    local d="$1" f line
+    for f in "$d/README.txt" "$d/README.md"; do
+        [[ -f "$f" ]] || continue
+        while IFS= read -r line; do
+            [[ -z "${line// }" || "$line" =~ ^(#|\||\`\`\`|---|<) ]] && continue
+            line="${line//\*\*/}"; line="${line%.}"
+            echo "${line:0:72}"; return
+        done < "$f"
+    done
+    # no README: the compose file's first comment, else the image it runs
+    line=$(grep -m1 -E '^# ' "$d/docker-compose.yml" 2>/dev/null | sed 's/^# *//')
+    [[ -n "$line" ]] || line=$(grep -m1 -E '^[[:space:]]+image:' "$d/docker-compose.yml" 2>/dev/null | sed -E 's/^[[:space:]]+image:[[:space:]]*/image: /')
+    echo "${line:0:72}"
+}
+# the repo's tools: each a folder under tools/ with an install.sh (other folders hold
+# files setup uses, e.g. tools/zsh/p10k.zsh)
+repo_tools() { local f; for f in "$1"/tools/*/install.sh; do [[ -f "$f" ]] && basename "$(dirname "$f")"; done; return 0; }
+# a tool's description: the comment line right under its install.sh's shebang, if any
+tool_desc() { awk 'NR == 2 && /^# / { sub(/^# */, ""); print substr($0, 1, 72) } NR >= 2 { exit }' "$1"; }
+
+# labber ls -r: what the repo offers — services (● = installed here) and tools
+ls_remote() {
+    info "fetching the repo..."
+    local tmpdir; tmpdir=$(clone_repo_dir services/ tools/) || return 1
+    trap "rm -rf '$tmpdir'" EXIT
+    local installed n mark t
+    installed=" $(list_installed | tr '\n' ' ') "
+    echo; echo -e "${W}services${N}  (labber <name> install · ${G}●${N} installed here)"
+    while IFS= read -r n; do
+        mark="  "; [[ "$installed" == *" $n "* ]] && mark="${G}●${N} "
+        printf "  %b%-22s %s\n" "$mark" "$n" "$(readme_desc "$tmpdir/services/$n")"
+    done < <(find "$tmpdir/services" -maxdepth 3 -name docker-compose.yml -exec dirname {} \; \
+                 | sed "s|^$tmpdir/services/||" | sort)
+    echo; echo -e "${W}tools${N}  (labber tool <name>)"
+    for t in $(repo_tools "$tmpdir"); do
+        printf "    %-22s %s\n" "$t" "$(tool_desc "$tmpdir/tools/$t/install.sh")"
+    done
     echo
-    show_overview
 }
 
 # ── status overview ───────────────────────────────────────────────────────────
@@ -2019,14 +2067,12 @@ st_fzf_status() {
 }
 st_fzf_run() {
     local tmpdir; tmpdir=$(clone_repo_dir tools/) || return 1
-    [[ -f "$tmpdir/tools/fzf.sh" ]] || { rm -rf "$tmpdir"; warn "tools/fzf.sh not in repo"; return 1; }
-    # run the repo's tool as the user, so fzf lands in their home
-    local script; script=$(mktemp /tmp/labber-fzf-XXXXXX.sh)
-    cp "$tmpdir/tools/fzf.sh" "$script"; chmod 755 "$script"; rm -rf "$tmpdir"
-    runuser -l "$SETUP_USER" -c "bash $script" < /dev/null
-    local rc=$?
-    rm -f "$script"
-    return $rc
+    [[ -f "$tmpdir/tools/fzf/install.sh" ]] || { rm -rf "$tmpdir"; warn "tools/fzf/install.sh not in repo"; return 1; }
+    # a copy the user can read (the clone is root's), run from its folder like `labber tool`
+    local dir; dir=$(mktemp -d /tmp/labber-fzf-XXXXXX)
+    cp -r "$tmpdir/tools/fzf/." "$dir"; chmod -R a+rX "$dir"; rm -rf "$tmpdir"
+    runuser -l "$SETUP_USER" -c "cd $dir && bash ./install.sh" < /dev/null
+    local rc=$?; rm -rf "$dir"; return $rc
 }
 
 # ── locale ──
@@ -2837,9 +2883,10 @@ ${W}Commands:${N}
                     --admin --hostname --timezone --locale --ssh-key --swap 1|2|3
                     --network reservation|skip --virt lxc|vm --prometheus URL --loki URL
   ls                list services: containers up, health, ports, updates
+  ls -r|--remote    list what the repo offers: services (● installed here) and tools
   check-updates     check images and repo config for updates (cron-able)
   clean             remove all unused containers, images, networks, and volumes
-  tool <name>       install a tool from the tools/ directory in the repo
+  tool <name>       install a tool from the repo (tools/<name>/install.sh)
   tool ls           list available tools
   update            system apt update + upgrade + labber self-update
   install           install labber (/usr/local/lib/labber, linked from /usr/local/bin) + shell function
@@ -2896,6 +2943,16 @@ labber_main() {
         fi
     fi
 
+    # commands that take no service: a word before them is a typo, not a service to ignore
+    # (e.g. `labber tools ls` for `labber tool ls`)
+    case "$CMD" in
+        ls|check-updates|clean)
+            if [[ -n "$SVC" && ! ( "$CMD" == ls && "$SVC" =~ ^(-r|--remote)$ ) ]]; then
+                local hint=""; [[ "$SVC" == tools ]] && hint=" — did you mean: labber tool ls ?"
+                die "'$CMD' takes no service name ('$SVC')$hint"
+            fi ;;
+    esac
+
     case "$CMD" in
         install|deploy)
             # `labber install` installs labber itself; `labber <svc> install` deploys a
@@ -2911,7 +2968,7 @@ labber_main() {
         shell)     do_shell     "$SVC" ;;
         logs)      do_logs      "$SVC" ;;
         status)    do_status    "$SVC" ;;
-        ls)        do_ls ;;
+        ls)        do_ls "$SVC" ;;
         check-updates) do_check_updates ;;
         setup)     do_setup     "$SVC" "$@" ;;
         go)        do_go        "$SVC" ;;

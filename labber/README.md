@@ -68,7 +68,7 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki ([`services/monitoring`](../services/monitoring/)); asks for the URLs (or takes `--prometheus` / `--loki`). Unlike the Proxmox hosts (full metrics), guests send only what's useful: VMs ~300 series (CPU, memory, load, disk I/O, real filesystems and NICs, pressure, failed services, health); LXCs even less (failed services, health, `/`, boot time — Proxmox already reports their CPU/memory/network). The config is checked with `alloy fmt` before it's applied. On **Docker hosts** it also sends per-container CPU, memory, network, restarts and OOM kills, plus container logs to Loki (Alloy runs as root there: container metrics need the containerd socket) |
 | zsh + powerlevel10k | ✓ | ✓ | for the admin user (root on an LXC): zsh + p10k + autosuggestions + syntax highlighting; uses `tools/zsh/p10k.zsh` if present; labber and fzf work in it. Needs a Nerd Font in your terminal |
 | labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services`; on Docker hosts also a daily `labber check-updates` (shown in Grafana) |
-| fzf | ✓ | ✓ | from `tools/fzf.sh` |
+| fzf | ✓ | ✓ | from `tools/fzf/install.sh` |
 | NFS client / fail2ban | optional | optional | off by default |
 | Network: fixed IP | ✓ | ✓ | see below |
 
@@ -104,9 +104,10 @@ labber [svc] <command>
   <svc>             show a service's status and commands
   setup             prepare this fresh LXC/VM (see above)
   ls                list services: containers up, health, ports, updates
+  ls -r|--remote    list what the repo offers: services (● installed here) and tools
   check-updates     check images and repo config for updates
   clean             remove all unused containers, images, networks, volumes
-  tool <name>       run an install script from tools/   (tool ls: list them)
+  tool <name>       run tools/<name>/install.sh from the repo   (tool ls: list them)
   update            system apt update + upgrade + labber self-update
   install           install labber (/usr/local/lib/labber, linked from /usr/local/bin) + shell function
   (no args)         interactive menu

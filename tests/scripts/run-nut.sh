@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of scripts/nut-setup.sh in Debian containers with systemd (the image
+# End-to-end test of scripts/nut/install.sh in Debian containers with systemd (the image
 # from tests/labber/setup). A simulated UPS (dummy-ups, NUT_SETUP_DUMMY=1) stands in for
 # the USB cable. Needs only Docker (and internet: the script installs the NUT packages).
 #
@@ -27,7 +27,7 @@ docker network create "$net" >/dev/null
 for c in "$srv" "$cli" "$mon"; do
     docker run -d --name "$c" --hostname "$c" --network "$net" --privileged --cgroupns=host \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock "$image" >/dev/null
-    docker cp "$repo/scripts/nut-setup.sh" "$c:/nut-setup.sh"
+    docker cp "$repo/scripts/nut/install.sh" "$c:/nut-setup.sh"
 done
 for c in "$srv" "$cli" "$mon"; do
     for _ in $(seq 30); do docker exec "$c" systemctl is-system-running 2>/dev/null | has -E "running|degraded" && break; sleep 1; done
@@ -86,7 +86,7 @@ trap cleanup2 EXIT
 for c in "$srv2" "$cli2"; do
     docker run -d --name "$c" --hostname "$c" --network "$net" --privileged --cgroupns=host \
         -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock "$image" >/dev/null
-    docker cp "$repo/scripts/nut-setup.sh" "$c:/nut-setup.sh"
+    docker cp "$repo/scripts/nut/install.sh" "$c:/nut-setup.sh"
     for _ in $(seq 30); do docker exec "$c" systemctl is-system-running 2>/dev/null | has -E "running|degraded" && break; sleep 1; done
     docker exec "$c" bash -c 'apt-get update -qq' >/dev/null
 done

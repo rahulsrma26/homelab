@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fzf — fuzzy finder for the shell (Ctrl-R history, Ctrl-T files)
 set -euo pipefail
 
 # Check for ~/.fzf itself, not `command -v fzf`: ~/.fzf/bin is only on PATH once

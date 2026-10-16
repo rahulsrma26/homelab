@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# proxmox-grub-boot.sh — switch a Proxmox VE install (ZFS root, UEFI) from systemd-boot
+# scripts/proxmox-grub-boot — switch a Proxmox VE install (ZFS root, UEFI) from systemd-boot
 # to GRUB on all of its boot partitions (ESPs), and keep it that way across updates.
 #
 # Why: systemd-boot rewrites loader/random-seed on the ESP at every start and flushes it.
@@ -20,7 +20,7 @@
 # Already on GRUB? Then only step 5 runs — safe to re-run any time.
 #
 # Usage (as root on the Proxmox host):
-#   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/proxmox-grub-boot.sh)
+#   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/proxmox-grub-boot/install.sh)
 #   ... --dry-run   show what would happen, change nothing
 #   ... --yes       don't ask before changing things
 #
@@ -38,7 +38,7 @@ for a in "$@"; do
     case "$a" in
         --dry-run) DRY=1 ;;
         --yes|-y) YES=1 ;;
-        -h|--help) echo "usage: proxmox-grub-boot.sh [--dry-run] [--yes] — switch Proxmox ESPs to GRUB + install the pbt-grub-sync apt hook (details: top of the script)"; exit 0 ;;
+        -h|--help) echo "usage: install.sh [--dry-run] [--yes] — switch Proxmox ESPs to GRUB + install the pbt-grub-sync apt hook (details: top of the script)"; exit 0 ;;
         *) echo "unknown option: $a (try --help)" >&2; exit 1 ;;
     esac
 done
@@ -162,7 +162,7 @@ cat > "$SYNC" <<'SYNC'
 #!/bin/bash
 # pbt-grub-sync — keep GRUB on all Proxmox boot partitions (ESPs) current after GRUB
 # package upgrades, and keep the firmware boot order sane. Installed by
-# proxmox-grub-boot.sh (homelab repo, scripts/). Kernel updates are synced to the ESPs
+# scripts/proxmox-grub-boot (homelab repo). Kernel updates are synced to the ESPs
 # by Proxmox itself; GRUB *package* updates are not — this runs `proxmox-boot-tool
 # reinit` for them. Called from /etc/apt/apt.conf.d/99-pbt-grub-sync after every dpkg
 # run; does nothing unless the GRUB EFI package version changed since the last sync.
@@ -216,7 +216,7 @@ log "done — reboot once when convenient to use the new GRUB"
 SYNC
 chmod 755 "$SYNC"
 cat > "$HOOK" <<'HOOK'
-// installed by proxmox-grub-boot.sh: after every dpkg run, re-sync GRUB onto the ESPs if a
+// installed by scripts/proxmox-grub-boot: after every dpkg run, re-sync GRUB onto the ESPs if a
 // GRUB package changed (see /usr/local/sbin/pbt-grub-sync)
 DPkg::Post-Invoke { "if [ -x /usr/local/sbin/pbt-grub-sync ]; then /usr/local/sbin/pbt-grub-sync || true; fi"; };
 HOOK

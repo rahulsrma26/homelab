@@ -27,7 +27,7 @@ Every web app gets a name `<name>.home.<domain>` with HTTPS, from one wildcard c
 **Before deployment** (`.env`): `DOMAIN` (e.g. `home.<domain>`), `ACME_EMAIL`, `CF_DNS_API_TOKEN` (Cloudflare: My Profile → API Tokens → "Edit zone DNS" template, limited to your domain's zone; it covers the sub-domain too). `DASHBOARD_PASSWORD` is generated.
 
 **After deployment:**
-1. **DNS:** one local record `*.home.<domain>` → this LXC's IP, in UniFi (Technitium later). If your UniFi can't do wildcards, one record per name. No public DNS records are needed. Check from a client: `nslookup traefik.home.<domain>` returns this LXC's IP.
+1. **DNS:** one local record `*.home.<domain>` → this LXC's IP, in UniFi (Technitium later). If your UniFi can't do wildcards, one record per name. No public DNS records are needed — except, with a public wildcard `*.<domain>`, a record at `home.<domain>` (e.g. a TXT), so that wildcard doesn't cover `*.home.<domain>`. Check from a client: `nslookup traefik.home.<domain>` returns this LXC's IP.
 2. **Certificate:** the first start requests it (about a minute). Check `labber traefik logs` for errors from the `cloudflare` resolver. It's stored in `letsencrypt/acme.json`; keep that file, because Let's Encrypt limits how often a certificate can be issued.
 3. **Routes:** edit `dynamic/routes.yml` and replace the examples with your apps (router + service per app, `entryPoints: [websecure]`). Traefik picks up changes by itself, and labber keeps your edits on update. `dynamic/common.yml` has the shared security headers, the dashboard login, and `skip-verify`, a transport for backends with self-signed certificates (Proxmox, PBS, TrueNAS).
 4. **Firewall:** clients (home VLAN, Tailscale) → this LXC on 80/443; this LXC → each app's port.
