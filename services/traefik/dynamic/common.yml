@@ -19,6 +19,15 @@ http:
         referrerPolicy: strict-origin-when-cross-origin
         stsSeconds: 31536000
 
+    # the same, for apps that embed their own pages (OpenSpeedTest's SVGs): framing by
+    # the same site only
+    secure-headers-sameorigin:
+      headers:
+        customFrameOptionsValue: SAMEORIGIN
+        contentTypeNosniff: true
+        referrerPolicy: strict-origin-when-cross-origin
+        stsSeconds: 31536000
+
   serversTransports:
     # for backends with self-signed certificates (Proxmox, PBS, TrueNAS)
     skip-verify:
