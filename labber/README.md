@@ -97,7 +97,7 @@ labber [svc] <command>
   [svc] rebuild     pull/build new images, then recreate containers
   [svc] update      pull latest config from repo + rebuild (keeps .env and files you edited)
   [svc] shell       enter a running container shell
-  [svc] logs        follow docker compose logs
+  [svc] logs [ctr]  follow the logs (all containers, or one; --tail N / --since 10m too)
   [svc] status      show container status
   [svc] go          cd to service directory (needs the shell function)
   <svc>             show a service's status and commands

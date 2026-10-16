@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.3.1"
+VERSION="4.3.2"
 # The LABBER_* environment variables are for tests only: they point labber at a
 # local copy of the repo and a separate services folder. Leave them unset normally.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1222,11 +1222,34 @@ do_shell() {
     fi
 }
 
+# labber <svc> logs [container] [options]: one container (by its compose service or
+# container name) or all of them; options go to docker compose logs (e.g. --tail 50)
 do_logs() {
     check_deps
-    local svc; svc=$(resolve_svc "${1:-}")
+    local svc; svc=$(resolve_svc "${1:-}"); shift || true
     local dir; dir=$(need_svc "$svc")
-    (cd "$dir" && docker compose logs -f)
+    local opts=() want="" a
+    while (( $# )); do
+        a="$1"; shift
+        case "$a" in
+            --tail|-n|--since|--until)
+                [[ $# -gt 0 ]] || die "$a needs a value"; opts+=("$a" "$1"); shift ;;
+            -*) opts+=("$a") ;;
+            *)  [[ -z "$want" ]] || die "usage: labber $svc logs [container] [--tail N] [--since 10m] …"
+                want="$a" ;;
+        esac
+    done
+    local only=()
+    if [[ -n "$want" ]]; then
+        local s n names=""
+        while IFS='|' read -r s n; do
+            [[ -n "$s" ]] || continue
+            names+=" $s"; [[ "$n" != "$s" ]] && names+=" ($n)"
+            if [[ "$want" == "$s" || "$want" == "$n" ]]; then only=("$s"); fi
+        done < <(cd "$dir" && docker compose ps -a --format '{{.Service}}|{{.Name}}' 2>/dev/null)
+        (( ${#only[@]} )) || die "no container '$want' in $svc — it has:${names:- none}"
+    fi
+    (cd "$dir" && docker compose logs -f "${opts[@]}" "${only[@]}")
 }
 
 do_status() {
@@ -2906,7 +2929,7 @@ ${W}Commands:${N}
   [svc] rebuild     pull/build new images, then recreate containers
   [svc] update      pull latest config from repo + rebuild (keeps .env and files you edited)
   [svc] shell       enter a running container shell
-  [svc] logs        follow docker compose logs
+  [svc] logs [ctr]  follow the logs (all containers, or one; --tail N / --since 10m too)
   [svc] status      show container status
   [svc] go          cd to service directory
   setup             prepare this fresh LXC/VM (interactive checklist; re-runnable)
@@ -2998,7 +3021,7 @@ labber_main() {
         restart)   do_restart   "$SVC" ;;
         rebuild)   do_rebuild   "$SVC" ;;
         shell)     do_shell     "$SVC" ;;
-        logs)      do_logs      "$SVC" ;;
+        logs)      do_logs      "$SVC" "$@" ;;
         status)    do_status    "$SVC" ;;
         ls)        do_ls "$SVC" ;;
         check-updates) do_check_updates ;;

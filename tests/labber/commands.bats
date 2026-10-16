@@ -118,6 +118,22 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [ "$status" -eq 124 ]    # still following when the timeout stopped it
 }
 
+@test "logs <container>: only that container (by service or container name), options passed on" {
+    run timeout 5 bash "$LABBER" "$SVC" logs web --tail 1 < /dev/null
+    echo "$output"
+    [ "$status" -eq 124 ]
+    [[ "$output" == *"web-1"* ]] && [[ "$output" != *"job-1"* ]]
+    ctr=$(cd "$SVC_DIR" && docker compose ps -a --format '{{.Name}}' web)
+    run timeout 5 bash "$LABBER" "$SVC" logs "$ctr" --tail=1 < /dev/null
+    [ "$status" -eq 124 ] && [[ "$output" != *"job-1"* ]]
+    run timeout 5 bash "$LABBER" "$SVC" logs nosuch < /dev/null
+    [ "$status" -eq 1 ] && [[ "$output" == *"no container 'nosuch' in $SVC — it has:"*web* ]]
+    run timeout 5 bash "$LABBER" "$SVC" logs web job < /dev/null
+    [ "$status" -eq 1 ] && [[ "$output" == *usage* ]]
+    run timeout 5 bash "$LABBER" "$SVC" logs --tail < /dev/null
+    [ "$status" -eq 1 ] && [[ "$output" == *"--tail needs a value"* ]]
+}
+
 @test "shell opens sh when the container has no bash" {
     tty_run $'echo inside-$((6*7))\nexit\n' bash "$LABBER" "$SVC" shell
     echo "$output"
