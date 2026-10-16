@@ -1,5 +1,24 @@
 # SoulSync — playlists and wanted lists → downloaded, tagged, organised music.
 # slskd (optional) is the Soulseek client it downloads through.
+
+# slskd's settings, shared by slskd (direct) and slskd-vpn (through gluetun)
+x-slskd: &slskd
+  image: slskd/slskd:latest
+  container_name: slskd
+  restart: unless-stopped
+  environment:
+    - SLSKD_REMOTE_CONFIGURATION=true
+    - SLSKD_API_KEY=${SLSKD_API_KEY}
+    - SLSKD_USERNAME=${SLSKD_USERNAME}
+    - SLSKD_PASSWORD=${SLSKD_PASSWORD}
+    - SLSKD_SLSK_USERNAME=${SOULSEEK_USERNAME}
+    - SLSKD_SLSK_PASSWORD=${SOULSEEK_PASSWORD}
+    - SLSKD_SLSK_LISTEN_PORT=${SLSKD_LISTEN_PORT:-50300}
+    - TZ=${TZ}
+  volumes:
+    - ./slskd:/app
+    - ${DOWNLOADS_DIR}:/app/downloads
+
 services:
   soulsync:
     image: boulderbadgedad/soulsync:latest
@@ -38,18 +57,52 @@ services:
           memory: 2G
 
   slskd:
+    <<: *slskd
     profiles: [slskd-yes]
-    image: slskd/slskd:latest
-    container_name: slskd
-    restart: unless-stopped
-    environment:
-      - SLSKD_REMOTE_CONFIGURATION=true
-      - SLSKD_API_KEY=${SLSKD_API_KEY}
-      - SLSKD_USERNAME=${SLSKD_USERNAME}
-      - SLSKD_PASSWORD=${SLSKD_PASSWORD}
-      - TZ=${TZ}
     ports:
       - "${SLSKD_PORT:-5030}:5030"
-    volumes:
-      - ./slskd:/app
-      - ${DOWNLOADS_DIR}:/app/downloads
+      - "${SLSKD_LISTEN_PORT:-50300}:${SLSKD_LISTEN_PORT:-50300}"   # Soulseek peers connect in here
+
+  # slskd-vpn: the same slskd, with all its traffic through the VPN (no VPN, no traffic)
+  slskd-vpn:
+    <<: *slskd
+    profiles: [slskd-vpn]
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+    # if gluetun restarts, this container is left without a network: exit, so it restarts into gluetun's
+    healthcheck:
+      test: ["CMD-SHELL", "[ -e /sys/class/net/eth0 ] || kill 1"]
+      interval: 30s
+      timeout: 5s
+
+  gluetun:
+    profiles: [slskd-vpn]
+    image: qmcgaw/gluetun:latest
+    container_name: soulsync-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES}
+      - WIREGUARD_MTU=1420
+      - FIREWALL_VPN_INPUT_PORTS=${SLSKD_LISTEN_PORT:-50300}   # reachable only if the provider forwards it
+      - TZ=${TZ}
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "1"
+    ports:
+      - "${SLSKD_PORT:-5030}:5030"
+    networks:
+      default:
+        aliases: [slskd]                      # SoulSync still reaches it at http://slskd:5030
