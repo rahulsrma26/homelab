@@ -1,7 +1,5 @@
-# Homepage — the start page with links and widgets for every app. Its config is a few
-# YAML files (services.yaml, bookmarks.yaml, settings.yaml, widgets.yaml); keep them
-# where you can edit them easily (on od01: a folder on the "common" dataset, editable in
-# Filebrowser). Homepage reloads them by itself.
+# Homepage — start page with links and widgets. Config: YAML files in HOMEPAGE_CONFIG,
+# reloaded by itself.
 services:
   homepage:
     image: ghcr.io/gethomepage/homepage:latest

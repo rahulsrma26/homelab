@@ -4,8 +4,8 @@ Reverse proxy in one of two **modes**, chosen when labber installs it (`traefik_
 
 | Mode | For | Routes from | TLS | Files |
 |---|---|---|---|---|
-| **`lan`** | the homelab's own proxy, for LAN + Tailscale clients (an LXC on od01) | files in `dynamic/` (no Docker socket: the apps run in other LXCs/VMs) | one wildcard certificate `*.DOMAIN`, Let's Encrypt DNS-01 at Cloudflare; nothing public | `docker-compose.yml` + `compose.lan.yml` |
-| **`cf`** | the **public** entry point behind a Cloudflare Tunnel (w680's hardened VM), for the few public services (e.g. immich-public-proxy) | Docker labels, via a read-only socket proxy | Cloudflare terminates TLS | `docker-compose.yml` + `compose.cf.yml` |
+| **`lan`** | the homelab's own proxy, for LAN + Tailscale clients | files in `dynamic/` (no Docker socket: the apps run in other LXCs/VMs) | one wildcard certificate `*.DOMAIN`, Let's Encrypt DNS-01 at Cloudflare; nothing public | `docker-compose.yml` + `compose.lan.yml` |
+| **`cf`** | the **public** entry point behind a Cloudflare Tunnel, for the few public services | Docker labels, via a read-only socket proxy | Cloudflare terminates TLS | `docker-compose.yml` + `compose.cf.yml` |
 
 `docker-compose.yml` holds what both share; Compose merges it with the mode's file. To switch modes, change `COMPOSE_FILE` in `.env` and run `labber traefik rebuild`: containers of the other mode are removed.
 

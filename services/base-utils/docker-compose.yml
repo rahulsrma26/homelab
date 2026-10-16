@@ -1,8 +1,6 @@
-# Stateless tools. Nothing here holds important data. Homepage has its own service:
-# services/homepage.
+# Stateless web tools.
 services:
-  # IT-Tools, the maintained fork (the original image hasn't been rebuilt since 2024);
-  # it listens on 8080, not 80
+  # IT-Tools, the maintained fork
   it-tools:
     image: ghcr.io/sharevb/it-tools:latest
     container_name: it-tools
@@ -10,7 +8,6 @@ services:
     ports:
       - "${IT_TOOLS_PORT:-8081}:8080"
 
-  # omni-tools: more everyday tools in the browser (images, video, audio, PDF, text, …)
   omni-tools:
     image: iib0011/omni-tools:latest
     container_name: omni-tools
@@ -18,8 +15,7 @@ services:
     ports:
       - "${OMNI_TOOLS_PORT:-8084}:80"
 
-  # BentoPDF: PDF tools that run in the browser (merge, split, edit, sign, compress, OCR…).
-  # The "simple" build = the self-hosted app without the bentopdf.com marketing pages
+  # BentoPDF, the self-hosted build
   bentopdf:
     image: ghcr.io/alam00000/bentopdf-simple:latest
     container_name: bentopdf

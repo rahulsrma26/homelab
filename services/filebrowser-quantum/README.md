@@ -5,9 +5,9 @@ Web-based file browser. Which folders it shows depends on the machine, chosen at
 | Variant | Folders | Sources (config) |
 |---|---|---|
 | `w680` | TrueNAS datasets via NFS (`/mnt/media`, `/mnt/extra`) + the local pool (`/mysatapool/zdata`) | `data/config.yaml` |
-| `od01` | FilesOd01's mounts: `/mnt/common`, `/mnt/media`, `/mnt/vault` (**read-only**: Immich and Paperless own those files) | `config.od01.yaml` |
+| `od01` | `/mnt/common`, `/mnt/media`, `/mnt/vault` (read-only) | `config.od01.yaml` |
 
-**od01 settings** (`config.od01.yaml`): new users can create, edit and delete in `common` and `media`; `vault` is read-only in Filebrowser too. Users that already exist keep their rights: change them in Settings → User Management. (Don't name a source `files`: Filebrowser's own URLs start with `/files/`, and editing or opening folders 2+ levels deep then fails with "403 source name not found", [issue #3095](https://github.com/gtsteffaniak/filebrowser/issues/3095).)
+**od01 settings** (`config.od01.yaml`): new users can edit `common` and `media`; `vault` is read-only. Don't name a source `files`: Filebrowser's URLs start with `/files/` ([#3095](https://github.com/gtsteffaniak/filebrowser/issues/3095)).
 
 An install from before the variants existed is asked `filebrowser_host` on its next `labber update`: answer `w680` there.
 

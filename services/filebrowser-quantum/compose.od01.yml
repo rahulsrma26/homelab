@@ -1,11 +1,7 @@
-# od01 (FilesOd01, CT 1042): its bind mounts of spool/encrypted/{vault,media,common}.
-# vault is read-only (Immich and Paperless own those files). Sources: config.od01.yaml.
+# od01 variant: the vault, media and common mounts (vault read-only). Sources: config.od01.yaml.
 services:
   filebrowser:
-    # The image runs as uid 1000; in od01's FilesOd01 LXC everything (Filebrowser and Samba)
-    # writes as the LXC's root instead — one owner for all shared folders (host uid
-    # 100000, no power outside the unprivileged LXC). Also lets it write ./data and ./cache,
-    # which labber creates as root.
+    # runs as root, the owner of the shared folders (the image defaults to uid 1000)
     user: "0:0"
     volumes:
       - ./cache:/cache

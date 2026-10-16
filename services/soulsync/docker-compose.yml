@@ -1,0 +1,55 @@
+# SoulSync — playlists and wanted lists → downloaded, tagged, organised music.
+# slskd (optional) is the Soulseek client it downloads through.
+services:
+  soulsync:
+    image: boulderbadgedad/soulsync:latest
+    container_name: soulsync
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=022
+      - PYTHONPATH=/app
+      - SOULSYNC_CONFIG_PATH=/app/config/config.json
+      - TZ=${TZ}
+      - SOULSYNC_SPOTIFY_CALLBACK_PORT=${SPOTIFY_CALLBACK_PORT}
+      - SOULSYNC_TIDAL_CALLBACK_PORT=${TIDAL_CALLBACK_PORT}
+    ports:
+      - "${PORT:-8008}:8008"
+      - "${SPOTIFY_CALLBACK_PORT}:${SPOTIFY_CALLBACK_PORT}"
+      - "${TIDAL_CALLBACK_PORT}:${TIDAL_CALLBACK_PORT}"
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./Staging:/app/Staging
+      - ./scripts:/app/scripts
+      - ${DOWNLOADS_DIR}:/app/downloads
+      - ${MUSIC_LIBRARY_DIR}:/app/Transfer
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  slskd:
+    profiles: [slskd-yes]
+    image: slskd/slskd:latest
+    container_name: slskd
+    restart: unless-stopped
+    environment:
+      - SLSKD_REMOTE_CONFIGURATION=true
+      - SLSKD_API_KEY=${SLSKD_API_KEY}
+      - SLSKD_USERNAME=${SLSKD_USERNAME}
+      - SLSKD_PASSWORD=${SLSKD_PASSWORD}
+      - TZ=${TZ}
+    ports:
+      - "${SLSKD_PORT:-5030}:5030"
+    volumes:
+      - ./slskd:/app
+      - ${DOWNLOADS_DIR}:/app/downloads

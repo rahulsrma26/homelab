@@ -38,7 +38,7 @@ Full guide: [labber/README.md](labber/README.md).
 |---|---|
 | Access & security | Authelia + LLDAP (SSO), Vaultwarden, Traefik (LAN reverse proxy, or the public entry via Cloudflare Tunnel), Nginx Proxy Manager (being retired) |
 | Monitoring | Prometheus, Grafana, Loki, Alertmanager (→ Telegram), InfluxDB, pve-exporter; Uptime Kuma (separate) |
-| Media & files | Jellyfin, Immich public proxy, FileBrowser Quantum, MeTube |
+| Media & files | Jellyfin, Immich, Immich public proxy, Navidrome, SoulSync (+ slskd), FileBrowser Quantum, MeTube |
 | Documents | Paperless-ngx, Paperless-GPT |
 | AI | llama.cpp (CUDA, plus a TurboQuant build), LibreChat, voice assistant agent |
 | Cameras | Frigate |

@@ -1,7 +1,6 @@
 # lan mode: reverse proxy for the homelab (LAN + Tailscale). See docker-compose.yml.
 services:
-  # turns DASHBOARD_PASSWORD (.env) into the hashed file Traefik's basic auth reads, on
-  # every start, so changing the password is: edit .env, labber traefik restart
+  # hashes DASHBOARD_PASSWORD for the dashboard login on every start
   dashboard-auth:
     image: httpd:2.4-alpine
     container_name: traefik-dashboard-auth
@@ -31,15 +30,13 @@ services:
       - --providers.file.directory=/etc/traefik/dynamic
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
-      # drop request headers that alias one Traefik sets (X_Forwarded_For for X-Forwarded-For):
-      # backends like Django/WSGI would read them as the real one
+      # drop look-alike headers (X_Forwarded_For for X-Forwarded-For)
       - --entrypoints.web.http.aliasHeadersStrategy=delete
       - --entrypoints.websecure.http.aliasHeadersStrategy=delete
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
-      # no time limit on reading a request: Traefik v3 cuts uploads off after 60 s by
-      # default (a large file in Filebrowser, a long video into Immich). LAN-only proxy
+      # no 60 s limit on uploads (Traefik v3's default)
       - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
       - --entrypoints.websecure.http.tls.certresolver=cloudflare
       - --entrypoints.websecure.http.tls.domains[0].main=${DOMAIN}
@@ -47,9 +44,7 @@ services:
       - --certificatesresolvers.cloudflare.acme.email=${ACME_EMAIL}
       - --certificatesresolvers.cloudflare.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
-      # don't check the TXT record from here: a router that intercepts all DNS (UniFi ad
-      # blocking / content filtering / DNS redirect) answers in Cloudflare's place and never
-      # shows it. Let's Encrypt checks from the internet; wait a minute before asking it to.
+      # skip the local TXT check (routers that intercept DNS break it); wait instead
       - --certificatesresolvers.cloudflare.acme.dnschallenge.propagation.disableChecks=true
       - --certificatesresolvers.cloudflare.acme.dnschallenge.propagation.delayBeforeChecks=60s
       - --api.dashboard=true

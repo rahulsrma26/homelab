@@ -1,12 +1,10 @@
 # cf mode: the public entry point behind a Cloudflare Tunnel. See docker-compose.yml.
 services:
   docker-socket-proxy:
-    # LinuxServer's image: rebuilt regularly (HAProxy, Alpine fixes), which labber's update
-    # check notices. Every permission is set below; POST=0 keeps it read-only.
+    # read-only (POST=0); only what the Docker provider needs is on
     image: lscr.io/linuxserver/socket-proxy:latest
     container_name: traefik-socket-proxy
     restart: unless-stopped
-    # its HAProxy runs as root in a chroot: keep the image's user and capabilities
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -16,13 +14,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      # what Traefik's Docker provider needs: list/inspect containers, follow events
       - CONTAINERS=1
       - EVENTS=1
       - PING=1
       - VERSION=1
       - POST=0
-      # everything else off, explicitly (start/stop/restart could bypass POST=0)
+      # everything else off (start/stop/restart would bypass POST=0)
       - ALLOW_ARCHIVE=0
       - ALLOW_CHANGES=0
       - ALLOW_EXPORT=0
@@ -76,21 +73,16 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxy
-      # published only if a container also has homelab.exposure=public (a second opt-in,
-      # so traefik.enable alone never makes something public)
+      # a second opt-in: containers also need homelab.exposure=public
       - --providers.docker.constraints=Label(`homelab.exposure`,`public`)
       - --entrypoints.web.address=:80
-      # drop request headers that alias one Traefik sets (X_Forwarded_For for X-Forwarded-For)
+      # drop look-alike headers (X_Forwarded_For for X-Forwarded-For)
       - --entrypoints.web.http.aliasHeadersStrategy=delete
-      # cloudflared runs on this VM and reaches Traefik through Docker's gateway, never from
-      # a Cloudflare IP: trust Docker's private ranges, so the visitor's IP and https from
-      # cloudflared reach the apps. Safe: port 80 is published on 127.0.0.1 only, so only
-      # this VM itself and the containers on "proxy" can connect.
+      # cloudflared connects through Docker's gateway (port 80 is on 127.0.0.1 only)
       - --entrypoints.web.forwardedheaders.trustedips=127.0.0.1/32,172.16.0.0/12,192.168.0.0/16
       - --log.level=INFO
       - --accesslog=true
-      # the visitor's IP in the access log (the connection itself comes from Docker's gateway);
-      # only the JSON format carries headers
+      # the visitor's IP in the access log (headers need the JSON format)
       - --accesslog.format=json
       - --accesslog.fields.headers.defaultmode=drop
       - --accesslog.fields.headers.names.CF-Connecting-IP=keep

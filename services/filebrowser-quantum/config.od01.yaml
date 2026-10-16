@@ -1,5 +1,4 @@
-# od01 (FilesOd01). Each source's defaultPermissions are what a new user gets there;
-# existing users keep theirs (Settings → User Management → a user → its sources).
+# defaultPermissions: what a new user gets on each source
 server:
   cacheDir: /cache
   sources:

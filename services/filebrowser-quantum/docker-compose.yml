@@ -1,7 +1,7 @@
 # Filebrowser Quantum — web file browser. The folders it shows depend on the machine,
 # chosen at install (COMPOSE_FILE in .env):
 #   w680  TrueNAS NFS mounts + the local ZFS pool          → compose.w680.yml
-#   od01  od01's datasets (vault read-only, media, files)  → compose.od01.yml
+#   od01  vault (read-only), media, common                 → compose.od01.yml
 # This file holds what both share.
 services:
   filebrowser:
