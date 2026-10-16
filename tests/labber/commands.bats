@@ -193,6 +193,8 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     echo "$output"
     [ "$status" -eq 0 ]
     [[ "$output" == *"labber updated"*"v99.0.0"* ]]
+    [[ "$output" == *"shell integration already current"* ]]       # same blocks: rc files untouched
+    [[ "$output" != *"source ~/"* ]]
     grep -qx 'VERSION="99.0.0"' /usr/local/lib/labber/labber
     [ -f /usr/local/lib/labber/files/alloy/base.alloy ]
     run env LABBER_URL="file://$newer" bash /usr/local/bin/labber update < /dev/null

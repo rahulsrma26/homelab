@@ -1246,7 +1246,7 @@ do_go() {
     if [[ -t 1 ]]; then
         # stdout is a terminal — not captured by shell function, cd won't happen
         info "Directory: ${W}$dir${N}"
-        warn "to actually cd there, run: labber $svc go   (requires self-install + source ~/.bashrc)"
+        warn "to actually cd there, run: labber $svc go   (needs the shell function from 'labber install', in a new terminal)"
     else
         # stdout captured by shell function — just print the path for cd
         echo "$dir"
@@ -1285,12 +1285,39 @@ _labber_rcs() {
     if [[ -f "$h/.zshrc" ]]; then echo "$h/.zshrc"; fi
 }
 
-_install_shell_fn() {
-    local rc
-    while IFS= read -r rc; do
-        _strip_rc_block "$rc" "# labber shell function" '^}$'
-        cat >> "$rc" <<'BASHRC'
+# the labber block in rc $1: from the line $2 up to the first line matching $3
+_rc_block() { awk -v start="$2" -v end_re="$3" '$0 == start { on = 1 } on { print; if ($0 ~ end_re) exit }' "$1" 2>/dev/null; }
 
+# put block $4 (its first line $2, its last matching $3) into rc $1, replacing the old
+# one. Returns 1 when it's already there exactly once, unchanged (the file isn't touched).
+RC_CHANGED=()
+_put_rc_block() {
+    local rc="$1" start="$2" end_re="$3" block="$4" n
+    n=$(grep -cxF "$start" "$rc" 2>/dev/null || true)
+    if [[ "${n:-0}" == 1 && "$(_rc_block "$rc" "$start" "$end_re")" == "$block" ]]; then return 1; fi
+    _strip_rc_block "$rc" "$start" "$end_re"
+    printf '\n%s\n' "$block" >> "$rc"
+    _fix_rc_owner "$rc"
+    RC_CHANGED+=("$rc")
+}
+
+# after rc changes: how to load them, for the shell the user logs in with (nothing to do
+# if its rc didn't change)
+_rc_hint() {
+    (( ${#RC_CHANGED[@]} )) || return 0
+    local sh rc; sh=$(getent passwd "${SUDO_USER:-$(id -un)}" | cut -d: -f7)
+    case "${sh##*/}" in
+        zsh)  rc="$(target_home)/.zshrc" ;;
+        bash) rc="$(target_home)/.bashrc" ;;
+        *)    warn "open a new terminal to apply"; return 0 ;;
+    esac
+    printf '%s\n' "${RC_CHANGED[@]}" | grep -qxF "$rc" || return 0
+    warn "run 'source ~/${rc##*/}' or open a new terminal to apply"
+}
+
+_install_shell_fn() {
+    local rc block
+    block=$(cat <<'BASHRC'
 # labber shell function
 labber() {
   if [[ "$2" == go ]]; then
@@ -1300,18 +1327,17 @@ labber() {
   fi
 }
 BASHRC
-        _fix_rc_owner "$rc"
-        ok "shell function updated in $rc"
+)
+    while IFS= read -r rc; do
+        if _put_rc_block "$rc" "# labber shell function" '^}$' "$block"; then ok "shell function updated in $rc"; fi
     done < <(_labber_rcs)
 }
 
 _install_completion_fn() {
-    local rc
+    local rc block
     while IFS= read -r rc; do
-        # remove the old block so we always install the latest version
-        _strip_rc_block "$rc" "# labber completion" '^complete -F _labber_complete labber$'
-        {
-            echo; echo "# labber completion"
+        block=$(
+            echo "# labber completion"
             [[ "$rc" == *.zshrc ]] && echo "autoload -U +X bashcompinit && bashcompinit"
             cat <<'BASHRC'
 _labber_complete() {
@@ -1335,9 +1361,10 @@ _labber_complete() {
 }
 complete -F _labber_complete labber
 BASHRC
-        } >> "$rc"
-        _fix_rc_owner "$rc"
-        ok "tab completion updated in $rc"
+        )
+        if _put_rc_block "$rc" "# labber completion" '^complete -F _labber_complete labber$' "$block"; then
+            ok "tab completion updated in $rc"
+        fi
     done < <(_labber_rcs)
 }
 
@@ -1359,7 +1386,7 @@ do_self_install() {
     _install_shell_fn
     ans=""; if interactive; then read -rp "Enable tab completion? [Y/n] " ans || true; fi
     [[ "$ans" =~ ^[Nn]$ ]] || _install_completion_fn
-    warn "run 'source ~/.bashrc' or open a new terminal to activate"
+    _rc_hint
 }
 
 do_update() {
@@ -1408,8 +1435,9 @@ do_update() {
     info "checking shell integration..."
     _install_shell_fn
     # refresh completion only if it was enabled at install time
-    if grep -qxF "# labber completion" "$(target_home)/.bashrc" 2>/dev/null; then _install_completion_fn; fi
-    warn "run 'source ~/.bashrc' to apply any changes"
+    local h; h=$(target_home)
+    if grep -qxF "# labber completion" "$h/.bashrc" "$h/.zshrc" 2>/dev/null; then _install_completion_fn; fi
+    if (( ${#RC_CHANGED[@]} )); then _rc_hint; else ok "shell integration already current"; fi
 }
 
 do_tool() {
@@ -2909,7 +2937,7 @@ ${W}Weekly update check${N} (add with: crontab -e):
 
 ${W}Note:${N}
   'labber <svc> go' requires the shell function installed by 'labber install'.
-  After install, run: source ~/.bashrc
+  After install, open a new terminal (or source your ~/.bashrc / ~/.zshrc).
 
 ${W}Fresh LXC/VM${N} (as root — only curl needed):
   apt update && apt install -y curl

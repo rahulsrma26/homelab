@@ -10,10 +10,9 @@ On a machine that's **already set up**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber | bash -s install
-source ~/.bashrc
 ```
 
-This installs labber (script + files) in `/usr/local/lib/labber`, linked from `/usr/local/bin/labber`, plus a shell function (needed for `labber <svc> go`) and tab completion in `~/.bashrc`. Keep it current with `labber update` — it downloads the repo's tarball (~100 KB), so the script and its files always match.
+Then open a new terminal (or `source ~/.zshrc` / `~/.bashrc`). This installs labber (script + files) in `/usr/local/lib/labber`, linked from `/usr/local/bin/labber`, plus a shell function (needed for `labber <svc> go`) and tab completion in `~/.bashrc` and, if you have one, `~/.zshrc`. `labber update` only touches them when they changed, and then says which file to source. Keep it current with `labber update` — it downloads the repo's tarball (~100 KB), so the script and its files always match.
 
 ## Setting up a fresh LXC or VM
 

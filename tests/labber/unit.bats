@@ -341,6 +341,47 @@ EOF
     bash -c "source '$HOME/.bashrc'; type labber >/dev/null; complete -p labber >/dev/null"
 }
 
+@test "rc blocks: a re-run that changes nothing leaves the files alone and says nothing" {
+    HOME="$T/home"; mkdir -p "$HOME"; printf 'export FOO=1\n' > "$HOME/.bashrc"; touch "$HOME/.zshrc"; unset SUDO_USER
+    _install_shell_fn >/dev/null; _install_completion_fn >/dev/null
+    cp "$HOME/.bashrc" "$T/b0"; cp "$HOME/.zshrc" "$T/z0"
+    RC_CHANGED=()
+    run _install_shell_fn;      [ "$status" -eq 0 ] && [ -z "$output" ]
+    run _install_completion_fn; [ "$status" -eq 0 ] && [ -z "$output" ]
+    _install_shell_fn; _install_completion_fn
+    [ "${#RC_CHANGED[@]}" -eq 0 ]
+    cmp "$HOME/.bashrc" "$T/b0" && cmp "$HOME/.zshrc" "$T/z0"
+}
+
+@test "rc blocks: an old or duplicated block is replaced by one current block" {
+    HOME="$T/home"; mkdir -p "$HOME"; unset SUDO_USER
+    printf '# labber shell function\nlabber() {\n  /usr/local/bin/labber "$@"\n}\nexport A=1\n\n# labber shell function\nlabber() {\n  old\n}\n' > "$HOME/.bashrc"
+    RC_CHANGED=()
+    run _install_shell_fn
+    [[ "$output" == *"shell function updated in $HOME/.bashrc"* ]]
+    _install_shell_fn >/dev/null
+    [ "$(grep -cx '# labber shell function' "$HOME/.bashrc")" -eq 1 ]
+    ! grep -q old "$HOME/.bashrc"
+    grep -qx 'export A=1' "$HOME/.bashrc"
+    grep -q 'labber "$1" go' "$HOME/.bashrc"
+    RC_CHANGED=(); run _install_shell_fn; [ -z "$output" ]          # now current
+}
+
+@test "rc hint: names the rc of the user's login shell, and only when that one changed" {
+    HOME="$T/home"; mkdir -p "$HOME"; unset SUDO_USER
+    getent() { echo "u:x:1:1::$HOME:$LOGIN_SHELL"; }
+    LOGIN_SHELL=/usr/bin/zsh RC_CHANGED=("$HOME/.bashrc" "$HOME/.zshrc")
+    run _rc_hint; [[ "$output" == *"source ~/.zshrc"* ]] && [[ "$output" != *bashrc* ]]
+    LOGIN_SHELL=/bin/bash
+    run _rc_hint; [[ "$output" == *"source ~/.bashrc"* ]]
+    LOGIN_SHELL=/usr/bin/zsh RC_CHANGED=("$HOME/.bashrc")           # zsh user: a bashrc change doesn't matter
+    run _rc_hint; [ -z "$output" ]
+    LOGIN_SHELL=/usr/bin/fish
+    run _rc_hint; [[ "$output" == *"open a new terminal"* ]]
+    RC_CHANGED=()
+    run _rc_hint; [ -z "$output" ]
+}
+
 # ── sudo ownership ────────────────────────────────────────────────────────────
 
 @test "give_back_files hands repo files to the sudo user but not service data" {

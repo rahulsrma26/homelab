@@ -1,6 +1,7 @@
 # homelab
 
 [![ci](https://github.com/rahulsrma26/homelab/actions/workflows/ci.yml/badge.svg)](https://github.com/rahulsrma26/homelab/actions/workflows/ci.yml)
+[![labber](https://img.shields.io/badge/dynamic/regex?url=https%3A%2F%2Fraw.githubusercontent.com%2Frahulsrma26%2Fhomelab%2Frefs%2Fheads%2Fmain%2Flabber%2Flabber&search=VERSION%3D%22(%5B%5E%22%5D%2B)%22&replace=v%241&label=labber&color=blue)](labber/)
 
 Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for self-hosted services, **labber** to deploy and run them, and monitoring for every machine, VM, LXC and container.
 
