@@ -19,8 +19,8 @@ http:
         referrerPolicy: strict-origin-when-cross-origin
         stsSeconds: 31536000
 
-    # the same, for apps that embed their own pages (OpenSpeedTest's SVGs): framing by
-    # the same site only
+    # the same, for apps that embed their own pages (e.g. as <object> or <iframe>): framing
+    # by the same site only
     secure-headers-sameorigin:
       headers:
         customFrameOptionsValue: SAMEORIGIN

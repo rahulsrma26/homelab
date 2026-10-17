@@ -1,7 +1,7 @@
 Stateless web tools.
 
 Services:
-  it-tools      :8081  developer tools
-  bentopdf      :8083  PDF tools (in the browser)
-  omni-tools    :8084  everyday tools: images, video, audio, text
-  openspeedtest :3080  network speed test (:3081 HTTPS)
+  it-tools      :7001  developer tools
+  omni-tools    :7002  everyday tools: images, video, audio, text
+  bentopdf      :7003  PDF tools (in the browser)
+  librespeed    :7004  network speed test

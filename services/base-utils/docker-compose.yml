@@ -6,14 +6,14 @@ services:
     container_name: it-tools
     restart: unless-stopped
     ports:
-      - "${IT_TOOLS_PORT:-8081}:8080"
+      - "${IT_TOOLS_PORT:-7001}:8080"
 
   omni-tools:
     image: iib0011/omni-tools:latest
     container_name: omni-tools
     restart: unless-stopped
     ports:
-      - "${OMNI_TOOLS_PORT:-8084}:80"
+      - "${OMNI_TOOLS_PORT:-7002}:80"
 
   # BentoPDF, the self-hosted build
   bentopdf:
@@ -21,12 +21,15 @@ services:
     container_name: bentopdf
     restart: unless-stopped
     ports:
-      - "${BENTOPDF_PORT:-8083}:8080"
+      - "${BENTOPDF_PORT:-7003}:8080"
 
-  openspeedtest:
-    image: openspeedtest/latest
-    container_name: openspeedtest
+  # LibreSpeed: its upload endpoint reads the whole upload, so it measures right behind
+  # a reverse proxy too
+  librespeed:
+    image: ghcr.io/librespeed/speedtest:latest
+    container_name: librespeed
     restart: unless-stopped
+    environment:
+      - MODE=standalone
     ports:
-      - "3080:3000"
-      - "3081:3001"
+      - "${SPEEDTEST_PORT:-7004}:8080"
