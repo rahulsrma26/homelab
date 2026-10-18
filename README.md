@@ -9,6 +9,8 @@ Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for 
 
 | Path | What's in it |
 |---|---|
+| [`architecture/`](architecture/) | how the lab is designed and why: hosts, network, storage, backups, encryption, power, monitoring, security, and a decision log |
+| [`guides/`](guides/) | step-by-step how-tos: Proxmox host setup, hardware (BIOS) setup |
 | [`labber/`](labber/) | **labber**, the bash tool that sets up fresh LXCs/VMs and installs, updates and monitors the services |
 | [`services/`](services/) | one folder per service: `docker-compose.yml`, `.env.example` (with templates labber fills in), `README.txt` |
 | [`scripts/`](scripts/) | host scripts, one folder each (`scripts/<name>/install.sh`), run with one command from GitHub: Proxmox systemd-boot → GRUB, NUT UPS shutdown, Samba + `smbmgr`. See [scripts/README.md](scripts/README.md) |
