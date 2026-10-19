@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # pre-push: refuse a push that would publish personal details, private IPs, keys or .env
-# files (the rules in tests/repo/lint.sh, plus your local personal/lint-denylist.txt).
+# files (the rules in tests/repo/lint.sh, plus your local denylist outside the repo).
 # Checks the working tree AND the lines the pushed commits add — a secret committed and
 # deleted again would still be in the history.
 # Turn on once per clone: make hooks   ·   Emergency bypass: git push --no-verify

@@ -44,11 +44,11 @@ Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{
 
 Use lowercase snake_case names. Pick the strictest generator the app documents (e.g. LibreChat's `JWT_SECRET` is 32 random bytes as hex → `generate(hex64)`). Never generate values that must match something outside the service (shared passkeys, tokens from other apps) — use `{{ name }}`.
 
-`make test-lint` checks the machine-checkable parts of these rules (templates, compose variables, private IPs, keys, `.env` files, e-mail addresses, Tailscale names, city time zones, plus the words in the local `personal/lint-denylist.txt`); CI runs it on every push. `make hooks` makes `git push` run it first, on the working tree and on the pushed commits.
+`make test-lint` checks the machine-checkable parts of these rules (templates, compose variables, private IPs, keys, `.env` files, e-mail addresses, Tailscale names, city time zones, plus the words in your local denylist: `../lint-denylist.txt` next to this clone, or `personal/lint-denylist.txt`); CI runs it on every push. `make hooks` makes `git push` run it first, on the working tree and on the pushed commits.
 
-## personal/ directory
+## Private material
 
-Gitignored. Store here anything that doesn't meet the public rules above:
+Never in this repo. Keep it in a private repo or folder **outside** this clone (e.g. a private repo that contains this clone as `public/`), or in the gitignored `personal/` here:
 - `.env` files with real credentials
 - Docs with real IPs or machine-specific details
 - Any other private config

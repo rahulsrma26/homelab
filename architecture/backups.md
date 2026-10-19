@@ -2,13 +2,14 @@
 
 ## The rule: 3-2-1 for what matters
 
-Three copies, on two different machines, one off-site: for `vault` (photos, documents). Less important tiers get fewer copies ([storage.md](storage.md)).
+Three copies, on two different machines, one off-site: for `vault` (photos, documents, Git repositories). Less important tiers get fewer copies ([storage.md](storage.md)).
 
 | What | Undo (on the same machine) | Second machine | Off-site |
 |---|---|---|---|
 | `vault` | sanoid snapshots: hourly ×24, daily ×30, monthly ×12 | TrueNAS pulls every hour | cloud storage, client-side encrypted (+ a yearly offline archive) |
 | `common` | daily ×14, monthly ×3 | TrueNAS pulls daily | — |
 | `media` | daily ×7 (short, so re-encoding the library doesn't pile up in snapshots) | TrueNAS pulls daily | — |
+| `extra` | — | — | — (scratch, and object storage for rebuildable data: never backed up) |
 | guest disks | — | PBS nightly, all guests | — |
 | TrueNAS's own data | TrueNAS snapshots | the Synology NAS (pulls with rsync/Hyper Backup: it can't receive ZFS) | cloud for `tank/vault` |
 

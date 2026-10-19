@@ -6,8 +6,9 @@
 #   - docker-compose.yml and compose.<variant>.yml: every ${VAR} without a default is in the service's .env.example
 #   - no private IP addresses (use 192.168.<vlan>.<host> names), no keys, no .env files committed
 #   - no personal details: e-mail addresses, Tailscale (*.ts.net) names, city time zones, and
-#     everything in personal/lint-denylist.txt (your domain, names, …: a local, gitignored
-#     list — listing them in the repo would publish them)
+#     everything in your denylist (your domain, names, …: kept outside this repo, since
+#     listing them here would publish them): $LINT_DENYLIST, else ../lint-denylist.txt
+#     (next to this clone), else personal/lint-denylist.txt (gitignored)
 #
 #   lint.sh                 the working tree (every file git would push)
 #   lint.sh --diff <range>  only the content rules, on the lines the commits in <range> add
@@ -119,15 +120,19 @@ while IFS=$'\t' read -r where m; do err "$where" "Tailscale name $m — keep mac
     < <(find_all '[a-z0-9-]+[.][a-z0-9-]+[.]ts[.]net' 1)
 while IFS=$'\t' read -r where m; do err "$where" "time zone $m — a location; use a {{ tz | default(Etc/UTC) }} template"; done \
     < <(find_all '(Europe|America|Asia|Africa|Australia|Pacific|Atlantic|Indian|Antarctica)/[A-Z][A-Za-z_]+')
-# your own list: personal/lint-denylist.txt — one case-insensitive ERE per line, # comments
-if [[ -f personal/lint-denylist.txt ]]; then
+# your own list — one case-insensitive ERE per line, # comments
+denylist="${LINT_DENYLIST:-}"
+if [[ -z "$denylist" ]]; then
+    for f in ../lint-denylist.txt personal/lint-denylist.txt; do [[ -f "$f" ]] && { denylist="$f"; break; }; done
+fi
+if [[ -n "$denylist" && -f "$denylist" ]]; then
     while IFS= read -r pat || [[ -n "$pat" ]]; do
         pat="${pat%%#*}"; pat="${pat#"${pat%%[![:space:]]*}"}"; pat="${pat%"${pat##*[![:space:]]}"}"
         [[ -n "$pat" ]] || continue
         while IFS=$'\t' read -r where m; do err "$where" "matches your denylist ($m)"; done < <(find_all "$pat" 1)
-    done < personal/lint-denylist.txt
+    done < "$denylist"
 else
-    echo "  (no personal/lint-denylist.txt — add your domain, names, e-mail to check for them too)"
+    echo "  (no denylist: ../lint-denylist.txt or personal/lint-denylist.txt — add your domain, names, e-mail to check for them too)"
 fi
 
 if [[ "$mode" == tree ]]; then

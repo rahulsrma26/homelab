@@ -85,6 +85,25 @@ docker compose exec --user git forgejo forgejo \
 Save the printed password, sign in over HTTPS, change it, and enable 2FA. Add other
 accounts through the admin UI. Repositories default to private.
 
+### Storage for artifacts and packages
+
+`forgejo_storage` picks where Actions artifacts and packages go (Actions logs always
+stay in `FORGEJO_DATA`):
+
+- **`local`**: in `FORGEJO_DATA`, so they share its backups.
+- **`s3`**: an S3 bucket, e.g. [`services/garage`](../services/garage/) (`s3_endpoint`
+  as `host:3900`, the bucket's access and secret key from Garage's `.env`). Use it for
+  data you can rebuild: the bucket has no backup of its own.
+
+Forgejo **refuses to start while its S3 storage is unreachable**. A running Forgejo keeps
+serving Git and the web UI without it (packages and artifacts fail), and after a restart
+it retries until the bucket is back. Run the S3 server on the same host as Forgejo; to
+start without it, switch `COMPOSE_FILE` in `.env` to `compose.local.yml` and restart
+(packages and artifacts are missing until you switch back).
+
+Packages are off unless `forgejo_packages_enabled` is `true`; artifacts are kept 7 days
+and logs 90 (`forgejo_artifact_retention_days`, `forgejo_log_retention_days`).
+
 ## DNS, proxy and firewall
 
 The HTTPS name `git.<domain>` resolves to Traefik. The separate SSH hostname
@@ -247,8 +266,9 @@ Configure push mirroring only on public-safe repositories, with branch filter
 GitHub mirror. Credentials stay in Actions secrets or protected target `.env` files,
 even for private repositories.
 
-Back up **all of `data/` plus `.env`**: repositories, SQLite, application config and
-keys, accounts, packages and Actions credentials belong together. GitHub is not a
+Back up **all of `FORGEJO_DATA` plus `.env`**: repositories, SQLite, application config and
+keys, accounts, packages (in `local` mode) and Actions credentials belong together.
+In `s3` mode, artifacts and packages are only in the bucket. GitHub is not a
 backup of the private forge. Keep the guest in PBS; for a consistent independent
 copy, stop its runner and Forgejo, copy that complete state to protected backup
 storage, then restart both. Include off-site coverage for irreplaceable private
