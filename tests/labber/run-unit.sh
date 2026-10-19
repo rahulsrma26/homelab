@@ -8,7 +8,7 @@ repo="$(cd "$here/../.." && pwd)"
 
 docker build -q -t labber-unit -f "$here/Dockerfile.unit" "$here" >/dev/null
 rc=0
-docker run --rm -v "$repo:/repo:ro" labber-unit bats "$@" /repo/tests/labber/unit.bats || rc=$?
+docker run --rm -v "$repo:/repo:ro" labber-unit bats "$@" /repo/tests/labber/unit.bats /repo/tests/labber/audit.bats /repo/tests/labber/source.bats || rc=$?
 
 # labber's Alloy files as they are, and the configs setup generates from them (VM,
 # LXC, Docker host), must pass the real alloy's check

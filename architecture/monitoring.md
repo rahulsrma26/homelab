@@ -28,7 +28,7 @@ Home Assistant: ──► InfluxDB
 | memory | MemoryUncorrectableError, MemoryCorrectableErrors (ECC / in-band ECC) |
 | containers | ContainerRestarting, ContainerGone, ContainerOOMKilled |
 
-Machines that **push** never report "down"; their samples just stop. HostNotReporting fires on "was reporting before, isn't now". The rules have unit tests (`make test-monitoring`).
+Machines that **push** never report "down"; their samples just stop. HostNotReporting fires on "was reporting before, isn't now". It keeps firing while the host is silent and its last sample remains in the rolling one-day history. After that it resolves because the host has been forgotten, not because it recovered; Uptime Kuma provides separate availability checks for important services. The rules have unit tests (`make test-monitoring`).
 
 ## Delivery
 
@@ -42,4 +42,4 @@ Telegram only, timed by severity, so harmless things don't interrupt:
 
 Inhibit rules keep a bigger alert from repeating its smaller ones (e.g. DiskSpaceFull silences DiskSpaceCritical and DiskSpaceLow for the same disk). Proxmox, PBS and TrueNAS send their own notifications (backups, ZFS events, replication) to the same Telegram chat through their notification systems.
 
-**Daily report:** a workflow service collects every alert, has a local LLM summarise them and sends one daily report. Critical alerts keep their direct path, so a broken summariser never hides them.
+**Daily report:** n8n runs in its own LXC on primary's server VLAN. Alertmanager sends firing and resolved notifications to an authenticated internal n8n webhook, on a separate route outside the Telegram digest window. n8n stores the received events, deduplicates repeated notifications and has a local LLM summarise the day's history. Alertmanager's port stays unpublished. A host alert expiring after one day must not be described as verified recovery. Critical Telegram alerts keep their direct path, so a broken workflow or summariser never hides them.

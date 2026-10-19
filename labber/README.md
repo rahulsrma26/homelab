@@ -12,7 +12,89 @@ On a machine that's **already set up**:
 curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber | bash -s install
 ```
 
-Then open a new terminal (or `source ~/.zshrc` / `~/.bashrc`). This installs labber (script + files) in `/usr/local/lib/labber`, linked from `/usr/local/bin/labber`, plus a shell function (needed for `labber <svc> go`) and tab completion in `~/.bashrc` and, if you have one, `~/.zshrc`. `labber update` only touches them when they changed, and then says which file to source. Keep it current with `labber update` — it downloads the repo's tarball (~100 KB), so the script and its files always match.
+Then open a new terminal (or `source ~/.zshrc` / `~/.bashrc`). This installs labber (script + files) in `/usr/local/lib/labber`, linked from `/usr/local/bin/labber`, plus a shell function (needed for `labber <svc> go`) and tab completion in `~/.bashrc` and, if you have one, `~/.zshrc`. `labber update` only touches them when they changed, and then says which file to source. Keep it current with `labber update` — it fetches the script and its files together from the selected source, including changes made without a version bump.
+
+## Repository sources and local testing
+
+The default is this repo's **GitHub `main`**. A source supplies services, tools,
+labber itself and setup's `files/`. Forgejo uses ordinary Git URLs; no Forgejo API
+token or GitHub mirror is needed. Sources must keep this repo's directory layout.
+
+Choose a source for **one command**, with options before the service/command:
+
+```bash
+# Private Forgejo, using SSH configured for the account running labber.
+labber --source 'ssh://git@<forgejo-ssh-host>:2222/<owner>/<repo>.git' --ref main ls --remote
+labber --source 'https://<forgejo-domain>/<owner>/<repo>.git' --ref main homepage update
+
+# Test your checkout's changes without committing or pushing them.
+bash ./labber/labber --source "$PWD" ls --remote
+bash ./labber/labber --source "$PWD" homepage update
+bash ./labber/labber --source "$PWD" install  # install this labber + files/ locally
+
+# Test committed history instead (branch, tag or full commit SHA).
+labber --source "file://$PWD" --ref <branch-tag-or-sha> ls --remote
+```
+
+Commands that deploy services still change the installed service under
+`/opt/homelab/services` and its running containers. Use a test guest when trying
+changes. `ls --remote` only lists the selected source. A local source path names
+the Git **working-tree root on the machine running labber**; it can also be a
+mounted checkout. A path on your laptop is not automatically available to a guest.
+Labber targets Debian/Ubuntu. On macOS, preview your working tree with the same
+Debian Docker image used by the tests:
+
+```bash
+make test-labber-unit  # builds the test image and checks the working tree
+docker run --rm -v "$PWD:/repo:ro" labber-unit \
+  bash /repo/labber/labber --source /repo ls --remote
+```
+
+That preview does not need a Docker socket inside the container. Use
+`make test-labber-setup` for the full setup and service lifecycle in disposable
+systemd containers with nested Docker.
+
+Working-tree mode takes a temporary copy of the requested directories. It includes
+staged/unstaged edits, deletions and new unignored files, using Git's
+[`ls-files --cached --others --exclude-standard`](https://git-scm.com/docs/git-ls-files).
+It excludes `.env` even if tracked, ignored untracked files, labber's state and
+backup files. It rejects symlinks/submodules in the selected directories. The
+source checkout's index and history stay unchanged; installed `.env` and local
+edits get the same protection as remote updates. Avoid editing during the copy.
+`--ref` applies to Git URLs, including `file://`, rather than working-tree mode.
+
+For a **permanent host setting**, including the daily checker and later updates:
+
+```bash
+labber source set 'ssh://git@<forgejo-ssh-host>:2222/<owner>/<repo>.git' main
+labber source show
+labber homepage update
+labber source reset  # remove saved settings; return to GitHub main
+```
+
+`source set` saves non-secret `source=` and `ref=` lines in
+`/etc/labber/source.conf`, using sudo when needed. With no ref a custom Git source
+uses its remote default branch (HEAD); specify `main` for a deployment branch, or
+a full SHA to pin a revision. A saved working-tree path is also supported, but the
+timer then sees uncommitted edits and needs that path to stay available.
+
+Priority is CLI options → `LABBER_SOURCE`/`LABBER_REF` environment variables → the
+host file → GitHub `main`. Selecting a different source clears the lower-priority
+ref unless you specify a new one at the same priority. Overrides are not saved by
+`install` or `setup`; run `source set` explicitly for subsequent commands/timers.
+`source set` and `source reset` can repair a stale checkout path or invalid config.
+
+Use an SSH deploy key or a Git credential helper for private repos, **as the user
+running labber** (also the daily timer's `User=`). Keep URL credentials out of this
+file and command lines; password-bearing URLs are rejected. Verify SSH host keys
+through a trusted channel. Setup runs as root and needs root's Git access for a
+private remote, or a readable local checkout. Source choices survive setup's sudo
+elevation. The default curl/tar bootstrap still works without Git; custom sources
+need Git installed first. The legacy `services/labber` forwarder still bootstraps
+from GitHub; use the `labber/labber` entry point for an independent local forge.
+
+`LABBER_REPO`, `LABBER_URL`, `LABBER_SERVICE_BASE` and `LABBER_SOURCE_CONFIG` remain
+test-harness hooks; use the supported source options for normal deployments.
 
 ## Setting up a fresh LXC or VM
 
@@ -87,7 +169,7 @@ Everything that has to happen on the Proxmox host (hostname, LXC static IP, nest
 ## Commands
 
 ```
-labber [svc] <command>
+labber [--source URL|PATH] [--ref BRANCH|TAG|SHA] [svc] <command>
 
   [svc] install     deploy a service from the repo (also: deploy)
   [svc] uninstall   stop and remove a service (asks about images, and about the folder + its Docker volumes)
@@ -107,6 +189,9 @@ labber [svc] <command>
   check-updates     check images and repo config for updates
   clean             remove all unused containers, images, networks, volumes
   tool <name>       run tools/<name>/install.sh from the repo   (tool ls: list them)
+  source [show]     show the effective source and ref
+  source set URL|PATH [REF]  save a host source for commands and timers (sudo)
+  source reset      restore the default GitHub main source (sudo)
   update            system apt update + upgrade + labber self-update
   install           install labber (/usr/local/lib/labber, linked from /usr/local/bin) + shell function
   (no args)         interactive menu
@@ -119,14 +204,21 @@ Examples: `labber frigate logs` · `labber paperless-ngx restart` · `labber jel
 On every `install`, `start`, `rebuild` and `update`:
 
 - **`.env` values** — keys new in `.env.example` are added to `.env`; placeholders (below) are asked for or generated. If anything is still unset, labber lists it and asks before starting.
+- **Credential permissions** — new `.env` files use mode 600; preflight tightens existing files and old `.env.labber-bak` copies too. A direct mount into a different UID (LibreChat) gets mode 640 with the configured data GID, so that container can still read it. Set UID/GID to the intended reader.
 - **Ports** — warns if a published port is already used by another container or process.
 - **Data folders** — creates missing bind-mount folders owned by `PUID`/`PGID` (or `UID`/`GID`) from `.env`, otherwise by you. Without this, Docker creates them as root and many containers can't write to them. Existing paths are never changed.
 
 **Config files you edited** (frigate's cameras, Prometheus targets…) are never overwritten by `update`. labber remembers each repo file as it installed it (`.labber-base` in the service folder): a file you changed stays as it is, and if the repo changed it too, the repo's version is put next to it as `<file>.labber-new` to compare. Your edits also don't show up as "repo config changed" in `labber ls`. A reinstall (`labber <svc> install` again) does take the repo's version, and keeps yours as `<file>.labber-bak`. `.env.example` and `README.txt` are always replaced (you edit `.env`, which is never touched). If a service has `.env.example` but no `.env`, it's created from it.
 
 Updates pull new images **before** stopping the old containers, so a failed pull or build leaves the service running. Locally built images are built, not pulled.
+Docker Compose must support `pull --ignore-buildable`; older versions are refused before stopping containers. Failed image preparation also restores the files changed by an update.
+Updates currently merge repository files into the live directory before image preparation. Apps that watch mounted configuration, such as Traefik, can reload those files during preparation; restoring files after a failure does not undo any effects of an intermediate reload. Staging preparation outside live mounts remains a separate improvement.
 
-**Health check and rollback.** After `install`, `rebuild` and `update`, labber waits for the containers to come up: each running for 10 s since its last start (a restart or two while a database starts is fine), healthy if it has a healthcheck, or finished with exit code 0 (one-shot jobs). A crash loop (3+ restarts), a non-zero exit, a failed healthcheck or 3 minutes without getting there counts as a failed update, and labber offers to **roll back**: the images the service ran before (kept as `labber-rollback:<id>` until the update is known to be good) and, for `update`, the files it replaced. It asks rather than rolling back by itself, because the new version may already have migrated the app's data, which the old one can't read. Without a terminal it reports the failure, leaves things as they are and exits 1.
+Files deleted in the repo are removed only when `.labber-base` records them and they are unchanged locally. Edited retired files stay with a warning and continue to appear in update checks until removed manually. Unrelated files and service data are preserved.
+
+**Health check and rollback.** After `install`, `rebuild` and `update`, labber waits for applications to run for 10 s since their last start (a restart or two while a database starts is fine) and pass any healthcheck. Only dependencies declared with `condition: service_completed_successfully` are one-shot jobs: they must finish with exit code 0, and a running job remains pending. All other services must keep running, including those with `restart: "no"`. Standalone batch jobs need a completion dependency to qualify. The overview uses the same rule when counting stopped containers. A crash loop (3+ restarts), a non-zero exit, a dead container, a failed healthcheck or 3 minutes without getting there counts as a failed update, and labber offers to **roll back**: the images the service ran before (kept as `labber-rollback:<id>` until the update is known to be good) and, for `update`, the files it replaced. It asks rather than rolling back by itself, because the new version may already have migrated the app's data, which the old one can't read. Without a terminal it reports the failure, leaves things as they are and exits 1.
+Every active Compose service must have a container; an empty list, missing service or Docker query error is a failure. Inactive profiles are excluded. File rollback includes upstream deletions. Failed updates retain their file snapshot and print its path for inspection or recovery; `.env` answers stay in place.
+Service commands require Docker Compose, Git and jq; `labber setup` installs these dependencies.
 
 Without a terminal (cron, scripts), labber never prompts: it reports what's wrong and doesn't start the service.
 

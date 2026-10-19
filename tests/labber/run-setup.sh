@@ -6,6 +6,7 @@
 # installs packages, Alloy, Docker and zsh plugins).
 #
 #   tests/labber/run-setup.sh [lxc|vm|auto|both]     (default: both = all three, a few minutes)
+#   LABBER_TEST_LIFECYCLE=1 tests/labber/run-setup.sh vm  also tests real nested Docker
 #
 #   lxc  root only, no Docker — like a new Proxmox LXC
 #   vm   treated as a VM: an admin user (created beforehand, as the Debian installer
@@ -31,17 +32,24 @@ tmp=$(mktemp -d)
 containers=()
 cleanup() {
     local c
-    for c in "${containers[@]}"; do docker rm -f -v "$c" >/dev/null 2>&1 || true; done
+    for c in ${containers[@]+"${containers[@]}"}; do docker rm -f -v "$c" >/dev/null 2>&1 || true; done
     rm -rf "$tmp"
 }
 trap cleanup EXIT
 mkdir -p "$tmp/t/repo" "$tmp/bundle/homelab-main"
 cp -R "$repo/labber" "$tmp/bundle/homelab-main/labber"
 tar -czf "$tmp/t/labber.tar.gz" -C "$tmp/bundle" homelab-main
-(cd "$repo" && git ls-files -co --exclude-standard -- tools | tar -cf - -T -) | tar -xf - -C "$tmp/t/repo"
+(cd "$repo" && git ls-files -co --exclude-standard -- tools services | tar -cf - -T -) | tar -xf - -C "$tmp/t/repo"
+cp -R "$here/fixtures/labber-test" "$tmp/t/repo/services/labber-test"
 (cd "$tmp/t/repo" && git init -q && git config uploadpack.allowFilter true && git add -A \
     && git -c user.name=t -c user.email=t@localhost commit -qm snapshot)
-cp "$repo/labber/labber" "$here"/setup-*.bats "$tmp/t/"
+cp "$repo/labber/labber" "$tmp/t/labber-bootstrap"
+cp "$here"/setup-*.bats "$tmp/t/"
+mkdir -p "$tmp/t/labber"
+mkdir -p "$tmp/t/services"
+cp -R "$repo/labber/." "$tmp/t/labber/"
+cp "$repo/services/labber" "$tmp/t/services/labber"
+cp "$here/integration.bats" "$here/commands.bats" "$tmp/t/"
 docker build -q -t "$image" "$here/setup" >/dev/null
 # a throwaway key pair for setup's "paste your public key" question, made fresh each
 # run (deleted with $tmp) — no fixed key in the repo, nobody else holds the private half
@@ -53,16 +61,17 @@ run_mode() {
     containers+=("$name")
     # Docker inside needs its own storage (overlay on overlay doesn't work)
     docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-        --tmpfs /run --tmpfs /run/lock -v /var/lib/docker -v /var/lib/containerd "$image" >/dev/null
+        --tmpfs /run --tmpfs /run/lock -v /var/lib/docker -v /var/lib/containerd "$image" >/dev/null || return 1
     # copied in and handed to root, as on a real machine: git won't clone a repo that
     # belongs to another user, and both a bind mount and docker cp keep the host's user id
-    docker cp "$tmp/t" "$name:/t"
-    docker exec "$name" chown -R root:root /t
+    docker cp "$tmp/t" "$name:/t" || return 1
+    docker exec "$name" chown -R root:root /t || return 1
     for _ in $(seq 30); do
         state=$(docker exec "$name" systemctl is-system-running 2>/dev/null || true)
         [[ "$state" == running || "$state" == degraded ]] && break
         sleep 1
     done
+    [[ "$state" == running || "$state" == degraded ]] || { echo "FAIL: systemd did not start"; return 1; }
 
     if [[ "$mode" == lxc ]]; then
         # treat it as a VM? n (→ LXC) · Docker services? n · checklist: a (all), Enter (run)
@@ -83,7 +92,7 @@ run_mode() {
         # first --dry-run: it shows the plan and must change nothing at all
         local dry
         dry=$(docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
-            bash -c "bash <(cat /t/labber) setup --dry-run --virt lxc --docker no --with nfs,fail2ban \
+            bash -c "bash <(cat /t/labber-bootstrap) setup --dry-run --virt lxc --docker no --with nfs,fail2ban \
                 --ssh-key '$key' --prometheus http://127.0.0.1:9090 --network skip </dev/null" 2>&1 | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g')
         echo "$dry" | grep -E 'dry-run|Prometheus|Loki|SSH key|network|timezone' | head -8
         grep -q 'nothing was changed' <<< "$dry" && grep -q 'http://127.0.0.1:9090  (--prometheus)' <<< "$dry" \
@@ -96,22 +105,47 @@ run_mode() {
         # the same LXC as above, but one pasted command: every answer a flag, --yes, no
         # terminal and no input at all
         docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
-            bash -c "bash <(cat /t/labber) setup --yes --virt lxc --docker no --with nfs,fail2ban \
+            bash -c "bash <(cat /t/labber-bootstrap) setup --yes --virt lxc --docker no --with nfs,fail2ban \
                 --ssh-key '$key' --prometheus http://127.0.0.1:9090 --network skip </dev/null" 2>&1 \
-            | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee "$tmp/setup-$mode.log" | grep -E '^(::|✓|!|error)' || true
+            | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee "$tmp/setup-$mode.log" | grep -E '^(::|✓|!|error)' \
+            || { echo "FAIL: unattended setup exited with an error"; return 1; }
         docker cp "$tmp/setup-$mode.log" "$name:/root/setup1.log"
         echo ":: [$mode] checking the result (the LXC checks)"
         docker exec "$name" bats "/t/setup-lxc.bats"
         return
     fi
     docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo -i "$name" \
-        script -qefc 'bash -c "bash <(cat /t/labber) setup"' /dev/null <<< "$answers" \
+        script -qefc 'bash -c "bash <(cat /t/labber-bootstrap) setup"' /dev/null <<< "$answers" \
         | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r' | tee "$tmp/setup-$mode.log" \
-        | grep -E '^(::|✓|!|error)' || true
+        | grep -E '^(::|✓|!|error)' || { echo "FAIL: setup exited with an error"; return 1; }
     docker cp "$tmp/setup-$mode.log" "$name:/root/setup1.log"
 
     echo ":: [$mode] checking the result"
-    docker exec "$name" bats "/t/setup-$mode.bats"
+    docker exec "$name" bats "/t/setup-$mode.bats" || return 1
+    if [[ "$mode" == lxc && "${LABBER_TEST_LIFECYCLE:-0}" == 1 ]]; then
+        echo ":: [lxc] changing a non-Docker guest into a Docker host"
+        docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+            labber setup --yes --docker yes --without update --prometheus http://127.0.0.1:9090 || return 1
+        docker exec "$name" bash -c 'docker info >/dev/null && systemctl is-enabled --quiet labber-check-updates.timer &&
+            grep -q "prometheus.exporter.cadvisor" /etc/alloy/config.alloy &&
+            grep -q "loki.source.docker" /etc/alloy/config.alloy &&
+            grep -qx User=root /etc/systemd/system/alloy.service.d/labber.conf' || return 1
+    fi
+    if [[ "$mode" == vm && "${LABBER_TEST_LIFECYCLE:-0}" == 1 ]]; then
+        echo ":: [vm] real service lifecycle in nested Docker (as admin)"
+        docker exec "$name" chown -R admin:admin /t || return 1
+        docker exec "$name" bash -c "echo 'admin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/labber-lifecycle-test" || return 1
+        # Setup-specific VM integration tests require real time/swap hardware; the
+        # systemd container checks above cover their supported paths instead.
+        docker exec "$name" runuser -u admin -- env \
+            LABBER=/t/labber/labber LABBER_REPO=file:///t/repo LABBER_URL=file:///t/labber.tar.gz \
+            LABBER_SERVICE_BASE=/home/admin/services-under-test \
+            bats --filter '^(install:|ls:|labber <svc>|stop,|start refuses|rebuild:|check-updates:|update: new|uninstall:)' /t/integration.bats || return 1
+        docker exec "$name" runuser -u admin -- env \
+            LABBER=/t/labber/labber LABBER_REPO=file:///t/repo LABBER_URL=file:///t/labber.tar.gz \
+            LABBER_SERVICE_BASE=/home/admin/services-under-test \
+            bats /t/commands.bats || return 1
+    fi
 }
 
 rc=0

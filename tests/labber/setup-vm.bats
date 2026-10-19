@@ -101,3 +101,14 @@ tty_run() {
     todo=$(grep -E '^ +[0-9]+ \[' <<< "$output" | grep -v -E 'system update|time sync|swap|NFS' | grep -c ' todo' || true)
     [ "$todo" -eq 0 ]
 }
+
+@test "admin dry-run keeps its options across automatic sudo elevation" {
+    echo 'admin ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/labber-setup-test
+    before=$(sha256sum /var/lib/labber/setup.state)
+    run runuser -u admin -- labber setup --dry-run --docker no --without update
+    rm -f /etc/sudoers.d/labber-setup-test
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'nothing was changed'* ]]
+    [[ "$output" == *'Docker steps left out'* ]]
+    [ "$(sha256sum /var/lib/labber/setup.state)" = "$before" ]
+}

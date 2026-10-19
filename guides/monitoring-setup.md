@@ -62,13 +62,17 @@ Grafana comes with its dashboards provisioned (Proxmox, guests, containers, disk
 
 ## 7. A test alert
 
-From the monitoring LXC; a Telegram message should arrive within ~30 seconds:
+From the monitoring LXC; a Telegram message should arrive within ~30 seconds.
+Alertmanager has no published host port. Run a temporary curl container in its
+network namespace to reach the API without publishing it:
 
 ```bash
-curl -s -X POST http://localhost:9093/api/v2/alerts -H 'Content-Type: application/json' \
+docker run --rm --network container:alertmanager curlimages/curl:8.12.1 \
+  -fsS -X POST http://localhost:9093/api/v2/alerts -H 'Content-Type: application/json' \
   -d '[{"labels":{"alertname":"TestAlert","instance":"test","severity":"critical"},"annotations":{"summary":"test alert"}}]'
 # resolve it at once:
-curl -s -X POST http://localhost:9093/api/v2/alerts -H 'Content-Type: application/json' \
+docker run --rm --network container:alertmanager curlimages/curl:8.12.1 \
+  -fsS -X POST http://localhost:9093/api/v2/alerts -H 'Content-Type: application/json' \
   -d '[{"labels":{"alertname":"TestAlert","instance":"test","severity":"critical"},"annotations":{"summary":"test alert"},"endsAt":"2000-01-01T00:00:00Z"}]'
 ```
 

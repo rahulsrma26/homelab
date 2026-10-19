@@ -7,3 +7,6 @@ repo="$(cd "$here/../.." && pwd)"
 docker build -q -t labber-unit -f "$repo/tests/labber/Dockerfile.unit" "$repo/tests/labber" >/dev/null
 docker run --rm -v "$repo:/repo:ro" labber-unit bash -c \
     'git config --global --add safe.directory /repo && bash /repo/tests/repo/lint.sh "$@"' lint "$@"
+if [[ $# -eq 0 ]]; then
+    docker run --rm -v "$repo:/repo:ro" labber-unit bats /repo/tests/repo/unit.bats
+fi

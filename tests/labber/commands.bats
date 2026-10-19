@@ -53,6 +53,29 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
 
 # ── per-service commands ──────────────────────────────────────────────────────
 
+@test "source selection: dirty checkout deploys without pushing; missing ref preserves containers" {
+    local checkout="$BATS_TEST_TMPDIR/checkout" before env_before
+    git clone -q "${LABBER_REPO#file://}" "$checkout"
+    # No commit: changes must come from the selected working tree.
+    sed -i '/- PASSWORD=/a\      - SOURCE_MARKER=local-checkout' "$checkout/services/$SVC/docker-compose.yml"
+    echo local-file > "$checkout/services/$SVC/untracked.txt"
+    echo must-not-deploy > "$checkout/services/$SVC/.env"
+    env_before=$(cat "$SVC_DIR/.env")
+    lbr --source "$checkout" "$SVC" update
+    echo "$output"
+    [ "$status" -eq 0 ] && web_running
+    [ "$(docker exec "$SVC-web-1" printenv SOURCE_MARKER)" = local-checkout ]
+    [ "$(cat "$SVC_DIR/untracked.txt")" = local-file ]
+    [ "$(cat "$SVC_DIR/.env")" = "$env_before" ]
+    before=$(web_id)
+    run env CLONE_RETRY_DELAY=0 bash "$LABBER" --source "file://$checkout" --ref missing "$SVC" update </dev/null
+    [ "$status" -ne 0 ] && [ "$(web_id)" = "$before" ] && web_running
+    # Switch back to the default committed source and exercise deletion tracking.
+    lbr "$SVC" update
+    [ "$status" -eq 0 ] && [ ! -e "$SVC_DIR/untracked.txt" ]
+    [ -z "$(docker exec "$SVC-web-1" printenv SOURCE_MARKER || true)" ]
+}
+
 @test "status lists the service's containers" {
     lbr "$SVC" status
     [ "$status" -eq 0 ]
@@ -67,6 +90,59 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [ -n "$after" ] && [ "$after" != "$before" ]
 }
 
+@test "health rejects a stopped application after its one-shot dependency completed" {
+    (cd "$SVC_DIR" && docker compose stop web) >/dev/null
+    code=$(docker inspect -f '{{.State.ExitCode}}' "$SVC-web-1")
+    run bash -c 'source "$1"; HEALTH_SETTLE=0 HEALTH_TIMEOUT=0; wait_healthy "$2"' _ "$LABBER" "$SVC_DIR"
+    # Bring the fixture back before assertions so a failure cannot affect later tests.
+    (cd "$SVC_DIR" && docker compose up -d web) >/dev/null
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"$SVC-web-1"*"code $code"* ]]
+}
+
+@test "health rejects a standalone command that exits zero without a completion dependency" {
+    d="$BATS_TEST_TMPDIR/standalone"; mkdir -p "$d"
+    project="labber-health-$BASHPID"
+    printf 'name: %s\nservices:\n  web:\n    image: busybox:1.37\n    command: ["true"]\n    restart: "no"\n    network_mode: none\n' "$project" > "$d/docker-compose.yml"
+    (cd "$d" && docker compose up -d) >/dev/null
+    # Wait for the deliberately short command to finish before checking its state.
+    id=$(cd "$d" && docker compose ps -aq web)
+    docker wait "$id" >/dev/null
+    run bash -c 'source "$1"; HEALTH_SETTLE=0 HEALTH_TIMEOUT=0; wait_healthy "$2"' _ "$LABBER" "$d"
+    (cd "$d" && docker compose down --remove-orphans) >/dev/null
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'stopped with exit code 0'* ]]
+}
+
+@test "rebuild: failed build preserves running containers and releases rollback tags" {
+    before=$(web_id)
+    cp "$SVC_DIR/job/Dockerfile" "$BATS_TEST_TMPDIR/Dockerfile"
+    printf 'THIS_IS_NOT_A_DOCKERFILE\n' > "$SVC_DIR/job/Dockerfile"
+    lbr "$SVC" rebuild
+    cp "$BATS_TEST_TMPDIR/Dockerfile" "$SVC_DIR/job/Dockerfile"
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'existing containers were not stopped'* ]]
+    [ "$(web_id)" = "$before" ]
+    web_running
+    [ -z "$(docker images -q labber-rollback)" ]
+}
+
+@test "rebuild: failed pull preserves running containers" {
+    before=$(web_id)
+    cp "$SVC_DIR/docker-compose.yml" "$BATS_TEST_TMPDIR/compose.yml"
+    sed -i 's|busybox:1.37|busybox:labber-test-tag-does-not-exist|' "$SVC_DIR/docker-compose.yml"
+    lbr "$SVC" rebuild
+    cp "$BATS_TEST_TMPDIR/compose.yml" "$SVC_DIR/docker-compose.yml"
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *'existing containers were not stopped'* ]]
+    [ "$(web_id)" = "$before" ]
+    web_running
+}
+
 @test "rebuild: a new image that fails is rolled back to the one before" {
     job_id() { docker image inspect -f '{{.Id}}' labber-test-job; }
     before=$(job_id)
@@ -76,7 +152,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     tty_run $'\n' bash "$LABBER" "$SVC" rebuild
     echo "$output"
     [[ "$output" == *"didn't come up healthy"* ]]
-    [[ "$output" == *"job"*"exited with code 1"* ]]
+    [[ "$output" == *'job exited with code 1'* || "$output" == *'service "job"'*'exit 1'* ]]
     [[ "$output" == *"rolled back"* ]]
     [ "$(job_id)" = "$before" ]
     [ "$(docker inspect -f '{{.State.ExitCode}}' "$SVC-job-1")" = 0 ]
@@ -202,7 +278,7 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [[ "${lines[-1]}" == *restart* && "${lines[-1]}" == *rebuild* ]]
 }
 
-@test "update: self-updates when the published version is newer, not when it's the same" {
+@test "update: self-updates when script or assets change, skips identical content" {
     newer="$BATS_FILE_TMPDIR/labber-newer.tar.gz"
     make_bundle "$newer" 99.0.0
     run env LABBER_URL="file://$newer" bash /usr/local/bin/labber update < /dev/null

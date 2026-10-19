@@ -4,7 +4,7 @@ Two layers, both written with [bats](https://bats-core.readthedocs.io/).
 
 | Layer | File | Runs where | Time |
 |---|---|---|---|
-| Unit | `unit.bats` | throwaway Debian container on your machine (needs only Docker) | ~10 s |
+| Unit | `unit.bats`, `audit.bats`, `source.bats` | throwaway Debian container on your machine (needs only Docker) | ~20 s |
 | Integration | `integration.bats`, `commands.bats` | a test VM over SSH, against real Docker | ~4 min |
 
 Both test the **working tree**, including uncommitted changes.
@@ -19,6 +19,13 @@ tests/labber/run-unit.sh -f placeholder
 
 Covers the logic without Docker or network: labber's files (`@NAME@` filling, finding `files/`, download + install, the forwarder), `.env` templates (`{{ name }}`, `default()`, `generate()`) and parsing, compose-config parsing, service-name checks, data-folder ownership, `.bashrc` blocks, update-status cache, and the generated `ifupdown`/`netplan` static-IP configs (never applied). It then checks `labber/files/alloy/*.alloy`, and the VM, LXC and Docker-host configs `setup` generates from them, with the real `alloy` binary.
 
+Source tests use real temporary Git repositories: default/CLI/environment/saved
+settings, branch/tag/SHA selection, dirty and untracked files, deletions, secret
+exclusions, unsupported symlinks/submodules, setup sudo forwarding, legacy history
+and same-version self-updates. Nested Docker tests deploy a dirty checkout and
+verify that a missing ref preserves running containers. `make test-services` also
+fetches tools and labber's script/assets from a private Forgejo using Git auth.
+
 ## Setup in a fresh container
 
 ```bash
@@ -26,6 +33,14 @@ make test-labber-setup                  # both paths, a few minutes; needs Docke
 tests/labber/run-setup.sh lxc           # or one of them
 tests/labber/run-setup.sh vm
 ```
+
+`make test-labber-setup` and CI also enable `LABBER_TEST_LIFECYCLE=1`: after the
+LXC checks, a non-Docker guest becomes a Docker host and must gain Alloy container
+metrics/logs and its update timer. After the VM checks, the service lifecycle and
+command suites run as the admin against nested Docker, including failed pull/build
+preservation and startup rollback. Direct `run-setup.sh` calls can enable the same
+coverage with that environment variable. The full VM integration suite still
+checks hardware-dependent setup and optional live network moves separately.
 
 `run-setup.sh` starts a fresh Debian container with systemd as PID 1 and runs `labber setup` the way it runs on a new machine: piped (`bash <(…) setup`, so it downloads its own files), as root, answering every question. Each run starts from scratch, so no VM snapshot or Proxmox access is needed.
 
@@ -69,7 +84,7 @@ Only use a throwaway VM. Snapshot it after setup so you can roll back if a test 
 
 ## Fixture
 
-`fixtures/labber-test/` is a tiny service (busybox) built to exercise labber: `.env` templates (generated, typed, defaulted, and one name used twice), a published port, a bind-mount data folder with `PUID`/`PGID`, a locally built image, and a one-shot container that exits 0. It lives here, not in `services/`, so it never shows up in deploy lists.
+`fixtures/labber-test/` is a tiny service (busybox) built to exercise labber: `.env` templates (generated, typed, defaulted, and one name used twice), a published port, a bind-mount data folder with `PUID`/`PGID`, a locally built image, and a one-shot container declared with `service_completed_successfully` that exits 0. It lives here, not in `services/`, so it never shows up in deploy lists. The command suite also checks that a stopped application and an undeclared standalone command cannot pass deployment health checks with exit code 0.
 
 ## CI
 

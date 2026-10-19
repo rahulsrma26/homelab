@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: bash tests/repo/lint.sh
+      - run: tests/repo/run.sh
 
   shellcheck:
     name: shellcheck
@@ -49,6 +49,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: tests/labber/run-setup.sh ${{ matrix.mode }}
+        env:
+          LABBER_TEST_LIFECYCLE: '1'
 
   monitoring:
     name: Prometheus rules + Alertmanager config
@@ -56,6 +58,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: tests/monitoring/run.sh
+
+  services:
+    name: Compose variants and Authelia configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: tests/services/run.sh
 
   scripts:
     name: scripts/ (NUT with a simulated UPS, smbmgr)
@@ -69,7 +78,7 @@ jobs:
   # moved on its own, this fails instead of overwriting it)
   promote:
     name: promote to main (stable)
-    needs: [repo-lint, shellcheck, labber-unit, labber-setup, monitoring, scripts]
+    needs: [repo-lint, shellcheck, labber-unit, labber-setup, monitoring, services, scripts]
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     permissions:

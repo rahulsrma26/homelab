@@ -1,6 +1,6 @@
 SERVICES := $(shell find services -maxdepth 3 -name docker-compose.yml -exec dirname {} \; | sed 's|^services/||' | sort)
 
-.PHONY: hooks help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-scripts test-lint ci $(SERVICES)
+.PHONY: hooks help labber test-labber-unit test-labber-setup test-labber-vm test-monitoring test-services test-scripts test-lint ci $(SERVICES)
 
 help:
 	@echo "Usage: make <service|labber>"
@@ -37,7 +37,7 @@ test-labber-unit:
 	tests/labber/run-unit.sh
 
 test-labber-setup:
-	tests/labber/run-setup.sh
+	LABBER_TEST_LIFECYCLE=1 tests/labber/run-setup.sh
 
 test-labber-vm:
 	tests/labber/run-vm.sh $(if $(NETWORK),--network $(NETWORK))
@@ -45,6 +45,9 @@ test-labber-vm:
 # promtool checks for the Prometheus alert rules
 test-monitoring:
 	tests/monitoring/run.sh
+
+test-services:
+	tests/services/run.sh
 
 # scripts/ end-to-end in systemd containers: NUT (simulated UPS) and smbmgr (Samba)
 test-scripts:
@@ -57,7 +60,7 @@ test-lint:
 	tests/repo/shellcheck.sh
 
 # everything CI runs
-ci: test-lint test-labber-unit test-labber-setup test-monitoring test-scripts
+ci: test-lint test-labber-unit test-labber-setup test-monitoring test-services test-scripts
 
 $(SERVICES):
 	git add services/$@ && git commit -m "$@: update" && git push origin dev

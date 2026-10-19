@@ -9,7 +9,7 @@ UniFi router and switches; managed switches carry the VLANs. Each host has two 2
 | -------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | **management** | Proxmox hosts, Tang boards, admin guests (Tailscale, Uptime Kuma, Authelia), the NAS | everything                                                                                      |
 | **server**     | all service guests                                                                   | the internet; **not** management                                                                |
-| **home**       | phones, laptops, TVs                                                                 | server ports 3000–9999 only, plus the reverse proxy (80/443) and the file server (445)          |
+| **home**       | phones, laptops, TVs                                                                 | server ports 3000–9999 except monitoring's Prometheus (9090) and Loki (3100), plus the reverse proxy (80/443) and the file server (445) |
 | **iot**        | smart devices                                                                        | Home Assistant's specific ports only; not each other                                            |
 | **camera**     | cameras, their recorder                                                              | nothing (the recorder alone may reach the internet for remote viewing)                          |
 | **guest**      | guest Wi-Fi                                                                          | the internet only                                                                               |
@@ -17,6 +17,8 @@ UniFi router and switches; managed switches carry the VLANs. Each host has two 2
 
 
 Narrow exceptions are written per rule, never as "server → management": e.g. TrueNAS → primary's SSH for replication, Home Assistant → the hosts' NUT ports.
+
+Monitoring's raw Prometheus and Loki APIs accept Alloy traffic from management/server guests and the public VM's specific DMZ exception. The home VLAN is blocked from these APIs; browsers use Grafana. Apply the monitoring-specific deny rules before the broader home-to-server port allowance.
 
 ## Hosts: one bond, one VLAN-aware bridge
 

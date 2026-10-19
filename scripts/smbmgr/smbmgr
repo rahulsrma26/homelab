@@ -14,7 +14,7 @@
 # Set up by scripts/smbmgr/install.sh (homelab repo). Run `smbmgr help`.
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 STATE_DIR="${SMBMGR_STATE_DIR:-/etc/smbmgr}"
 SHARES="$STATE_DIR/shares"        # name<TAB>path<TAB>mode (rw|ro)
 USERS="$STATE_DIR/users"          # name<TAB>rw-shares(,)<TAB>ro-shares(,)
@@ -100,6 +100,8 @@ share_get() { awk -F'\t' -v n="$1" '$1 == n { print; exit }' "$SHARES"; }
 share_exists() { [[ -n "$(share_get "$1")" ]]; }
 share_names() { cut -f1 "$SHARES"; }
 user_get() { awk -F'\t' -v n="$1" '$1 == n { print; exit }' "$USERS"; }
+# Preserve empty access columns: read collapses tab (IFS whitespace) separators.
+personal_rows() { tr '\t' '\037' < "$USERS"; }
 secret_get() { awk -F'\t' -v u="$1" '$1 == u { print $2; exit }' "$SECRETS"; }
 secret_set() {   # secret_set <user> <password>  (empty password = remove)
     local tmp; tmp=$(mktemp "$STATE_DIR/.secrets.XXXXXX")
@@ -259,11 +261,11 @@ EOF
         [[ -n "$name" ]] || continue
         valid="$name-ro"; write=""
         [[ "$mode" == rw ]] && { valid+=" $name-rw"; write="$name-rw"; }
-        while IFS=$'\t' read -r pname prw pro; do
+        while IFS=$'\037' read -r pname prw pro; do
             [[ -n "$pname" ]] || continue
             if [[ "$mode" == rw ]] && csv_has "$prw" "$name"; then valid+=" $pname"; write+="${write:+ }$pname"
             elif csv_has "$prw" "$name" || csv_has "$pro" "$name"; then valid+=" $pname"; fi
-        done < "$USERS"
+        done < <(personal_rows)
         echo
         echo "[$name]"
         echo "   path = $path"
@@ -384,7 +386,7 @@ cmd_remove() {
     table_set "$SHARES" "$name"
     # personal accounts lose it too
     while IFS= read -r line; do
-        IFS=$'\t' read -r pname prw pro <<<"$line"
+        IFS=$'\037' read -r pname prw pro <<<"${line//$'\t'/$'\037'}"
         if csv_has "$prw" "$name" || csv_has "$pro" "$name"; then
             prw=$(csv_drop "$prw" "$name") pro=$(csv_drop "$pro" "$name")
             table_set "$USERS" "$pname" "$(printf '%s\t%s\t%s' "$pname" "$prw" "$pro")"
@@ -433,7 +435,7 @@ refresh_share() {
         table_set "$SHARES" "$name" "$(printf '%s\t%s\t%s' "$name" "$path" ro)"
         # personal accounts that wrote here can only read now
         while IFS= read -r line; do
-            IFS=$'\t' read -r pname prw pro <<<"$line"
+            IFS=$'\037' read -r pname prw pro <<<"${line//$'\t'/$'\037'}"
             csv_has "$prw" "$name" || continue
             table_set "$USERS" "$pname" "$(printf '%s\t%s\t%s' "$pname" "$(csv_drop "$prw" "$name")" "${pro:+$pro,}$name")"
             info "$pname can only read $name now"
@@ -485,9 +487,9 @@ cmd_list() {
     if [[ -s "$USERS" ]]; then
         echo; printf "${B}%-14s %-24s %s${N}\n" PERSONAL READ-WRITE READ-ONLY
         local pname prw pro
-        while IFS=$'\t' read -r pname prw pro; do
+        while IFS=$'\037' read -r pname prw pro; do
             [[ -n "$pname" ]] && printf "%-14s %-24s %s\n" "$pname" "${prw:--}" "${pro:--}"
-        done < "$USERS"
+        done < <(personal_rows)
     fi
     local left; left=$(leftover_users)
     [[ -z "$left" ]] || { echo; echo "disabled users of removed shares: $left  (smbmgr remove <share> --purge deletes them)"; }
@@ -496,10 +498,10 @@ cmd_list() {
 }
 personal_for() {
     local pname prw pro out=""
-    while IFS=$'\t' read -r pname prw pro; do
+    while IFS=$'\037' read -r pname prw pro; do
         [[ -n "$pname" ]] || continue
         if csv_has "$prw" "$1" || csv_has "$pro" "$1"; then out+=" $pname"; fi
-    done < "$USERS"
+    done < <(personal_rows)
     echo "$out"
 }
 
@@ -612,7 +614,7 @@ cmd_user() {
             parse_access "$@"
             pw=$(read_password "$name" "$PW_STDIN"); set_samba_pw "$name" "$pw"
             audit "password changed: $name"; ok "password changed for $name"
-            IFS=$'\t' read -r _ prw pro <<<"$(user_get "$name")"
+            IFS=$'\037' read -r _ prw pro <<<"$(user_get "$name" | tr '\t' '\037')"
             connect_hint "$name" "$(csv_clean "$prw,$pro")" ;;
         remove|rm)
             [[ -n "$(user_get "$name")" ]] || die "no account $name (smbmgr user list)"
@@ -624,7 +626,7 @@ cmd_user() {
             if [[ ! -s "$USERS" ]]; then echo "no personal accounts — smbmgr user add <name> --rw … --ro …"; return; fi
             local pname prw pro
             printf "${B}%-14s %-24s %s${N}\n" ACCOUNT READ-WRITE READ-ONLY
-            while IFS=$'\t' read -r pname prw pro; do [[ -n "$pname" ]] && printf "%-14s %-24s %s\n" "$pname" "${prw:--}" "${pro:--}"; done < "$USERS" ;;
+            while IFS=$'\037' read -r pname prw pro; do [[ -n "$pname" ]] && printf "%-14s %-24s %s\n" "$pname" "${prw:--}" "${pro:--}"; done < <(personal_rows) ;;
         *) die "usage: smbmgr user add|set|passwd|remove|list … (smbmgr user --help)" ;;
     esac
 }
@@ -693,12 +695,12 @@ cmd_check() {
             fi
         done
     done < "$SHARES"
-    while IFS=$'\t' read -r pname prw pro; do
+    while IFS=$'\037' read -r pname prw pro; do
         [[ -n "$pname" ]] || continue
         out=$(user_state "$pname")
         [[ -z "$out" ]] || { warn "account $pname: $out — smbmgr user passwd $pname"; bad=1; }
         [[ -n "$prw$pro" ]] || warn "account $pname reaches no shares (smbmgr user set / user remove)"
-    done < "$USERS"
+    done < <(personal_rows)
     if (( bad == 0 )); then if [[ -s "$SHARES" ]]; then ok "all good: every share's users log in"; else ok "all good"; fi; fi
     return "$bad"
 }

@@ -1,28 +1,31 @@
 server:
-  host: 0.0.0.0
-  port: 9091
+  address: tcp://0.0.0.0:9091
 
 log:
   level: info
 
 authentication_backend:
   ldap:
+    implementation: lldap
     address: ldap://lldap:3890
-    base_dn: ${LLDAP_BASE_DN}
-    username_attribute: uid
+    base_dn: {{ env "LLDAP_BASE_DN" | quote }}
     additional_users_dn: ou=people
     users_filter: (&({username_attribute}={input})(objectclass=person))
     additional_groups_dn: ou=groups
     groups_filter: (member={dn})
-    group_name_attribute: cn
-    mail_attribute: mail
-    display_name_attribute: displayName
-    user: cn=admin,ou=people,${LLDAP_BASE_DN}
-    password: ${LLDAP_ADMIN_PASSWORD}
+    attributes:
+      username: uid
+      group_name: cn
+      mail: mail
+      display_name: cn
+    user: {{ printf "uid=admin,ou=people,%s" (env "LLDAP_BASE_DN") | quote }}
+    # Password supplied by AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD.
 
 session:
   name: authelia_session
-  domain: ${AUTHELIA_SESSION_DOMAIN}
+  cookies:
+    - domain: {{ env "SESSION_DOMAIN" | quote }}
+      authelia_url: {{ env "AUTH_URL" | quote }}
   expiration: 3600
   inactivity: 300
   remember_me: 1M
@@ -40,4 +43,4 @@ access_control:
   default_policy: two_factor
 
 totp:
-  issuer: ${AUTHELIA_SESSION_DOMAIN}
+  issuer: {{ env "SESSION_DOMAIN" | quote }}

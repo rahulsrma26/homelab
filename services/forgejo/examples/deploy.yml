@@ -1,0 +1,32 @@
+# Copy to .forgejo/workflows/deploy.yml in a private deployment repository.
+# Register a repository-scoped labber-deploy:host runner. See the guide's trust boundaries.
+name: deploy-homepage
+on:
+  workflow_dispatch:
+concurrency:
+  group: deploy-homepage
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: labber-deploy
+    steps:
+      - name: Update the selected service with labber
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
+          chmod 700 "$work"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$work/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$work/known_hosts"
+          chmod 600 "$work/key" "$work/known_hosts"
+          ssh -F /dev/null -i "$work/key" -o IdentitiesOnly=yes \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$work/known_hosts" \
+            -l "$DEPLOY_USER" -- "$DEPLOY_HOST" 'labber homepage update'

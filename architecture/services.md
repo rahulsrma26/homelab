@@ -1,6 +1,6 @@
 # Services and guests
 
-Each service is a folder in [`services/`](../services/) (a `docker-compose.yml`, an `.env.example` with templates, a README), deployed into an LXC with labber. This page is where they run and why they're grouped that way.
+Each service is a folder in [`services/`](../services/) (a `docker-compose.yml`, an `.env.example` with templates, a README), deployed into an LXC or VM with labber. This page is where they run and why they're grouped that way.
 
 ## primary
 
@@ -13,6 +13,8 @@ Each service is a folder in [`services/`](../services/) (a `docker-compose.yml`,
 | **files**          | LXC                      | Filebrowser, Samba ([`scripts/smbmgr`](../scripts/smbmgr/))                  | all three datasets (`vault` read-only) | serves primary's own disks, so tied to primary            |
 | **traefik**        | LXC                      | Traefik (`lan` mode)                                                         | —                                      | everything depends on it                                  |
 | **monitoring**     | LXC, NIC in both VLANs   | Prometheus, Loki, Grafana, Alertmanager, InfluxDB, pve-exporter              | own volumes                            | must run longest in an outage, so on the low-power host   |
+| **n8n**            | LXC, server              | n8n: alert event collection and daily summaries                            | workflows, credentials, alert history   | its own lifecycle; holds automation credentials           |
+| **forgejo**        | LXC, server              | Forgejo: local Git, private repositories, Actions and GitHub publishing | repositories, SQLite, keys, packages | important data; CI runs elsewhere, so no workflow can reach it ([guide](../guides/forgejo-setup.md)) |
 | **tailscale**      | LXC, unencrypted storage | Tailscale                                                                    | —                                      | remote path for an emergency unlock                       |
 | **vaultwarden**    | LXC                      | Vaultwarden                                                                  | own volume                             | holds every password: nothing else in its guest           |
 | **home-assistant** | VM (Home Assistant OS)   | Home Assistant                                                               | inside the VM; its backups to TrueNAS  | needs its own OS; wakes secondary after power cuts        |
@@ -30,6 +32,7 @@ Each service is a folder in [`services/`](../services/) (a `docker-compose.yml`,
 | **frigate**   | LXC, iGPU (OpenVINO) | Frigate: object detection on the camera streams                             |
 | **gpu-vm**    | VM, workstation GPU  | local LLMs (llama.cpp), voice assistant agent, chat UIs                     |
 | **public VM** | VM, `dmz` VLAN       | Traefik (`cf` mode) behind a Cloudflare Tunnel; the public share-link proxy |
+| **ci**        | VM, server           | the Forgejo runner: labber's privileged Docker tests, disposable checkouts and caches. Its Docker access controls only this VM, which holds nothing irreplaceable |
 
 
 

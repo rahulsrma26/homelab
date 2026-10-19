@@ -8,6 +8,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - INFLUXDB_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./config/grafana/provisioning:/etc/grafana/provisioning
@@ -27,7 +28,6 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=90d'
       - '--storage.tsdb.retention.size=20GB'
-      - '--web.enable-lifecycle'
       - '--web.enable-remote-write-receiver'
     volumes:
       - prometheus-data:/prometheus
@@ -65,8 +65,6 @@ services:
     image: prom/alertmanager:v0.27.0
     container_name: alertmanager
     restart: unless-stopped
-    ports:
-      - "9093:9093"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
@@ -83,8 +81,6 @@ services:
     image: prompve/prometheus-pve-exporter:3.5.1
     container_name: pve-exporter
     restart: unless-stopped
-    ports:
-      - "9221:9221"
     environment:
       - PVE_USER=${PVE_USER}
       - PVE_PASSWORD=${PVE_PASSWORD}

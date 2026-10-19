@@ -1,0 +1,25 @@
+# Copy to .forgejo/workflows/ci.yml in the local homelab repository.
+name: homelab-ci
+on:
+  push:
+  workflow_dispatch:
+concurrency:
+  group: homelab-ci
+  cancel-in-progress: false
+jobs:
+  checks:
+    runs-on: labber-ci
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: make test-lint test-labber-unit test-monitoring test-services
+  integration:
+    needs: checks
+    if: github.ref == 'refs/heads/dev' || github.event_name == 'workflow_dispatch'
+    runs-on: labber-ci
+    steps:
+      - uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: make test-labber-setup test-scripts

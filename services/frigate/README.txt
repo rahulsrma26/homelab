@@ -13,6 +13,12 @@ Hardware:
   Requires /dev/dri/renderD128 passed into the LXC (Intel iGPU — VA-API + OpenVINO)
   Storage at /mnt/nvr for recordings and snapshots
 
+Home Assistant:
+  The integration uses authenticated port 8971 with its own Frigate account.
+  Configure an HTTPS certificate trusted by Home Assistant for the endpoint it
+  uses, and verify events, snapshots and media access. Unauthenticated port 5000
+  stays inside Docker and is not published to the guest's network.
+
 SHM size guide:
   1× 1080p  ≈  93 MB
   2× 1080p  ≈ 226 MB

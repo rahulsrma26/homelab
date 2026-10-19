@@ -19,6 +19,7 @@ Step-by-step how-tos for building the pieces of this lab. The design they serve,
 | [truenas-vm.md](truenas-vm.md) | TrueNAS as a VM: HBA and NVMe passthrough, special vdev (and fixing a wrong `special_small_blocks`), maintenance schedule and cron pitfalls |
 | [igpu-lxc.md](igpu-lxc.md) | sharing the Intel iGPU into unprivileged LXCs: BIOS, device mapping, checks; Jellyfin, Frigate, Immich settings |
 | [monitoring-setup.md](monitoring-setup.md) | deploying the monitoring stack: the Proxmox user, the LXC, hosts, guests, Home Assistant, checks, a test alert |
+| [forgejo-setup.md](forgejo-setup.md) | Forgejo in one VM or a server LXC plus runner VM, private/public repositories, CI and labber deployment |
 | [asus-pro-ws-w680-ace.md](asus-pro-ws-w680-ace.md) | the ASUS Pro WS W680-ACE board: PCIe layout, BIOS settings and why, checks, host notes |
 | [odroid-h4-ultra/](odroid-h4-ultra/) | the ODROID-H4 Ultra board: hardware limits, which BIOS image, updating and recovering the BIOS, settings |
 | [odroid-h4-ultra/bios-options.md](odroid-h4-ultra/bios-options.md) | every BIOS 1.12 menu and option as shown on screen, with help text |

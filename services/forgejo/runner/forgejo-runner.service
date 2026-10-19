@@ -1,0 +1,21 @@
+[Unit]
+Description=Forgejo Actions runner (trusted homelab repositories)
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=forgejo-runner
+Group=forgejo-runner
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/forgejo-runner
+Environment=HOME=/var/lib/forgejo-runner
+ExecStart=/usr/local/bin/forgejo-runner daemon --config /etc/forgejo-runner/config.yml
+Restart=on-failure
+RestartSec=5
+# Non-root test containers must be able to read bind-mounted checkout files.
+# Registration credentials remain in the explicitly mode-600 config file.
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

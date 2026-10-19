@@ -12,7 +12,7 @@ tests:
       - series: 'node_boot_time_seconds{instance="dies"}'
         values: '100x30'          # samples for minutes 0..30, then nothing
       - series: 'node_boot_time_seconds{instance="healthy"}'
-        values: '100x90'
+        values: '100x1600'
     alert_rule_test:
       - eval_time: 20m
         alertname: HostNotReporting
@@ -25,8 +25,43 @@ tests:
               instance: dies
             exp_annotations:
               summary: "dies stopped sending metrics (down, or Alloy stopped)"
-      # once it's been gone longer than the 15m offset, the alert clears by design
-      # (a stale host shouldn't page forever)
+      - eval_time: 6h
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: dies
+            exp_annotations:
+              summary: "dies stopped sending metrics (down, or Alloy stopped)"
+      - eval_time: 23h
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: dies
+            exp_annotations:
+              summary: "dies stopped sending metrics (down, or Alloy stopped)"
+      # One day after its last sample, the host is forgotten even without recovery.
+      - eval_time: 25h
+        alertname: HostNotReporting
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{instance="recovers"}'
+        values: '100x30 _x60 100x200'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: recovers
+            exp_annotations:
+              summary: "recovers stopped sending metrics (down, or Alloy stopped)"
+      - eval_time: 100m
+        alertname: HostNotReporting
+        exp_alerts: []
 
   # reboot needed: only after a full day (one sample a minute, like a live host —
   # sparser samples go stale after 5 minutes and reset the timer)

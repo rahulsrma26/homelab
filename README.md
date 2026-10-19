@@ -5,6 +5,8 @@
 
 Config, scripts and docs for a Proxmox-based homelab: Docker Compose stacks for self-hosted services, **labber** to deploy and run them, and monitoring for every machine, VM, LXC and container.
 
+The architecture, guides and configuration templates describe the intended deployment state. Use them as the target when building or updating the lab.
+
 ## Layout
 
 | Path | What's in it |
@@ -45,6 +47,7 @@ Full guide: [labber/README.md](labber/README.md).
 | Documents | Paperless-ngx, Paperless-GPT |
 | AI | llama.cpp (CUDA, plus a TurboQuant build), LibreChat, voice assistant agent |
 | Cameras | Frigate |
+| Development | Forgejo (local Git, private repositories and CI/CD through labber) |
 | Utilities | Homepage, Joplin Server, it-tools, omni-tools, BentoPDF, LibreSpeed, SearXNG, Termix |
 
 Details and conventions for adding a service: [services/README.md](services/README.md).
@@ -56,6 +59,7 @@ make test-labber-unit                                  # labber unit tests + All
 make test-labber-setup                                 # labber setup from scratch in systemd containers (LXC and VM paths)
 LABBER_TEST_HOST=user@vm make test-labber-vm           # labber integration tests on a test VM
 make test-monitoring                                   # Prometheus rules + Alertmanager config
+make test-services                                     # Compose variants, Authelia/LDAP and Forgejo/Git/runner smoke tests (Python 3 + Docker)
 make test-scripts                                      # scripts/ end-to-end (NUT with a simulated UPS)
 make test-lint                                         # repo rules (templates, compose vars, private IPs, keys, personal details) + shellcheck
 make hooks                                             # once per clone: the same rules on every git push

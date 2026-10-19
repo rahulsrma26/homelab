@@ -384,7 +384,6 @@ EOF
     [ "$(grep -cx '# labber shell function' "$HOME/.bashrc")" -eq 1 ]
     ! grep -q old "$HOME/.bashrc"
     grep -qx 'export A=1' "$HOME/.bashrc"
-    grep -q 'labber "$1" go' "$HOME/.bashrc"
     RC_CHANGED=(); run _install_shell_fn; [ -z "$output" ]          # now current
 }
 
@@ -916,7 +915,7 @@ history_repo() {
     printf '#!/usr/bin/env bash\n# Gamma — a handy tool\necho hi\n' > "$T/origin/tools/gamma/install.sh"
     echo cfg > "$T/origin/tools/zsh/p10k.zsh"                       # a folder without install.sh: not a tool
     git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
-    REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
+    LABBER_REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
     SERVICE_BASE="$T/svcs"; mkdir -p "$SERVICE_BASE/alpha" && touch "$SERVICE_BASE/alpha/docker-compose.yml"
     run labber_main ls --remote
     [ "$status" -eq 0 ]

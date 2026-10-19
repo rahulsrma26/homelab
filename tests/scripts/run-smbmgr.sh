@@ -75,6 +75,16 @@ x "echo short | smbmgr user add me2 --rw files --password-stdin" >/dev/null 2>&1
 x "echo 'MySecretPassword123' | smbmgr user add me2 --rw vault --password-stdin" >/dev/null 2>&1 && fail "accepted --rw on a read-only share"
 pass "personal account: password not stored, rw/ro per share; bad input refused"
 
+# Empty RW columns must stay empty, including when the last RW permission is removed.
+x "echo 'MySecretPassword123' | smbmgr user add reader --ro files,docs --password-stdin" >/dev/null
+[[ -z "$(st files reader MySecretPassword123 ls)" ]] || fail "read-only personal account can't read"
+[[ "$(st files reader MySecretPassword123 'put /etc/hostname denied.txt')" == NT_STATUS_ACCESS_DENIED ]] || fail "read-only personal account can write"
+x 'smbmgr user set reader --rw files --ro docs; smbmgr user set reader --ro files,docs' >/dev/null
+[[ "$(st docs reader MySecretPassword123 'put /etc/hostname denied.txt')" == NT_STATUS_ACCESS_DENIED ]] || fail "RW to RO transition grants writes"
+x 'smbmgr user list' | has -E '^reader +- +files,docs$' || fail "read-only permissions displayed in the RW column"
+x 'smbmgr user remove reader --yes' >/dev/null
+pass "read-only personal accounts stay read-only across creation and permission changes"
+
 x 'useradd --system --no-create-home clash-ro; mkdir -p /srv/st/clash'
 before=$(x 'md5sum /etc/smbmgr/* | md5sum')
 x 'smbmgr add clash /srv/st/clash' >/dev/null 2>&1 && fail "took over an existing system account (clash-ro)"

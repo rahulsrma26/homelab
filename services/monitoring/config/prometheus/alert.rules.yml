@@ -11,9 +11,10 @@ groups:
           summary: "Host {{ $labels.instance }} is down"
 
       # Hosts and guests that PUSH metrics with Alloy never report up == 0 when they
-      # die — their samples just stop. So: it was reporting 15 minutes ago, not now.
+      # die — their samples just stop. Remember each host for a day after its last
+      # sample; after that it is forgotten (expiry does not establish recovery).
       - alert: HostNotReporting
-        expr: max by (instance) (node_boot_time_seconds offset 15m) unless max by (instance) (node_boot_time_seconds)
+        expr: max by (instance) (max_over_time(node_boot_time_seconds[1d])) unless max by (instance) (node_boot_time_seconds)
         labels:
           severity: critical
         annotations:

@@ -5,8 +5,8 @@ Services:
   prometheus    :9090  Metrics storage (90d retention, 20GB cap)
   loki          :3100  Log aggregation (30d retention)
   influxdb      :8086  Time-series storage for Home Assistant (365d retention)
-  alertmanager  :9093  Alert routing to Telegram
-  pve-exporter  :9221  Proxmox API metrics for Prometheus
+  alertmanager  :9093  Alert routing to Telegram (Docker network only)
+  pve-exporter  :9221  Proxmox API metrics for Prometheus (Docker network only)
 
 Before deployment:
   .env
@@ -24,7 +24,10 @@ Alerts to Telegram (config/alertmanager/alertmanager.yml), two speeds:
             every 6 h while it lasts
   warning   the rest: one daily digest at 15:00 UTC with whatever is still firing then
   info      ServiceUpdateAvailable: at the digest, then a weekly reminder
-  Everything is in Grafana / Alertmanager (:9093) right away, whatever its delivery time.
+  Alerts appear in Grafana right away, whatever their delivery time. Alertmanager is
+  private to the stack; a future authenticated proxy needs a private path to it.
+  HostNotReporting stays active for up to one day after a host's last sample. After
+  that the host is forgotten: automatic expiry does not establish recovery.
 
 Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   HostDown             a target Prometheus scrapes is down
@@ -59,3 +62,13 @@ Docker host — set up this LXC/VM with `labber setup` and answer yes to Docker.
 
 Uptime Kuma is its own service (services/uptime-kuma), on a different machine, so it can
 report when this host is down. It checks Grafana, Prometheus and Home Assistant from the outside.
+
+Network boundary:
+  Prometheus :9090 and Loki :3100 accept Alloy writes and expose their query APIs.
+  Firewall rules allow trusted management/server agents and the public VM's
+  specific DMZ exception. Home VLAN access to these APIs is blocked before the
+  broader home -> server port allowance; NIC membership alone is insufficient.
+  Prometheus HTTP shutdown/reload is disabled; reload through a container restart
+  or SIGHUP. pve-exporter accepts request-selected targets and holds Proxmox
+  credentials, so its port must stay unpublished. Alertmanager's API can silence
+  alerts and also stays unpublished.

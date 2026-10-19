@@ -1,0 +1,17 @@
+log:
+  level: info
+runner:
+  capacity: 1
+  timeout: 2h
+  labels:
+    - labber-ci:host
+cache:
+  enabled: false
+host:
+  workdir_parent: /var/lib/forgejo-runner/work
+server:
+  connections:
+    homelab:
+      url: "<forgejo-https-url>"
+      uuid: "<runner-uuid>"
+      token: "<runner-token>"

@@ -14,7 +14,7 @@
 
 1. **Important data only on machines with ECC memory and redundant ZFS.** That is primary and backup. A machine without them (secondary) runs services whose data can be lost or rebuilt. "Non-essential" there means *no important data*, not *not always on*.
 2. **Proxmox on every server; every workload is a guest.** No bare-metal services on the hypervisors.
-3. **LXC first.** A VM only where it's required: a full OS of its own (Home Assistant OS), a discrete GPU passed through, or disks passed through (TrueNAS, PBS).
+3. **LXC first.** A VM only where it's required: a full OS of its own (Home Assistant OS), a discrete GPU passed through, disks passed through (TrueNAS, PBS), or privileged CI workloads needing their own kernel boundary (Forgejo runner).
 4. **iGPUs are shared into LXCs** (`/dev/dri`), never passed through, so several guests can use one.
 5. **Own guest** when other services depend on it, it holds secrets, it needs particular hardware or placement, or its updates and crashes must not affect others: Vaultwarden, the reverse proxy, DNS, Tailscale, Authelia, monitoring, Immich.
 6. **Grouped** when apps share a lifecycle and hold the same kind of data: the document apps together (Paperless, Joplin, Trilium), the light apps together (music, start page, browser tools).

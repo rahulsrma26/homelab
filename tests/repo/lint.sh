@@ -50,7 +50,7 @@ find_all() {
     RE="$1" CI="${2:-0}" EXCL="${3:-^\$}" STRIP="${4:-^\$}" awk -F'\t' '
         BEGIN { re = ENVIRON["RE"]; ci = ENVIRON["CI"] == "1"; ex = ENVIRON["EXCL"]; st = ENVIRON["STRIP"]; if (ci) re = tolower(re) }
         $1 ~ ex { next }
-        { t = $2; while (gsub(st, " ", t)) ; if (ci) t = tolower(t); if (match(t, re)) print $1 "\t" substr(t, RSTART, RLENGTH) }
+        { t = substr($0, index($0, "\t") + 1); while (gsub(st, " ", t)) ; if (ci) t = tolower(t); if (match(t, re)) print $1 "\t" substr(t, RSTART, RLENGTH) }
     ' "$LINES"
 }
 

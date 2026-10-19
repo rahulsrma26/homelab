@@ -6,7 +6,7 @@ The lab is private by default: nothing on the LAN is reachable from the internet
 
 - **No inbound ports.** Remote access is Tailscale ([network.md](network.md#remote-access)); public services go through a Cloudflare Tunnel to the public VM only, in its own VLAN on the host without important data ([network.md](network.md#public-access)).
 - **VLANs split by trust:** the server VLAN can't reach management (hosts, Tang); home devices reach only service ports; IoT and cameras are isolated; guests get internet only.
-- **Every published port is a decision.** Services listen only where something needs them: a port that only containers in the same project use isn't published to the host. In the monitoring stack, only what other machines push to (Prometheus, Loki) and Grafana are published; exporters and Alertmanager stay on the stack's own network.
+- **Every published port is a decision.** Services listen only where something needs them: a port that only containers in the same project use isn't published to the host. In the monitoring stack, Prometheus and Loki accept Alloy writes, InfluxDB accepts Home Assistant writes, and Grafana serves dashboards; exporters and Alertmanager stay on the stack's own network. Firewall rules block home-VLAN access to the raw Prometheus/Loki APIs, while allowing management/server agents and the public VM's specific exception. Frigate publishes authenticated port 8971 for Home Assistant; its unauthenticated port 5000 stays inside Docker.
 
 ## Access
 
