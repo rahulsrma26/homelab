@@ -1,10 +1,10 @@
 Forgejo — local Git hosting, private repositories, Actions and GitHub publishing.
 
-Deploy with labber forgejo install. SQLite and repositories live in ./data;
-back up this entire directory and .env. The server never mounts a Docker socket.
+Deploy with labber forgejo install. SQLite and repositories live in FORGEJO_DATA
+(default ./data); back up this entire directory and .env. The server never mounts a Docker socket.
 
 Before deployment:
-  .env — HTTPS domain, guest's direct SSH hostname/address, Traefik's source IP,
+  .env — data directory, HTTPS domain, guest's direct SSH hostname/address, Traefik's source IP,
          HTTP/SSH ports, and the data owner's UID/GID
 
 The HTTPS name resolves to Traefik; the SSH name resolves directly to this guest.

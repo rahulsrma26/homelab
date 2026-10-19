@@ -66,10 +66,12 @@ cd /opt/homelab/services/forgejo
 docker compose ps
 ```
 
-`.env` asks for the data UID/GID (defaults 1000), HTTP port 3002, SSH port 2222,
+`.env` asks for the data UID/GID (defaults 1000), `FORGEJO_DATA` (default `./data`;
+point it at a host dataset bind-mounted into the guest to keep repositories in
+snapshots and replication), HTTP port 3002, SSH port 2222,
 `FORGEJO_DOMAIN` (the HTTPS name), `FORGEJO_SSH_HOST` (the guest's direct hostname
 or address), and `TRAEFIK_IP` (the proxy's source IP, never `*`). SQLite and all
-persistent application state are in `./data`. The server has no Docker socket.
+persistent application state are in `FORGEJO_DATA`. The server has no Docker socket.
 
 The installer and open registration are disabled. Create the first administrator:
 
