@@ -29,7 +29,12 @@ if [[ -r "$updates" ]]; then
 fi
 dir=/var/lib/labber/metrics
 mkdir -p "$dir"
-cat > "$dir/labber.prom.tmp" <<PROM
+# the timer, the apt hook and labber setup can start it at the same time
+exec 9>"$dir/.labber.lock"
+flock 9
+tmp=$(mktemp "$dir/.labber.prom.XXXXXX") || exit 1
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" <<PROM
 # HELP labber_reboot_required 1 when a newer kernel is installed than the one running
 # TYPE labber_reboot_required gauge
 labber_reboot_required $kernel
@@ -48,6 +53,7 @@ if [[ -n "$updates_metrics" ]]; then
         echo "# HELP labber_updates_checked_timestamp_seconds when labber check-updates last ran"
         echo "# TYPE labber_updates_checked_timestamp_seconds gauge"
         printf '%s' "$updates_metrics" | grep '^labber_updates_checked'
-    } >> "$dir/labber.prom.tmp"
+    } >> "$tmp"
 fi
-mv "$dir/labber.prom.tmp" "$dir/labber.prom"
+chmod 644 "$tmp"
+mv "$tmp" "$dir/labber.prom"

@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.0"
+VERSION="4.4.1"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -2620,8 +2620,13 @@ LABBER_METRICS_DIR="/var/lib/labber/metrics"
 HEALTH_BIN="/usr/local/sbin/labber-health-check"
 
 st_healthcheck_status() {
-    if [[ -x "$HEALTH_BIN" ]] && systemctl is-enabled --quiet labber-health-check.timer 2>/dev/null
-    then echo "done"; else echo "todo"; fi
+    if [[ ! -x "$HEALTH_BIN" ]] || ! systemctl is-enabled --quiet labber-health-check.timer 2>/dev/null; then
+        echo "todo"
+    elif [[ "$(labber_file health-check.sh SERVICE_BASE="$SERVICE_BASE" 2>/dev/null)" != "$(< "$HEALTH_BIN")" ]]; then
+        echo "todo: newer check script"
+    else
+        echo "done"
+    fi
 }
 st_healthcheck_run() {
     # needrestart finds services still running old libraries; list-only, so manual

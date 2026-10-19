@@ -572,6 +572,18 @@ EOF
     [[ "$output" == *"Reboot needed"* ]]
     [[ "$output" == *"2 service(s)"* ]]
     [[ "$output" == *"3 security update(s)"* ]]
+    # runs started together (timer, apt hook, setup) all succeed and leave one file
+    rm -f "$f"
+    for i in 1 2 3 4 5 6; do "$HEALTH_BIN" & done
+    for job in $(jobs -p); do wait "$job"; done
+    [ "$(stat -c '%a' "$f")" = "644" ]
+    grep -qE '^labber_reboot_required [01]$' "$f"
+    [ -z "$(find /var/lib/labber/metrics -name '.labber.prom.*')" ]
+    # an older installed script is replaced on the next setup
+    systemctl() { [ "$1" = is-enabled ]; }
+    [ "$(st_healthcheck_status)" = "done" ]
+    echo "# old" >> "$HEALTH_BIN"
+    [ "$(st_healthcheck_status)" = "todo: newer check script" ]
 }
 
 @test "alloy config: URLs, textfile folder and guest labels" {
