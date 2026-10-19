@@ -21,6 +21,9 @@ services:
       - FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION_API=false
       - FORGEJO__repository__DEFAULT_PRIVATE=private
       - FORGEJO__actions__ENABLED=true
+      - FORGEJO__actions__ARTIFACT_RETENTION_DAYS=${ARTIFACT_RETENTION_DAYS}
+      - FORGEJO__actions__LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS}
+      - FORGEJO__packages__ENABLED=${PACKAGES_ENABLED}
     ports:
       - "${HTTP_PORT}:3000"
       - "${SSH_PORT}:22"

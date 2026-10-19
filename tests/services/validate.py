@@ -11,6 +11,7 @@ import tempfile
 
 from forgejo import check_forgejo
 from garage import check_garage
+from forgejo_s3 import check_forgejo_s3
 
 
 TEMPLATE = re.compile(
@@ -77,6 +78,7 @@ def checks(repo, root):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
     configurations = {}
+    variants = {}
     count = 0
     for compose in sorted((root / "services").glob("*/docker-compose.yml")):
         directory = compose.parent
@@ -97,6 +99,7 @@ def checks(repo, root):
                 args += ["-f", str(variant)]
             config = json.loads(run(args + ["config", "--format", "json"], env=environment))
             configurations[directory.name] = config
+            variants.setdefault(directory.name, {})[variant.name.split(".")[1] if variant else ""] = config
             count += 1
             if directory.name == "monitoring":
                 services = config["services"]
@@ -151,8 +154,9 @@ def checks(repo, root):
     finally:
         run(command + ["down", "--volumes", "--remove-orphans"], env=environment)
 
-    check_forgejo(configurations["forgejo"], root, repo, environment, run)
+    check_forgejo(variants["forgejo"]["local"], root, repo, environment, run)
     check_garage(configurations["garage"], root, environment, run)
+    check_forgejo_s3(variants["forgejo"], configurations["garage"], root, environment, run)
 
 
 if __name__ == "__main__":

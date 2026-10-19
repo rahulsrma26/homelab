@@ -6,9 +6,10 @@ Data is split by **how much it matters**, not by app: snapshot and backup polici
 
 | Dataset (on primary) | Tier | Holds | recordsize | Copies |
 |---|---|---|---|---|
-| `spool/encrypted/vault` | irreplaceable | `photos/` (Immich's library, incl. its own database dumps), `docs/` (Paperless's whole data dir: database and files together) | 1M | primary + TrueNAS + cloud (+ a yearly offline archive) |
+| `spool/encrypted/vault` | irreplaceable | `photos/` (Immich's library, incl. its own database dumps), `docs/` (Paperless's whole data dir: database and files together), `git/` (Forgejo's repositories and database) | 1M | primary + TrueNAS + cloud (+ a yearly offline archive) |
 | `spool/encrypted/common` | would hurt to lose | shares, general files, `inbox/` (scans for Paperless), `apps/` (per-app config, e.g. Homepage's YAML) | 128K | primary + TrueNAS |
 | `spool/encrypted/media` | re-obtainable | `music/` (`library/`, `staging/`) | 1M | primary + TrueNAS |
+| `spool/encrypted/extra` | scratch | `share/` (an SMB share), `garage/` (a child dataset: object storage for rebuildable data) | 1M (`garage`: 128K) | primary only: no snapshots, never backed up |
 | LXC disks (`rpool`, encrypted) | app state | app configs, Postgres (Immich, Joplin), SQLite (Trilium) | — | PBS |
 
 TrueNAS uses the same tiers for its own data (`tank/vault`, `tank/common`, `tank/media`), plus `tank/extra` (scratch, never backed up) and `tank/replicas/<host>/<dataset>` for what it pulls from other machines.

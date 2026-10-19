@@ -7,6 +7,15 @@ Before deployment:
   .env — data directory, HTTPS domain, guest's direct SSH hostname/address, Traefik's source IP,
          HTTP/SSH ports, and the data owner's UID/GID
 
+Storage mode (COMPOSE_FILE in .env):
+  local  Actions artifacts and packages in FORGEJO_DATA (the default)
+  s3     artifacts and packages in an S3 bucket, e.g. services/garage; Actions logs
+         stay local. Forgejo refuses to start while the bucket is unreachable and
+         retries until it is back; a running Forgejo keeps serving Git. Put the S3
+         server on the same host, or switch to local to start without it.
+Packages are off by default (PACKAGES_ENABLED); artifacts are kept 7 days and
+Actions logs 90 days.
+
 The HTTPS name resolves to Traefik; the SSH name resolves directly to this guest.
 Allow HTTP only from Traefik (and a local readiness check), SSH from trusted Git
 clients. This service uses Forgejo login; do not put a browser-only login in front

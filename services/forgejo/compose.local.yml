@@ -1,0 +1,3 @@
+# Actions artifacts and packages stay in FORGEJO_DATA.
+services:
+  forgejo: {}
