@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 from forgejo import check_forgejo
+from garage import check_garage
 
 
 TEMPLATE = re.compile(
@@ -151,6 +152,7 @@ def checks(repo, root):
         run(command + ["down", "--volumes", "--remove-orphans"], env=environment)
 
     check_forgejo(configurations["forgejo"], root, repo, environment, run)
+    check_garage(configurations["garage"], root, environment, run)
 
 
 if __name__ == "__main__":
