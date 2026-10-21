@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.2"
+VERSION="4.4.3"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1961,7 +1961,7 @@ show_overview() {
 LABBER_STATE_DIR="/var/lib/labber"
 SETUP_SSH_CONF="/etc/ssh/sshd_config.d/10-labber.conf"
 SETUP_JOURNAL_CONF="/etc/systemd/journald.conf.d/10-labber.conf"
-SETUP_STEPS=(update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck alloy zsh labber fzf nfs fail2ban network)
+SETUP_STEPS=(update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck gpu alloy zsh labber fzf nfs fail2ban network)
 SETUP_VIRT=""          # lxc | vm
 SETUP_USER=""          # who user-level steps are for: the admin user on a VM, else root
 SETUP_HOST_CMDS=()     # commands to run on the Proxmox host (printed at the end)
@@ -2076,6 +2076,7 @@ step_title() {
         timesync)   echo "time sync (NTP)" ;;
         swap)       echo "swap: zram and/or disk (asks)" ;;
         healthcheck) echo "reboot/update checks (login message + metric)" ;;
+        gpu)        echo "NVIDIA GPU metrics (nvidia-smi → Alloy)" ;;
         alloy)      echo "Grafana Alloy: metrics + logs to monitoring" ;;
         zsh)        echo "zsh + powerlevel10k (admin user; root on an LXC)" ;;
         ssh)        echo "SSH: key-only logins" ;;
@@ -2096,6 +2097,7 @@ step_applies() {
     case "$1" in
         admin|guestagent|timesync|swap) [[ "$SETUP_VIRT" == vm ]] ;;
         docker|dockerlogs) (( SETUP_DOCKER )) ;;
+        gpu)              command -v nvidia-smi &>/dev/null ;;
         nfs)              [[ "$SETUP_VIRT" != lxc ]] ;;
         *)                true ;;
     esac
@@ -2669,6 +2671,51 @@ EOF
     systemctl enable --now labber-health-check.timer || return 1
     "$HEALTH_BIN" || return 1
     ok "health check installed — runs hourly and after every apt run"
+}
+
+# ── NVIDIA GPU metrics ──
+# A small service that reads nvidia-smi every 15 s and writes Prometheus metrics next
+# to the health check's (Alloy's textfile collector pushes them). Only where nvidia-smi
+# exists: a VM or LXC with the GPU and its driver.
+
+GPU_BIN="/usr/local/sbin/labber-gpu-metrics"
+
+st_gpu_status() {
+    if [[ ! -x "$GPU_BIN" ]] || ! systemctl is-active --quiet labber-gpu-metrics.service 2>/dev/null; then
+        echo "todo"
+    elif [[ "$(labber_file gpu-metrics.sh 2>/dev/null)" != "$(< "$GPU_BIN")" ]]; then
+        echo "todo: newer metrics script"
+    else
+        echo "done"
+    fi
+}
+st_gpu_run() {
+    nvidia-smi -L >/dev/null 2>&1 || { warn "nvidia-smi finds no GPU — is the driver loaded?"; return 1; }
+    mkdir -p "$LABBER_METRICS_DIR"; chmod 755 "$LABBER_METRICS_DIR"
+    local script; script=$(labber_file gpu-metrics.sh) || return 1
+    printf '%s\n' "$script" > "$GPU_BIN"
+    chmod 755 "$GPU_BIN"
+    cat > /etc/systemd/system/labber-gpu-metrics.service <<EOF
+[Unit]
+Description=labber: NVIDIA GPU metrics for Alloy (every 15 s)
+[Service]
+ExecStart=$GPU_BIN
+Restart=always
+RestartSec=30
+Nice=10
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload || return 1
+    systemctl enable labber-gpu-metrics.service || return 1
+    systemctl restart labber-gpu-metrics.service || return 1
+    local i
+    for i in $(seq 10); do
+        grep -qs '^gpu_metrics_up 1' "$LABBER_METRICS_DIR/gpu.prom" && { ok "GPU metrics written every 15 s ($LABBER_METRICS_DIR/gpu.prom)"; return 0; }
+        sleep 1
+    done
+    warn "no GPU metrics yet — check: journalctl -u labber-gpu-metrics"
+    return 1
 }
 
 # ── Grafana Alloy: node metrics → Prometheus, journal → Loki (like the Proxmox hosts) ──

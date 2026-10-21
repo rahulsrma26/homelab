@@ -296,3 +296,28 @@ tests:
           - exp_labels: {severity: critical, mountpoint: /fast, fstype: zfs, instance: od01}
             exp_annotations: {summary: "Disk /fast on od01 will be full within a day at the rate of the last 6 h"}
 
+
+  # GPU: 95 °C alerts at once; 90 °C needs 15 minutes without a break; 89 °C never
+  - interval: 1m
+    input_series:
+      - series: 'gpu_temperature_celsius{instance="peak",gpu="0",name="Test GPU"}'
+        values: '70x5 96 70x30'
+      - series: 'gpu_temperature_celsius{instance="sustained",gpu="0",name="Test GPU"}'
+        values: '70x5 91x8 70 91x20'
+      - series: 'gpu_temperature_celsius{instance="warm",gpu="0",name="Test GPU"}'
+        values: '89x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GPUTemperatureHigh
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: peak, gpu: "0", name: Test GPU}
+            exp_annotations: {summary: "GPU Test GPU on peak is at 96 °C (95 °C, or 90 °C for 15 minutes)"}
+      # 8 minutes at 91, a dip, then 91 again: nothing until 15 unbroken minutes (minute 30)
+      - eval_time: 20m
+        alertname: GPUTemperatureHigh
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: GPUTemperatureHigh
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: sustained, gpu: "0", name: Test GPU}
+            exp_annotations: {summary: "GPU Test GPU on sustained is at 91 °C (95 °C, or 90 °C for 15 minutes)"}

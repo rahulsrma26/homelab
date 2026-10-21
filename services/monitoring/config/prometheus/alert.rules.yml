@@ -151,6 +151,17 @@ groups:
         annotations:
           summary: "ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} is {{ $labels.state }}"
 
+  # NVIDIA GPUs (labber setup's gpu step: /usr/local/sbin/labber-gpu-metrics)
+  - name: gpu
+    rules:
+      # a short peak to 95 °C, or 90 °C and more for 15 minutes without a break
+      - alert: GPUTemperatureHigh
+        expr: gpu_temperature_celsius >= 95 or min_over_time(gpu_temperature_celsius[15m]) >= 90
+        labels:
+          severity: critical
+        annotations:
+          summary: "GPU {{ $labels.name }} on {{ $labels.instance }} is at {{ printf \"%.0f\" $value }} °C (95 °C, or 90 °C for 15 minutes)"
+
   # container metrics pushed by Alloy on Docker hosts (job guest-containers)
   - name: containers
     rules:

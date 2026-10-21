@@ -115,7 +115,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/hea
 | Flag | Answers | Without it, under `--yes` |
 |---|---|---|
 | `--docker yes\|no` | Docker host? | last answer, else yes |
-| `--with` / `--without STEP,…` | the checklist (`update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck alloy zsh labber fzf nfs fail2ban network`) | the pre-selected steps (optional ones — nfs, fail2ban, swap — off) |
+| `--with` / `--without STEP,…` | the checklist (`update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck gpu alloy zsh labber fzf nfs fail2ban network`) | the pre-selected steps (optional ones — nfs, fail2ban, swap — off) |
 | `--admin NAME` | admin user (VM) | last answer; a new user gets no password (SSH is by key; set one with `passwd` for sudo) |
 | `--hostname` / `--timezone` / `--locale` | | unchanged / last answer, else what the machine has (a fresh LXC/VM: `Etc/UTC`) / `en_US.UTF-8` |
 | `--ssh-key 'ssh-ed25519 …'` | key, if none is installed | none: password logins stay on |
@@ -146,6 +146,7 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
 | Reboot/update checks | ✓ | ✓ | hourly and after every `apt` run: newer kernel installed (VMs), services on outdated libraries (`needrestart`, list-only), pending security updates. Shown at login, and exported as metrics for alerts |
+| NVIDIA GPU metrics | ✓ | ✓ | only where `nvidia-smi` works (a guest with an NVIDIA GPU and its driver): a small service reads it every 15 s — load, VRAM used/total, temperature, power, fan, clocks, thermal throttling, VRAM per process and its container — and writes them next to the health check's metrics, which Alloy pushes. Grafana dashboard *GPU*; alert when it touches 95 °C or stays at 90 °C+ for 15 min |
 | Grafana Alloy | ✓ | ✓ | pushes node metrics to Prometheus and the journal to Loki ([`services/monitoring`](../services/monitoring/)); asks for the URLs (or takes `--prometheus` / `--loki`). Unlike the Proxmox hosts (full metrics), guests send only what's useful: VMs ~300 series (CPU, memory, load, disk I/O, real filesystems and NICs, pressure, failed services, health); LXCs even less (failed services, health, `/`, boot time — Proxmox already reports their CPU/memory/network). The config is checked with `alloy fmt` before it's applied. On **Docker hosts** it also sends per-container CPU, memory, network, restarts and OOM kills, plus container logs to Loki (Alloy runs as root there: container metrics need the containerd socket) |
 | zsh + powerlevel10k | ✓ | ✓ | for the admin user (root on an LXC): zsh + p10k + autosuggestions + syntax highlighting; uses `tools/zsh/p10k.zsh` if present; labber and fzf work in it. Needs a Nerd Font in your terminal |
 | labber | ✓ | ✓ | installed for the admin user (VM) or root (LXC), who also owns `/opt/homelab/services`; on Docker hosts also a daily `labber check-updates` (shown in Grafana) |
@@ -267,6 +268,7 @@ labber/
   files/                 config files labber installs (copied as they are, or with @NAME@ filled in)
     alloy/base.alloy     Grafana Alloy config for every guest: node metrics + journal
     alloy/docker.alloy   appended on Docker hosts: container metrics + container logs
+    gpu-metrics.sh       NVIDIA GPU metrics from nvidia-smi (the gpu step)
     health-check.sh      /usr/local/sbin/labber-health-check (reboot / restart / updates metrics)
     motd-health.sh       /etc/update-motd.d/95-labber-health (login message)
 ```

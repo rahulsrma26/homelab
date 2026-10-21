@@ -47,6 +47,7 @@ Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   ContainerGone        a container that was running stopped or was removed
   ContainerOOMKilled   a container ran out of memory
   ServiceUpdateAvailable  labber check-updates found an update (info: weekly note)
+  GPUTemperatureHigh   an NVIDIA GPU touches 95 °C, or stays at 90 °C+ for 15 min (labber setup's gpu step)
 
 Dashboards (Grafana → Homelab folder, provisioned from config/grafana/provisioning/dashboards):
   Guests       every VM/LXC set up by labber: uptime, CPU, memory, disk, failed services, reboot, updates
@@ -56,6 +57,10 @@ Dashboards (Grafana → Homelab folder, provisioned from config/grafana/provisio
   Disks        every disk on the hosts with smartctl_exporter (SATA and NVMe): health,
                warnings, bad blocks, error logs, temperatures (smartctl + each NVMe sensor),
                wear, data written, power-on time; raw SATA SMART attributes
+  GPU          NVIDIA GPUs (labber setup's gpu step): load, VRAM (also per container),
+               temperature, power, clocks, fan, thermal throttling; Intel iGPUs on the
+               Proxmox hosts (install-exporters.sh --igpu): engine load (Video = decode/
+               encode), frequency, power, idle time (its temperature is the CPU's)
 
 Container metrics for this host's own containers come from Alloy, like on every other
 Docker host — set up this LXC/VM with `labber setup` and answer yes to Docker.

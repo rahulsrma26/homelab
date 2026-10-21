@@ -586,6 +586,47 @@ EOF
     [ "$(st_healthcheck_status)" = "todo: newer check script" ]
 }
 
+@test "gpu metrics: only with nvidia-smi; nvidia-smi output becomes Prometheus metrics" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    bin=$(mktemp -d)
+    # no nvidia-smi: the step isn't offered
+    PATH="$bin:/usr/bin:/bin" run step_applies gpu
+    [ "$status" -ne 0 ]
+    cat > "$bin/nvidia-smi" <<'EOF'
+#!/bin/bash
+case "$*" in
+    -L) echo "GPU 0: Test GPU (UUID: GPU-aaa)" ;;
+    *--query-gpu*) echo "0, Test GPU 16GB, GPU-aaa, 37, 12, 11107, 16380, 91, 61.25, 70.00, [N/A], 2100, 8001, 0x0000000000000020" ;;
+    *--query-compute-apps*) echo "GPU-aaa, $$, /app/llama-server, 8700" ;;
+esac
+EOF
+    chmod +x "$bin/nvidia-smi"
+    PATH="$bin:$PATH" step_applies gpu
+    PATH="$bin:$PATH" bash "$LABBER_FILES/gpu-metrics.sh" --once
+    f=/var/lib/labber/metrics/gpu.prom
+    cat "$f"
+    grep -qx 'gpu_metrics_up 1' "$f"
+    grep -qx 'gpu_utilization_percent{gpu="0",name="Test GPU 16GB"} 37' "$f"
+    grep -qx 'gpu_memory_used_bytes{gpu="0",name="Test GPU 16GB"} 11646533632' "$f"
+    grep -qx 'gpu_temperature_celsius{gpu="0",name="Test GPU 16GB"} 91' "$f"
+    grep -qx 'gpu_power_watts{gpu="0",name="Test GPU 16GB"} 61.25' "$f"
+    grep -qx 'gpu_clock_sm_hertz{gpu="0",name="Test GPU 16GB"} 2100000000' "$f"
+    grep -qx 'gpu_thermal_throttle{gpu="0",name="Test GPU 16GB"} 1' "$f"
+    grep -qx 'gpu_process_memory_used_bytes{gpu="0",process="llama-server",container=""} 9122611200' "$f"
+    ! grep -q '^gpu_fan_percent' "$f" || false      # [N/A] is left out
+    # the step installs the script and its service
+    systemctl() { :; }
+    PATH="$bin:$PATH" run st_gpu_run
+    [ "$status" -eq 0 ]
+    cmp <(labber_file gpu-metrics.sh) "$GPU_BIN"
+    grep -qx "ExecStart=$GPU_BIN" /etc/systemd/system/labber-gpu-metrics.service
+    # a failing nvidia-smi still writes the file, with gpu_metrics_up 0
+    printf '#!/bin/bash\nexit 9\n' > "$bin/nvidia-smi"
+    PATH="$bin:$PATH" bash "$LABBER_FILES/gpu-metrics.sh" --once
+    grep -qx 'gpu_metrics_up 0' "$f"
+    rm -rf "$bin" "$f" "$GPU_BIN" /etc/systemd/system/labber-gpu-metrics.service
+}
+
 @test "alloy config: URLs, textfile folder and guest labels" {
     [ "$EUID" -eq 0 ] || skip "needs root"
     pkg_installed() { [ "$1" = alloy ]; }; usermod() { :; }; systemctl() { :; }
@@ -717,7 +758,7 @@ make_bundle() {
     [ "$(printf '%s\n' "${lines[@]}" | sort -u | tr '\n' ' ')" = "@COLLECTORS@ @FS_EXCLUDE@ @LOKI@ @METRICS_DIR@ @PROMETHEUS@ @VIRT@ " ]
     run grep -oh '@[A-Z_]*@' "$LABBER_FILES/health-check.sh"
     [ "$output" = "@SERVICE_BASE@" ]
-    ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh" || false
+    ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh" "$LABBER_FILES/gpu-metrics.sh" || false
 }
 
 @test "download + place: installs the folder, links the command, replaces a pre-4.0 file" {
