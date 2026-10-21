@@ -1,0 +1,7 @@
+# Chat model: Gemma 4 E4B with its MTP draft head (~6 GB VRAM at 64k context).
+services:
+  llama-cpp:
+    environment:
+      LLAMA_ARG_HF_REPO: unsloth/gemma-4-E4B-it-GGUF:Q4_K_M
+      LLAMA_ARG_SPEC_DRAFT_HF_REPO: unsloth/gemma-4-E4B-it-GGUF:Q8_0
+      LLAMA_ARG_ALIAS: gemma-4-e4b-it

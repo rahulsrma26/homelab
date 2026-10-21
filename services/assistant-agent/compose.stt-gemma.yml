@@ -1,6 +1,0 @@
-# Speech-to-text by the LLM itself (its audio projector); no extra container.
-services:
-  wyoming-openai:
-    environment:
-      - STT_OPENAI_URL=http://assistant-llama:5050/v1
-      - STT_MODELS=${MODEL_ALIAS:-gemma-4-12b-it}

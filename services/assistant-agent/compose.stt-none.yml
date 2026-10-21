@@ -1,0 +1,2 @@
+# No second speech-to-text engine: only the LLM's own (Wyoming on WYOMING_PORT).
+services: {}

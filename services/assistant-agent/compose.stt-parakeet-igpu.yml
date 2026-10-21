@@ -1,0 +1,38 @@
+# A second speech-to-text: Parakeet TDT 0.6B v3 on an Intel or AMD iGPU (parakeet.cpp Vulkan build); no VRAM, on its own Wyoming port.
+services:
+  parakeet:
+    build:
+      context: ./parakeet
+      args:
+        PARAKEET_BUILD: vulkan-x64
+    image: assistant-parakeet-igpu:${PARAKEET_VERSION:-v0.6.1}
+    container_name: assistant-parakeet
+    restart: unless-stopped
+    command: --model ${PARAKEET_CPU_MODEL} --cache-dir /models/parakeet --host 0.0.0.0 --port 8080 --threads ${PARAKEET_CPU_THREADS:-4}
+    devices:
+      - /dev/dri:/dev/dri
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+      retries: 3
+
+  # its own Wyoming server (STT only) next to the LLM's on WYOMING_PORT
+  wyoming-parakeet:
+    image: ghcr.io/roryeckel/wyoming_openai:latest
+    container_name: assistant-wyoming-parakeet
+    restart: unless-stopped
+    environment:
+      - WYOMING_LANGUAGES=${STT_LANGUAGE:-en}
+      - STT_BACKEND=OPENAI
+      - STT_OPENAI_URL=http://assistant-parakeet:8080/v1
+      - STT_OPENAI_KEY=sk-dummy
+      - STT_MODELS=parakeet-tdt-0.6b-v3
+      - STT_TEMPERATURE=0
+    ports:
+      - "${PARAKEET_WYOMING_PORT:-10301}:10300"
+    depends_on:
+      - parakeet

@@ -6,7 +6,7 @@ services:
     container_name: assistant-tts
     restart: unless-stopped
     environment:
-      TTS_THREADS: ${PARADEE_THREADS:-1}
+      TTS_THREADS: ${PARADEE_THREADS:-2}
 
   wyoming-openai:
     environment:

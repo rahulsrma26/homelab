@@ -1,6 +1,7 @@
 services:
 
   # ── LLM + STT backend ────────────────────────────────────────────────────────
+  # The model, its MTP draft head and alias come from compose.llm-<model>.yml.
   # Gemma 4 with mmproj enables vision and /v1/audio/transcriptions for STT.
   # reasoning=off is required — otherwise Gemma starts answers with its thinking.
   # The MTP head (draft-mtp) speeds up generation without changing the output.
@@ -8,8 +9,7 @@ services:
     image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
     container_name: assistant-llama
     restart: unless-stopped
-    command: -hf ${MODEL} --host 0.0.0.0 --port 5050
-      --alias ${MODEL_ALIAS:-gemma-4-12b-it}
+    command: --host 0.0.0.0 --port 5050
       --n-gpu-layers 999
       --flash-attn on
       --parallel 1
@@ -22,7 +22,6 @@ services:
       --reasoning off
       --threads ${THREADS:-6}
       --spec-type draft-mtp
-      --spec-draft-hf ${DRAFT_MODEL}
       --spec-draft-n-max ${DRAFT_N_MAX:-2}
     environment:
       LLAMA_CACHE: /models
@@ -47,8 +46,9 @@ services:
               capabilities: [gpu]
 
   # ── Wyoming OpenAI bridge ─────────────────────────────────────────────────────
-  # Translates Home Assistant's Wyoming protocol into OpenAI /v1/audio/transcriptions
-  # calls; the STT engine (and URL) comes from compose.stt-<engine>.yml. No GPU here.
+  # Translates Home Assistant's Wyoming protocol into OpenAI API calls: STT by the
+  # LLM's audio projector, TTS from compose.tts-<engine>.yml. A second STT engine
+  # gets its own Wyoming port from compose.stt-<engine>.yml. No GPU here.
   wyoming-openai:
     image: ghcr.io/roryeckel/wyoming_openai:latest
     container_name: assistant-wyoming
@@ -56,7 +56,9 @@ services:
     environment:
       - WYOMING_LANGUAGES=${STT_LANGUAGE:-en}
       - STT_BACKEND=OPENAI
+      - STT_OPENAI_URL=http://assistant-llama:5050/v1
       - STT_OPENAI_KEY=sk-dummy
+      - STT_MODELS=gemma
       - STT_PROMPT=${STT_PROMPT}
       - STT_TEMPERATURE=0
     ports:
