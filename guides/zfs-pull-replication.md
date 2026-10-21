@@ -70,13 +70,13 @@ systemctl list-timers 'sanoid*' --no-pager
 
 ```bash
 useradd -m -s /bin/sh zfsbackup && usermod -p '*' zfsbackup
-for ds in vault common media; do zfs allow -u zfsbackup send spool/encrypted/$ds; done
+for ds in vault common media; do zfs allow -u zfsbackup send,hold,release spool/encrypted/$ds; done
 zfs allow spool/encrypted/vault                                       # check
 su -s /bin/sh zfsbackup -c 'zfs list -t snapshot -o name spool/encrypted/vault | tail -2'
 ```
 
 - **No password** (`*`, not `passwd -l`: some SSH setups refuse key logins for a "locked" account). It only ever logs in with TrueNAS's key.
-- **Only `send`:** it can list and send snapshots, nothing else. No sudo: sudo for `zfs` could destroy every dataset. (`hold,release` would let a source keep snapshots TrueNAS still needs, but TrueNAS's Pull tasks can't use holds.)
+- **Only `send,hold,release`:** it can list and send snapshots, nothing else. `zfs send` of a range of snapshots (`-I`, e.g. after a missed run) puts temporary holds on them and fails with `cannot hold: permission denied` without these two; a hold only prevents deletion. No sudo: sudo for `zfs` could destroy every dataset.
 - **A shell is needed** (`/bin/sh`): TrueNAS runs its `zfs` commands through it.
 
 ## 3. TrueNAS's key

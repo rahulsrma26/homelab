@@ -1,0 +1,19 @@
+# Text-to-speech by Paradee on the CPU, sentence by sentence through Wyoming.
+services:
+  tts:
+    build: ./paradee
+    image: assistant-paradee:${PARADEE_REF:-main}
+    container_name: assistant-tts
+    restart: unless-stopped
+    environment:
+      TTS_THREADS: ${PARADEE_THREADS:-1}
+
+  wyoming-openai:
+    environment:
+      - TTS_OPENAI_URL=http://assistant-tts:8080/v1
+      - TTS_OPENAI_KEY=sk-dummy
+      - TTS_MODELS=paradee
+      - TTS_STREAMING_MODELS=paradee
+      - TTS_VOICES=default
+    depends_on:
+      - tts

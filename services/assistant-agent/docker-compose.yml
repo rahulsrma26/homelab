@@ -1,10 +1,11 @@
 services:
 
   # ── LLM + STT backend ────────────────────────────────────────────────────────
-  # Gemma 4 with mmproj enables /v1/audio/transcriptions for STT.
-  # reasoning=off is required — otherwise Gemma wraps STT output in thinking tokens.
+  # Gemma 4 with mmproj enables vision and /v1/audio/transcriptions for STT.
+  # reasoning=off is required — otherwise Gemma starts answers with its thinking.
+  # The MTP head (draft-mtp) speeds up generation without changing the output.
   llama-cpp:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda13
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
     container_name: assistant-llama
     restart: unless-stopped
     command: -hf ${MODEL} --host 0.0.0.0 --port 5050
@@ -16,17 +17,25 @@ services:
       --ubatch-size ${UBATCH_SIZE:-1024}
       --cache-type-k q8_0
       --cache-type-v q8_0
-      --ctx-size ${CONTEXT_SIZE:-131072}
+      --ctx-size ${CONTEXT_SIZE:-65536}
       --jinja
       --reasoning off
       --threads ${THREADS:-6}
       --spec-type draft-mtp
-      --spec-draft-n-max 2
+      --spec-draft-hf ${DRAFT_MODEL}
+      --spec-draft-n-max ${DRAFT_N_MAX:-2}
     environment:
       LLAMA_CACHE: /models
       HF_TOKEN: ${HF_TOKEN:-}
     ports:
       - "${LLAMA_PORT:-5050}:5050"
+    # the image's own check expects port 8080
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15m
+      retries: 3
     volumes:
       - ${MODELS_DIR:-/opt/generated/models}:/models
     deploy:
@@ -39,7 +48,7 @@ services:
 
   # ── Wyoming OpenAI bridge ─────────────────────────────────────────────────────
   # Translates Home Assistant's Wyoming protocol into OpenAI /v1/audio/transcriptions
-  # calls against the llama.cpp server above. No GPU needed here.
+  # calls; the STT engine (and URL) comes from compose.stt-<engine>.yml. No GPU here.
   wyoming-openai:
     image: ghcr.io/roryeckel/wyoming_openai:latest
     container_name: assistant-wyoming
@@ -47,9 +56,7 @@ services:
     environment:
       - WYOMING_LANGUAGES=${STT_LANGUAGE:-en}
       - STT_BACKEND=OPENAI
-      - STT_OPENAI_URL=http://assistant-llama:5050/v1
       - STT_OPENAI_KEY=sk-dummy
-      - STT_MODELS=${MODEL_ALIAS:-gemma-4-12b-it}
       - STT_PROMPT=${STT_PROMPT}
       - STT_TEMPERATURE=0
     ports:

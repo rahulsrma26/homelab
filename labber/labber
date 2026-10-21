@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.1"
+VERSION="4.4.2"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -3145,7 +3145,7 @@ setup_plan() {
                       case "${nc%% *}" in 1) nc="reservation: no change here ${nc#* }" ;; 2) nc="static IP (asked: not with --yes) ${nc#* }" ;; 3) nc="skip ${nc#* }" ;; esac
                       echo "  network         $nc" ;;
             alloy)    if [[ -n "$SETUP_PROM" ]]; then echo "  Prometheus      $SETUP_PROM  (--prometheus)"
-                                                   echo "  Loki            ${SETUP_LOKI:-${SETUP_PROM%:*}:3100}  (${SETUP_LOKI:+--loki}${SETUP_LOKI:-from --prometheus})"
+                                                   echo "  Loki            ${SETUP_LOKI:-${SETUP_PROM%:*}:3100}  ($([[ -n "$SETUP_LOKI" ]] && echo --loki || echo "from --prometheus"))"
                       elif [[ -n "$(state_get alloy_prometheus)" ]]; then echo "  Prometheus      $(state_get alloy_prometheus)  (remembered)"
                       else echo "  Prometheus      none → the Alloy step is skipped (give --prometheus)"; fi ;;
         esac

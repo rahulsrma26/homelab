@@ -229,6 +229,24 @@ zfs get compression rpool        # the installer sets "on" (= lz4): nothing to d
 
 ---
 
+### Less disk wear (optional)
+
+On a single host with monitoring shipping the journal off the machine (Alloy → Loki), keep the journal in RAM and stop the HA services, which write their state every few seconds and do nothing without a cluster:
+
+```bash
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/10-volatile.conf <<'EOF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=256M
+EOF
+systemctl restart systemd-journald
+rm -rf /var/log/journal/*          # the old on-disk journal; new entries go to /run/log/journal
+systemctl disable --now pve-ha-lrm pve-ha-crm   # skip if the post-install script already did (systemctl is-enabled shows "disabled")
+```
+
+Keep every log level (no `MaxLevelStore`): logins, sudo and fail2ban bans are info-level, and the shipper only sees what the journal keeps. The cost: the last seconds before a crash and logs from a boot that never reached the network are lost. Measure before and after with `smartctl -A /dev/nvme0 | grep -i "data units written"` (1 unit = 512 kB).
+
 ## Step 6 — SMART Monitoring
 
 ```bash
@@ -364,6 +382,19 @@ Guests then use `bridge=vmbr0,tag=<vid>`. The switch ports become trunks with th
 4. **The other NIC's port → the host-port profile too.** It's only the backup link now, so nothing drops.
 5. **Move the guests** to the bridge with their tag (below) and start them.
 6. **Test failover:** pull one cable, then the other. The active link switches and the host stays reachable. (`bond-primary` can stay as it is; it only decides which link is preferred when both are up.)
+
+**Check every VLAN on both links** before putting guests on them, with temporary interfaces (any free address in each VLAN) and a 20-second switch of the active link that undoes itself:
+
+```bash
+ip link add link vmbr0 name t26 type vlan id <server-vid> && ip addr add 192.168.server.<free>/24 dev t26 && ip link set t26 up
+bridge vlan add dev vmbr0 vid <server-vid> self     # the bridge itself must be a VLAN member, or ARP gets no answer
+ping -c2 -I t26 192.168.server.1                     # over the current link
+( echo nic0 > /sys/class/net/bond0/bonding/active_slave; sleep 20; echo nic1 > /sys/class/net/bond0/bonding/active_slave ) &
+sleep 3; ping -c2 -I t26 192.168.server.1            # over the other link
+ip link del t26; bridge vlan del dev vmbr0 vid <server-vid> self
+```
+
+Repeat for each tagged VLAN. "Destination Host Unreachable" with the `self` entry in place means the switch port doesn't carry that VLAN.
 
 **Moving guests** (stopped first) from the old per-VLAN bridges to tags, in their config files. Management guests first, so the two replacements don't overlap:
 

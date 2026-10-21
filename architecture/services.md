@@ -30,6 +30,7 @@ Each service is a folder in [`services/`](../services/) (a `docker-compose.yml`,
 
 | Guest         | Type                 | Services                                                                    |
 | ------------- | -------------------- | --------------------------------------------------------------------------- |
+| **files**     | LXC                  | Samba ([`scripts/smbmgr`](../scripts/smbmgr/)): a scratch share on the U.2, never backed up |
 | **frigate**   | LXC, iGPU (OpenVINO) | Frigate: object detection on the camera streams                             |
 | **gpu-vm**    | VM, workstation GPU  | local LLMs (llama.cpp), voice assistant agent, chat UIs                     |
 | **public VM** | VM, `dmz` VLAN       | Traefik (`cf` mode) behind a Cloudflare Tunnel; the public share-link proxy |

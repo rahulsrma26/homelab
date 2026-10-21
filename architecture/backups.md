@@ -23,7 +23,7 @@ Snapshots are the fast "undo": they protect against deleted files, a bad upgrade
 
 TrueNAS **pulls** over SSH, so the source holds no credentials to TrueNAS:
 
-- **A send-only user on the source:** `zfs allow … send` on the data datasets, no sudo, no password, its key accepted only from TrueNAS's address and only to run commands.
+- **A send-only user on the source:** `zfs allow … send,hold,release` on the data datasets (`zfs send` holds a range of snapshots while sending), no sudo, no password, its key accepted only from TrueNAS's address and only to run commands.
 - **Two firewalls let it through:** the VLAN rule and the source's Proxmox host firewall, each for TrueNAS → SSH only.
 - **Not raw:** replicas are received into TrueNAS's own encryption, so TrueNAS can read them for the off-site sync and a failover.
 - **One task per dataset**, retention **Same as Source** (TrueNAS keeps what sanoid keeps), into `tank/replicas/<host>/<dataset>`, read-only.

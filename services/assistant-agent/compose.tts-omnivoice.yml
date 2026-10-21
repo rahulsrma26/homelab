@@ -1,0 +1,39 @@
+# Text-to-speech by OmniVoice on the GPU (audio.cpp), sentence by sentence through Wyoming.
+services:
+  tts:
+    build: ./audiocpp
+    image: assistant-audiocpp:${AUDIOCPP_VERSION:-v0.9.2-drama3-base-small}
+    container_name: assistant-tts
+    restart: unless-stopped
+    environment:
+      TTS_MODEL_URL: ${OMNIVOICE_MODEL_URL}
+      TTS_MODEL_ID: omnivoice
+      TTS_FAMILY: omnivoice
+      TTS_BACKEND: cuda
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+      retries: 3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  wyoming-openai:
+    environment:
+      - TTS_OPENAI_URL=http://assistant-tts:8080/v1
+      - TTS_OPENAI_KEY=sk-dummy
+      - TTS_MODELS=omnivoice
+      - TTS_STREAMING_MODELS=omnivoice
+      - TTS_VOICES=default
+      # pieces of <=8 s: OmniVoice loses quality on longer ones
+      - 'TTS_EXTRA_BODY={"instruct": "${OMNIVOICE_VOICE}", "language": "${OMNIVOICE_LANGUAGE}", "audio_chunk_threshold_sec": 9, "audio_chunk_duration_sec": 8}'
+    depends_on:
+      - tts

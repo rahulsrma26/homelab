@@ -9,7 +9,7 @@ Three Proxmox hosts, plus a few small devices that support them.
 | **CPU**             | 8-core low-power (Intel N305, 15 W)                 | 14-core mobile (Intel i9-12900H)                                   | 20-core desktop (Intel i7-14700)                          |
 | **Max Memory**      | 48 GB, in-band ECC                                  | 96 GB, no ECC                                                      | 96 GB, ECC                                                |
 | **Boot + guests**   | ZFS mirror of 2 enterprise NVMe (`rpool`)           | single disk (LVM) + one large U.2 NVMe (ZFS, no redundancy)        | ZFS mirror (boot) + ZFS mirror (guests)                   |
-| **Data**            | 4 enterprise SATA SSDs, raidz1 (`spool`), encrypted | —                                                                  | TrueNAS: 4 large HDDs raidz1 + NVMe special vdev (mirror) |
+| **Data**            | 4 enterprise SATA SSDs, raidz1 (`spool`), encrypted | scratch only: a share on the U.2 (encrypted, never backed up)      | TrueNAS: 4 large HDDs raidz1 + NVMe special vdev (mirror) |
 | **GPU**             | iGPU (shared into LXCs)                             | RTX 2000E Ada 16 GB GPU (VM) + iGPU                                 | RTX 5060 Ti 16 GB GPU (VM) + iGPU                          |
 | **On battery**      | runs longest; shuts down at low battery             | shuts down after 2 min                                             | shuts down after 5 min, cutting its UPS                   |
 | **Important data?** | yes                                                 | **no**                                                             | yes (replicas, backups)                                   |
@@ -35,6 +35,7 @@ Fast, lots of memory, a GPU, but no ECC and no redundant storage, so **nothing i
 - **Frigate** (LXC, iGPU with OpenVINO): object detection on the camera streams. The cameras' own recorder does the recording, so losing Frigate loses detection, not footage.
 - **GPU VM** (workstation GPU): local LLMs for the voice assistant and chat UIs, experiments.
 - **Public VM:** the only thing reachable from the internet, through a Cloudflare Tunnel, with its own hardened Traefik, in its own DMZ VLAN ([network.md](network.md#public-access)). It lives here because a compromise that escaped the VM would find nothing irreplaceable: on backup it would sit next to every backup, on primary next to the originals. It is stateless, so the missing ECC and redundancy don't matter for it.
+- **A scratch file share** (LXC, Samba) on the U.2: for moving files between guests and hosts. Never backed up, so nothing that matters is kept there.
 - Other VMs/LXCs for testing and experimentation.
 - Shuts down 2 minutes into a power cut (heavy draw, nothing to save) and is woken by Home Assistant when power returns.
 

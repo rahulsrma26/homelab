@@ -153,6 +153,27 @@ systemctl enable zfs-unlock.service
 
 **`WantedBy`, not `RequiredBy=pve-guests.service`.** With `RequiredBy`, a failed unlock stops **all** guests, including the unencrypted Tailscale LXC needed to fix it remotely. With `WantedBy`, encrypted guests simply fail to start: ZFS can't mount a locked dataset, so nothing gets written into an empty folder.
 
+### Alert when the unlock fails
+
+The script only logs, and Proxmox's notifications don't cover a failed service. Mail root on failure: Proxmox forwards root's mail into its notification targets (e.g. Telegram, [proxmox-host.md](proxmox-host.md) step 6b). The root disk isn't encrypted, so mail works even when the unlock doesn't.
+
+```bash
+cat > /etc/systemd/system/notify-failure@.service <<'EOF'
+[Unit]
+Description=Mail root about the failed unit %i
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c '{ printf "Subject: %H: %i failed\n\n"; journalctl -u %i -n 20 --no-pager; } | /usr/sbin/sendmail root'
+EOF
+mkdir -p /etc/systemd/system/zfs-unlock.service.d
+printf '[Unit]\nOnFailure=notify-failure@%%n.service\n' > /etc/systemd/system/zfs-unlock.service.d/notify.conf
+systemctl daemon-reload
+systemctl start notify-failure@zfs-unlock.service      # test: the message must arrive
+```
+
+Only units that name it with `OnFailure=` use it; here that's the unlock alone.
+
 ### Emergency unlock — `/usr/local/bin/zfs-emergency-unlock.sh`
 
 Asks for the passphrase once and unlocks every dataset.
@@ -257,6 +278,15 @@ zfs get keylocation rpool/encrypted <datapool>/encrypted   # must be 'prompt' (m
 ```bash
 zfs unmount <ds>; zfs unload-key <ds>
 fuser -mv /<ds>; lsof +D /<ds>     # what's holding it
+```
+
+On a running host, Proxmox mounts the dataset again within seconds (its status daemon keeps storages active), so the unload finds it busy. Pause the storage first, e.g. to test the emergency unlock:
+
+```bash
+pvesm set enc-nvme --disable 1
+zfs unmount <ds> && zfs unload-key <ds>
+/usr/local/bin/zfs-emergency-unlock.sh
+pvesm set enc-nvme --disable 0
 ```
 
 ### Unlocked but guests not running

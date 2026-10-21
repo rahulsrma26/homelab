@@ -12,6 +12,8 @@ Data is split by **how much it matters**, not by app: snapshot and backup polici
 | `spool/encrypted/extra` | scratch | `share/` (an SMB share), `garage/` (a child dataset: object storage for rebuildable data) | 1M (`garage`: 128K) | primary only: no snapshots, never backed up |
 | LXC disks (`rpool`, encrypted) | app state | app configs, Postgres (Immich, Joplin), SQLite (Trilium) | — | PBS |
 
+Secondary has no data tiers, only `npool/encrypted/extra`: scratch on its single U.2, shared over SMB, never backed up.
+
 TrueNAS uses the same tiers for its own data (`tank/vault`, `tank/common`, `tank/media`), plus `tank/extra` (scratch, never backed up) and `tank/replicas/<host>/<dataset>` for what it pulls from other machines.
 
 ## Mounts
