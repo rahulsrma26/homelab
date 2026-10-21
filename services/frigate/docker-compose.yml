@@ -11,7 +11,11 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ${CONFIG_DIR:-./config}:/config
-      - ${STORAGE_DIR:-/mnt/nvr}:/media/frigate
+      - type: bind                 # a missing mount stops the start instead of creating an empty folder
+        source: ${STORAGE_DIR:-/mnt/nvr}
+        target: /media/frigate
+        bind:
+          create_host_path: false
       - type: tmpfs
         target: /tmp/cache
         tmpfs:

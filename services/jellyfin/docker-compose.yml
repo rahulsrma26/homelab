@@ -9,10 +9,12 @@ services:
     volumes:
       - ./config:/config
       - ./cache:/cache
-      - type: bind
+      - type: bind                 # a missing mount stops the start instead of creating an empty folder
         source: /mnt/media
         target: /media
         read_only: true
+        bind:
+          create_host_path: false
     environment:
       JELLYFIN_PublishedServerUrl: "${PUBLISHED_URL:-}"
     devices:

@@ -15,4 +15,9 @@ services:
       - TZ=${TZ}
     volumes:
       - ./data:/data
-      - ${MUSIC_DIR}:/music:ro
+      - type: bind                 # a missing mount stops the start instead of creating an empty folder
+        source: ${MUSIC_DIR}
+        target: /music
+        read_only: true
+        bind:
+          create_host_path: false

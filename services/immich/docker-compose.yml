@@ -13,7 +13,11 @@ services:
     devices:
       - /dev/dri:/dev/dri          # Intel iGPU: hardware transcoding (enable in Admin → Video transcoding)
     volumes:
-      - ${UPLOAD_LOCATION}:/data
+      - type: bind                 # a missing mount stops the start instead of creating an empty folder
+        source: ${UPLOAD_LOCATION}
+        target: /data
+        bind:
+          create_host_path: false
       - /etc/localtime:/etc/localtime:ro
     env_file:
       - .env
