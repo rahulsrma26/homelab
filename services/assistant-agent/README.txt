@@ -26,7 +26,7 @@ needs /dev/dri on the host; an iGPU used by other containers is shared); none ad
 nothing. Switch by changing COMPOSE_FILE in .env and restarting.
 
 Chat model (COMPOSE_FILE, asked at install; both with their MTP draft head, draft
-length 2, 64k context, q8_0 KV cache, one request at a time, thinking off; chosen by
+length 2, 64k context, q8_0 KV cache, two requests at a time (PARALLEL, 32k each), thinking off; chosen by
 benchmark on a 16 GB card): gemma-12b runs Gemma 4 12B QAT UD-Q4_K_XL (~9 GB VRAM,
 ~45 tok/s, best quality and tool calls); gemma-e4b runs Gemma 4 E4B Q4_K_M for smaller
 cards (~6 GB VRAM, ~75 tok/s, a few points lower on tests, and it sometimes asks a

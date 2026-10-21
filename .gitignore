@@ -12,11 +12,5 @@ __pycache__/
 # Home Assistant inventory and config — private for now
 home-assistant/
 
-# local Python (uv) scaffold, not part of the repo
-main.py
-pyproject.toml
-uv.lock
-.python-version
-
 # macOS folder metadata
 .DS_Store
