@@ -101,11 +101,43 @@ if [ "${IGPU}" = 1 ]; then
 #!/usr/bin/python3
 # installed by install-exporters.sh --igpu: Intel iGPU metrics from intel_gpu_top
 # every 15 s, as Prometheus text for Alloy's textfile collector.
-import json, os, re, subprocess, sys, tempfile
+import glob, json, os, re, subprocess, sys, tempfile, time
 
 DIR = "/var/lib/node-textfile"
 OUT = os.path.join(DIR, "igpu.prom")
 SECONDS = 15
+
+
+def rc6_file():
+    # the kernel's RC6 counter; intel_gpu_top's own rc6 reads 0 on some kernels
+    for card in sorted(glob.glob("/sys/class/drm/card[0-9]*")):
+        try:
+            if open(f"{card}/device/vendor").read().strip() != "0x8086":
+                continue
+        except OSError:
+            continue
+        for f in (f"{card}/gt/gt0/rc6_residency_ms", f"{card}/power/rc6_residency_ms"):
+            if os.path.exists(f):
+                return f
+    return None
+
+
+class Rc6:
+    def __init__(self):
+        self.file, self.last = rc6_file(), None
+
+    def percent(self):
+        """RC6 share of the time since the previous call, or None."""
+        if not self.file:
+            return None
+        try:
+            now = (time.monotonic() * 1000, int(open(self.file).read()))
+        except (OSError, ValueError):
+            return None
+        last, self.last = self.last, now
+        if not last or now[0] <= last[0]:
+            return None
+        return min(100.0, max(0.0, (now[1] - last[1]) * 100 / (now[0] - last[0])))
 
 
 def write(lines):
@@ -116,7 +148,7 @@ def write(lines):
     os.replace(tmp, OUT)
 
 
-def metrics(s):
+def metrics(s, rc6=None):
     out = ["igpu_metrics_up 1"]
     for engine, v in sorted(s.get("engines", {}).items()):
         if isinstance(v, dict) and "busy" in v:
@@ -127,7 +159,9 @@ def metrics(s):
     for k in ("actual", "requested"):
         if k in freq:
             out.append(f"igpu_frequency_{k}_hertz {float(freq[k]) * 1e6:.0f}")
-    if "value" in s.get("rc6", {}):
+    if rc6 is not None:
+        out.append(f"igpu_rc6_percent {rc6:.2f}")
+    elif "value" in s.get("rc6", {}):
         out.append(f'igpu_rc6_percent {float(s["rc6"]["value"]):.2f}')
     power = s.get("power", {})
     if "GPU" in power:
@@ -142,7 +176,8 @@ def main():
     # line-buffered: a pipe would otherwise hold samples back until its buffer fills
     p = subprocess.Popen(["stdbuf", "-oL", "intel_gpu_top", "-J", "-s", str(SECONDS * 1000)],
                          stdout=subprocess.PIPE, text=True)
-    dec, buf = json.JSONDecoder(), ""
+    dec, buf, rc6 = json.JSONDecoder(), "", Rc6()
+    rc6.percent()
     for chunk in iter(lambda: p.stdout.read(1), ""):
         buf += chunk
         if chunk != "}":
@@ -156,7 +191,7 @@ def main():
         except json.JSONDecodeError:
             continue
         buf = buf[end:]
-        write(metrics(sample))
+        write(metrics(sample, rc6.percent()))
     write(["igpu_metrics_up 0"])
     sys.exit(p.wait() or 1)
 
