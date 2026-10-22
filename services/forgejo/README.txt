@@ -27,7 +27,7 @@ The runner's Docker access then gives trusted workflows control of that entire
 VM, including Forgejo data. Separate Forgejo LXC + runner VM provides a stronger
 boundary. The full labber tests require the runner VM; a server-only LXC works.
 
-runner/ contains native runner and systemd templates. examples/ contains workflows
+The native runner is installed by scripts/forgejo-runner. examples/ contains workflows
 to copy into a repository after reviewing labels and deployment targets. They do
 not run automatically from this service directory. Deployment uses labber.
 Full setup, CI/CD, backups and recovery: guides/forgejo-setup.md.

@@ -68,12 +68,13 @@ jobs:
       - run: tests/services/run.sh
 
   scripts:
-    name: scripts/ (NUT with a simulated UPS, smbmgr)
+    name: scripts/ (NUT with a simulated UPS, smbmgr, forgejo-runner)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: tests/scripts/run-nut.sh
       - run: tests/scripts/run-smbmgr.sh
+      - run: tests/scripts/run-forgejo-runner.sh
 
   # all of the above passed on dev → main = this commit (fast-forward only: if main has
   # moved on its own, this fails instead of overwriting it)

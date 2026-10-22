@@ -49,10 +49,11 @@ test-monitoring:
 test-services:
 	tests/services/run.sh
 
-# scripts/ end-to-end in systemd containers: NUT (simulated UPS) and smbmgr (Samba)
+# scripts/ end-to-end in systemd containers: NUT (simulated UPS), smbmgr (Samba), forgejo-runner
 test-scripts:
 	tests/scripts/run-nut.sh
 	tests/scripts/run-smbmgr.sh
+	tests/scripts/run-forgejo-runner.sh
 
 # repo rules (CLAUDE.md) + shellcheck — what CI runs besides the tests above
 test-lint:

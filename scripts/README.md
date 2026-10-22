@@ -13,6 +13,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/hea
 | [`proxmox-grub-boot/`](proxmox-grub-boot/README.md) | a Proxmox VE host (ZFS root, UEFI) | switches the boot loader from systemd-boot to GRUB on every boot disk, and keeps GRUB synced after updates |
 | [`smbmgr/`](smbmgr/README.md) | any Debian machine or LXC | native Samba (SMB) plus `smbmgr`, a tool to add and remove shares for any folder, each with its own read-only and read-write users. Hardened (SMB3 + encryption, no NetBIOS/guests); security fixes via Debian's automatic updates |
 | [`nut/`](nut/README.md) | a Proxmox host or any Debian machine (e.g. an Orange Pi) | sets up NUT, so the machine shuts down cleanly on a power cut. Covers the UPS server, the clients on the same UPS, and monitor-only setups |
+| [`forgejo-runner/`](forgejo-runner/README.md) | a Debian machine with Docker (a CI VM) | a native Forgejo Actions runner: installs and updates the binary (checksum-verified), its own user and systemd unit; registers it (token typed hidden) |
 
 ## Adding a script
 
