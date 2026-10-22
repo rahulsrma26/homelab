@@ -75,10 +75,13 @@ def check_forgejo(config, root, repo, environment, run):
 
         runner_uuid = forge("forgejo-cli", "actions", "register", "--name", "smoke",
                             "--scope", "audit/checks", "--secret", secret).strip().splitlines()[-1]
-        runner_config = (repo / "services/forgejo/runner/config.yml.example").read_text()
-        runner_config = runner_config.replace("<forgejo-https-url>", "http://forgejo:3000/")
-        runner_config = runner_config.replace("<runner-uuid>", runner_uuid).replace("<runner-token>", secret)
-        runner_config = runner_config.replace("/var/lib/forgejo-runner/work", "/tmp/forgejo-smoke-work")
+        # the same shape scripts/forgejo-runner/install.sh --register writes
+        runner_config = (
+            "runner:\n  capacity: 1\n  timeout: 2h\n  labels:\n    - \"labber-ci:host\"\n"
+            "cache:\n  enabled: false\nhost:\n  workdir_parent: /tmp/forgejo-smoke-work\n"
+            "server:\n  connections:\n    forgejo:\n"
+            f"      url: \"http://forgejo:3000/\"\n      uuid: \"{runner_uuid}\"\n      token: \"{secret}\"\n"
+        )
         runner_file = root / "runner-smoke.yml"
         runner_file.write_text(runner_config)
         runner_file.chmod(0o644)  # disposable credentials, readable by the image's UID 1000
@@ -145,7 +148,11 @@ echo 'ok   labber fetches tools, script and setup assets from authenticated priv
             assert expected in output, output
         print("ok   real Forgejo runner parses the CI and labber CD examples", flush=True)
         (root / "forgejo-deploy.yml").write_text((repo / "services/forgejo/examples/deploy.yml").read_text())
-        (root / "runner.service").write_text((repo / "services/forgejo/runner/forgejo-runner.service").read_text())
+        # the unit scripts/forgejo-runner/install.sh writes (its heredoc)
+        installer = (repo / "scripts/forgejo-runner/install.sh").read_text()
+        unit_text = installer.split("cat > \"$UNIT\" <<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0]
+        assert "UMask=" in unit_text, "unit not found in scripts/forgejo-runner/install.sh"
+        (root / "runner.service").write_text(unit_text)
         print(client("python3", "-c", '''
 import configparser, json, os, pathlib, subprocess, tempfile, yaml
 source = pathlib.Path("/work/forgejo-deploy.yml")
