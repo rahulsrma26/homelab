@@ -15,7 +15,7 @@ usage() {
     echo "Usage: tester [OPTIONS] <CAMERA>...   (names as in .env: FRIGATE_<CAMERA>_IP …)"
     echo ""
     echo "  -a, --all    test every camera in .env"
-    echo "  -f, --flv    also test Reolink's http-flv streams (port 80; used for two-way talk setups)"
+    echo "  -f, --flv    also test Reolink's http-flv streams: main, sub and ext (port 80; needs HTTP and RTMP on)"
     echo "  -s, --show   print the URLs (passwords masked)"
     echo "  -h, --help   this help"
     echo ""
@@ -122,8 +122,9 @@ for CAMERA in "${CAMERAS[@]}"; do
     if [[ -n "$sub" ]]; then probe "Sub   ($sub)" "rtsp://$user:$pass@$ip:554/$sub" rtsp; fi
     if [[ -z "$main$sub" ]]; then echo "  | no stream paths: set $main_var / $sub_var in .env"; fi
     if $FLV; then
-        probe "FLV main" "http://$ip/flv?port=1935&app=bcs&stream=channel0_main.bcs&user=$user&password=$pass"
-        probe "FLV sub" "http://$ip/flv?port=1935&app=bcs&stream=channel0_ext.bcs&user=$user&password=$pass"
+        for s in main sub ext; do
+            probe "FLV $s" "http://$ip/flv?port=1935&app=bcs&stream=channel0_$s.bcs&user=$user&password=$pass"
+        done
     fi
     echo
 done
