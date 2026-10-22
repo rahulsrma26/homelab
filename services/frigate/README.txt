@@ -6,7 +6,10 @@ Services:
            :8555  WebRTC (TCP + UDP)
 
 Before deployment:
-  .env          — set FRIGATE_RTSP_PASSWORD and adjust SHM_SIZE for camera count
+  .env          — set FRIGATE_RTSP_PASSWORD and adjust SHM_SIZE for camera count;
+                  FRIGATE_GO2RTC_WEBRTC_CANDIDATE_INTERNAL = this guest's IP:8555, the address
+                  browsers use for WebRTC (two-way talk); used when config.yml sets no
+                  go2rtc webrtc candidates. Wrong or missing = black, spinning live view.
   config/config.yml  — add cameras and tweak detection settings
 
 Hardware:
