@@ -1,83 +1,131 @@
 #!/usr/bin/env bash
+# Checks camera streams from the Frigate host: ports, then each stream's tracks.
+# Cameras come from .env: FRIGATE_<NAME>_IP, _USER, _PSWD, _MAIN, _SUB.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
-
+CONTAINER="${FRIGATE_CONTAINER:-frigate}"
+TIMEOUT=5            # seconds per connection attempt
 SHOW_URL=false
+FLV=false
+ALL=false
 
 usage() {
-    echo "Usage: tester [-s|--show] <CAMERA_NAME>"
-    echo "       tester CAMERA1"
-    echo "       tester --show DOORBELL"
-    exit 1
+    echo "Usage: tester [OPTIONS] <CAMERA>...   (names as in .env: FRIGATE_<CAMERA>_IP …)"
+    echo ""
+    echo "  -a, --all    test every camera in .env"
+    echo "  -f, --flv    also test Reolink's http-flv streams (port 80; used for two-way talk setups)"
+    echo "  -s, --show   print the URLs (passwords masked)"
+    echo "  -h, --help   this help"
+    echo ""
+    echo "Examples: tester DOORBELL     tester --all     tester --flv --show doorbell"
+    exit "${1:-0}"
 }
 
-# Parse args
-POSITIONAL=()
+CAMERAS=()
 for arg in "$@"; do
     case "$arg" in
+        -a|--all) ALL=true ;;
+        -f|--flv) FLV=true ;;
         -s|--show) SHOW_URL=true ;;
-        -*) usage ;;
-        *) POSITIONAL+=("$arg") ;;
+        -h|--help) usage ;;
+        -*) echo "Unknown option: $arg"; usage 1 ;;
+        *) CAMERAS+=("${arg^^}") ;;
     esac
 done
-[[ ${#POSITIONAL[@]} -eq 1 ]] || usage
-CAMERA="${POSITIONAL[0]^^}"
 
 [[ -f "$ENV_FILE" ]] || { echo "error: .env not found at $ENV_FILE"; exit 1; }
-
 set -a; source "$ENV_FILE"; set +a
 
-ip_var="FRIGATE_${CAMERA}_IP"
-user_var="FRIGATE_${CAMERA}_USER"
-pass_var="FRIGATE_${CAMERA}_PSWD"
-main_var="FRIGATE_${CAMERA}_MAIN"
-sub_var="FRIGATE_${CAMERA}_SUB"
+if $ALL; then
+    mapfile -t CAMERAS < <(compgen -v | sed -n 's/^FRIGATE_\(.*\)_IP$/\1/p' | sort)
+fi
+[[ ${#CAMERAS[@]} -gt 0 ]] || usage 1
 
-ip="${!ip_var:-}"
-user="${!user_var:-}"
-pass="${!pass_var:-}"
-main_stream="${!main_var:-}"
-sub_stream="${!sub_var:-}"
+# ffprobe on this machine, else the one inside the Frigate container (an LXC usually has none)
+if command -v ffprobe >/dev/null; then
+    FFPROBE=(ffprobe)
+elif docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null | grep -qx true; then
+    ffdir=$(docker exec "$CONTAINER" sh -c 'ls -d /usr/lib/ffmpeg/*/bin 2>/dev/null | tail -1')
+    [[ -n "$ffdir" ]] || { echo "error: no ffprobe in the $CONTAINER container"; exit 1; }
+    FFPROBE=(docker exec "$CONTAINER" "$ffdir/ffprobe")
+else
+    echo "error: no ffprobe here, and the $CONTAINER container isn't running (apt install ffmpeg, or start Frigate)"
+    exit 1
+fi
 
-[[ -n "$ip" ]]          || { echo "error: $ip_var not set in .env"; exit 1; }
-[[ -n "$user" ]]        || { echo "error: $user_var not set in .env"; exit 1; }
-[[ -n "$pass" ]]        || { echo "error: $pass_var not set in .env"; exit 1; }
-[[ -n "$main_stream" ]] || { echo "error: $main_var not set in .env"; exit 1; }
-[[ -n "$sub_stream" ]]  || { echo "error: $sub_var not set in .env"; exit 1; }
+# hide passwords in anything printed
+mask() { sed -E 's#(://[^:/@]+:)[^@]*@#\1***@#; s#(password=)[^& ]*#\1***#'; }
 
+port_open() { timeout "$TIMEOUT" bash -c "</dev/tcp/$1/$2" 2>/dev/null; }
+
+FAILED=0
+# probe <label> <url> [rtsp]: the stream's tracks, or ffprobe's own error
 probe() {
-    local label="$1" url="$2"
+    local label="$1" url="$2" out err opts=()
     echo "+-- $label"
-    $SHOW_URL && echo "  | $url"
-    ffprobe -v quiet -print_format json -show_streams \
-        -rtsp_transport tcp "$url" 2>&1 \
-        | python3 -c "
-import sys, json
+    if $SHOW_URL; then echo "  | $(mask <<<"$url")"; fi
+    [[ "${3:-}" == rtsp ]] && opts=(-rtsp_transport tcp -timeout $((TIMEOUT * 1000000)))
+    out=$(mktemp); err=$(mktemp)
+    timeout $((TIMEOUT * 4)) "${FFPROBE[@]}" -v error -analyzeduration 3000000 -probesize 5000000 \
+        "${opts[@]}" -print_format json -show_streams "$url" >"$out" 2>"$err" || true
+    if ! python3 - "$out" <<'PY'
+import json, sys
 try:
-    data = json.load(sys.stdin)
-    for s in data.get('streams', []):
-        idx   = s.get('index', '?')
-        ctype = s.get('codec_type', '?')
-        codec = s.get('codec_name', '?')
-        if ctype == 'video':
-            w   = s.get('width', '?')
-            h   = s.get('height', '?')
-            fps = s.get('r_frame_rate', '?')
-            print(f'  | Stream #{idx}: {ctype} — {codec} {w}x{h} @ {fps} fps')
-        elif ctype == 'audio':
-            sr  = s.get('sample_rate', '?')
-            ch  = s.get('channels', '?')
-            print(f'  | Stream #{idx}: {ctype} — {codec} {sr}Hz {ch}ch')
-        else:
-            print(f'  | Stream #{idx}: {ctype} — {codec}')
-except Exception as e:
-    print(f'  | error: {e}')
+    streams = json.load(open(sys.argv[1])).get("streams", [])
+except ValueError:
     sys.exit(1)
-" || echo "  | ffprobe failed — check IP, credentials, or stream path"
+if not streams:
+    sys.exit(1)
+for s in streams:
+    idx, ctype, codec = s.get("index", "?"), s.get("codec_type", "?"), s.get("codec_name", "?")
+    if ctype == "video":
+        rate = s.get("avg_frame_rate", "0/0")
+        if rate in ("0/0", ""):
+            rate = s.get("r_frame_rate", "?")
+        print(f"  | Stream #{idx}: video — {codec} {s.get('width', '?')}x{s.get('height', '?')} @ {rate} fps")
+    elif ctype == "audio":
+        print(f"  | Stream #{idx}: audio — {codec} {s.get('sample_rate', '?')}Hz {s.get('channels', '?')}ch")
+    else:
+        print(f"  | Stream #{idx}: {ctype} — {codec}")
+PY
+    then
+        echo "  | ffprobe failed:"
+        if [[ -s "$err" ]]; then mask <"$err" | sed -n '1,3s/^/  |   /p'; else echo "  |   no answer within $((TIMEOUT * 4)) s"; fi
+        FAILED=$((FAILED + 1))
+    fi
+    rm -f "$out" "$err"
 }
 
-echo "Camera: $CAMERA ($ip)"
-probe "Main  ($main_stream)" "rtsp://$user:$pass@$ip:554/$main_stream"
-probe "Sub   ($sub_stream)"  "rtsp://$user:$pass@$ip:554/$sub_stream"
+for CAMERA in "${CAMERAS[@]}"; do
+    ip_var="FRIGATE_${CAMERA}_IP"; user_var="FRIGATE_${CAMERA}_USER"; pass_var="FRIGATE_${CAMERA}_PSWD"
+    main_var="FRIGATE_${CAMERA}_MAIN"; sub_var="FRIGATE_${CAMERA}_SUB"
+    ip="${!ip_var:-}"; user="${!user_var:-}"; pass="${!pass_var:-}"; main="${!main_var:-}"; sub="${!sub_var:-}"
+    echo "Camera: $CAMERA (${ip:-?})"
+    missing=()
+    [[ -n "$ip" ]]   || missing+=("$ip_var")
+    [[ -n "$user" ]] || missing+=("$user_var")
+    [[ -n "$pass" ]] || missing+=("$pass_var")
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "  | not set in .env: ${missing[*]}"; FAILED=$((FAILED + 1)); echo; continue
+    fi
+
+    # reachability first: a firewall that drops traffic would otherwise look like a hang
+    ports=(554); if $FLV; then ports+=(80); fi
+    for p in "${ports[@]}"; do
+        if port_open "$ip" "$p"; then echo "  | port $p open"
+        else echo "  | port $p blocked or closed (a firewall, e.g. the UniFi policy, or the camera's service off)"; FAILED=$((FAILED + 1)); fi
+    done
+
+    if [[ -n "$main" ]]; then probe "Main  ($main)" "rtsp://$user:$pass@$ip:554/$main" rtsp; fi
+    if [[ -n "$sub" ]]; then probe "Sub   ($sub)" "rtsp://$user:$pass@$ip:554/$sub" rtsp; fi
+    if [[ -z "$main$sub" ]]; then echo "  | no stream paths: set $main_var / $sub_var in .env"; fi
+    if $FLV; then
+        probe "FLV main" "http://$ip/flv?port=1935&app=bcs&stream=channel0_main.bcs&user=$user&password=$pass"
+        probe "FLV sub" "http://$ip/flv?port=1935&app=bcs&stream=channel0_ext.bcs&user=$user&password=$pass"
+    fi
+    echo
+done
+
+if [[ $FAILED -eq 0 ]]; then echo "all good"; else echo "$FAILED problem(s)"; exit 1; fi
