@@ -9,6 +9,7 @@ on:
   push:
     branches: [dev]
   pull_request:
+  workflow_dispatch: # "Run workflow" on the Actions page (e.g. when a push didn't start a run)
 
 permissions:
   contents: read
@@ -79,7 +80,7 @@ jobs:
   promote:
     name: promote to main (stable)
     needs: [repo-lint, shellcheck, labber-unit, labber-setup, monitoring, services, scripts]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     permissions:
       contents: write
