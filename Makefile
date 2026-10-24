@@ -46,6 +46,7 @@ test-labber-vm:
 test-monitoring:
 	tests/monitoring/run.sh
 	tests/monitoring/run-log-limits.sh
+	tests/monitoring/run-pve-targets.sh
 
 test-services:
 	tests/services/run.sh

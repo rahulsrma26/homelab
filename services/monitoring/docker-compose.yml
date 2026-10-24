@@ -23,6 +23,15 @@ services:
     restart: unless-stopped
     ports:
       - "9090:9090"
+    environment:
+      - PVE_HOSTS=${PVE_HOSTS:-}
+    # writes the Proxmox hosts from .env (PVE_HOSTS, comma-separated) as a file_sd target list,
+    # so prometheus.yml stays the same everywhere and updates never touch your hosts
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'mkdir -p /tmp/targets && hosts=$$(echo "$$PVE_HOSTS" | tr "," " ") && { if [ -n "$$hosts" ]; then echo "- targets:"; for h in $$hosts; do echo "    - \"$$h\""; done; else echo "[]"; fi; } > /tmp/targets/pve.yml && exec /bin/prometheus "$$@"'
+      - prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'

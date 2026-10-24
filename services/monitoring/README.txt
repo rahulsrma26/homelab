@@ -8,6 +8,11 @@ Services:
   alertmanager  :9093  Alert routing to Telegram (Docker network only)
   pve-exporter  :9221  Proxmox API metrics for Prometheus (Docker network only)
 
+Proxmox hosts to scrape: PVE_HOSTS in .env, comma-separated (their management addresses or
+names). Prometheus turns it into a target list when it starts, so prometheus.yml is the same
+everywhere and `labber monitoring update` never touches your hosts. A change in .env needs
+docker compose up -d prometheus (a recreate).
+
 Before deployment:
   .env
   config/prometheus/prometheus.yml

@@ -33,10 +33,9 @@ scrape_configs:
     params:
       cluster: ['1']
       node: ['1']
-    static_configs:
-      - targets:
-          - 192.168.management.machine-1
-          - 192.168.management.machine-2
+    # the hosts come from PVE_HOSTS in .env (written at container start; see docker-compose.yml)
+    file_sd_configs:
+      - files: ['/tmp/targets/pve.yml']
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

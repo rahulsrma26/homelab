@@ -60,6 +60,7 @@ jobs:
       - uses: actions/checkout@v5
       - run: tests/monitoring/run.sh
       - run: tests/monitoring/run-log-limits.sh
+      - run: tests/monitoring/run-pve-targets.sh
 
   services:
     name: Compose variants and Authelia configuration
