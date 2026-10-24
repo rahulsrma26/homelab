@@ -6,6 +6,36 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # a Proxmox host goes silent with its two guests: one alert, the host's. A guest that dies on
+  # its own (its host fine) alerts by itself. A guest without a pve-exporter entry still alerts.
+  - interval: 1m
+    input_series:
+      - series: 'node_boot_time_seconds{instance="od01"}'
+        values: '100x30'
+      - series: 'node_boot_time_seconds{instance="Immich"}'
+        values: '100x30'
+      - series: 'node_boot_time_seconds{instance="gpu-ms01"}'
+        values: '100x30'
+      - series: 'node_boot_time_seconds{instance="ms01"}'
+        values: '100x120'
+      - series: 'node_boot_time_seconds{instance="stray"}'
+        values: '100x30'
+      # pve-exporter's guest list stops with od01 (it can't be asked), ms01's goes on
+      - series: 'pve_guest_info{name="Immich",node="od01",id="lxc/1011"}'
+        values: '1x30'
+      - series: 'pve_guest_info{name="gpu-ms01",node="ms01",id="qemu/1054"}'
+        values: '1x120'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: HostNotReporting
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: od01}
+            exp_annotations: {summary: "od01 stopped sending metrics (down, or Alloy stopped)"}
+          - exp_labels: {severity: critical, instance: gpu-ms01}
+            exp_annotations: {summary: "gpu-ms01 stopped sending metrics (down, or Alloy stopped)"}
+          - exp_labels: {severity: critical, instance: stray}
+            exp_annotations: {summary: "stray stopped sending metrics (down, or Alloy stopped)"}
+
   # a pushing host that stops sending metrics at minute 30 must alert; a healthy one must not
   - interval: 1m
     input_series:
@@ -77,7 +107,7 @@ tests:
         alertname: RebootRequired
         exp_alerts:
           - exp_labels:
-              severity: warning
+              severity: info
               instance: vm1
             exp_annotations:
               summary: "vm1 has had a newer kernel installed for over a day — reboot it"
@@ -149,7 +179,7 @@ tests:
         alertname: ContainerGone
         exp_alerts:
           - exp_labels:
-              severity: warning
+              severity: info
               instance: vm1
               name: jellyfin
             exp_annotations:
@@ -246,7 +276,7 @@ tests:
       - eval_time: 100m
         alertname: DiskSpaceLow
         exp_alerts:
-          - exp_labels: {severity: warning, mountpoint: /data, fstype: zfs, instance: od01}
+          - exp_labels: {severity: info, mountpoint: /data, fstype: zfs, instance: od01}
             exp_annotations: {summary: "Disk /data on od01 at 85%, filling up"}
       - eval_time: 100m
         alertname: DiskSpaceCritical
@@ -321,3 +351,130 @@ tests:
         exp_alerts:
           - exp_labels: {severity: critical, instance: sustained, gpu: "0", name: Test GPU}
             exp_annotations: {summary: "GPU Test GPU on sustained is at 91 °C (95 °C, or 90 °C for 15 minutes)"}
+
+  # logs (the counters start rising at minute 11): a capped host alerts, a quiet one doesn't; lost lines
+  # and Loki rejections alert at once;
+  # heavy logging alerts only after 15 sustained minutes
+  - interval: 1m
+    input_series:
+      - series: 'loki_process_dropped_lines_total{host="noisy",reason="ratelimit_drop_stage"}'
+        values: '0+0x10 0+500x20'
+      - series: 'loki_process_dropped_lines_total{host="quiet",reason="noise"}'
+        values: '0+50x30'
+      - series: 'loki_write_dropped_entries_total{host="noisy",reason="rate_limited"}'
+        values: '0x10 0+20x20'
+      - series: 'loki_write_sent_bytes_total{host="noisy"}'
+        values: '0+12000000x60'
+      - series: 'loki_write_sent_bytes_total{host="quiet"}'
+        values: '0+60000x60'
+      - series: 'loki_discarded_samples_total{reason="per_stream_rate_limit"}'
+        values: '0x10 0+5x20'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LogsCapped
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LogsCapped
+        exp_alerts:
+          - exp_labels: {severity: warning, host: noisy}
+            exp_annotations: {summary: "noisy is logging more than its cap: 4.5k lines dropped in 15 minutes — check its noisiest container"}
+      - eval_time: 20m
+        alertname: LogsNotDelivered
+        exp_alerts:
+          - exp_labels: {severity: warning, host: noisy, reason: rate_limited}
+            exp_annotations: {summary: "noisy: 180 log lines lost in 15 minutes (rate_limited)"}
+      - eval_time: 10m
+        alertname: LogFlood
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: LogFlood
+        exp_alerts:
+          - exp_labels: {severity: warning, host: noisy}
+            exp_annotations: {summary: "noisy sends 200kB/s of logs — check its noisiest container"}
+      - eval_time: 20m
+        alertname: LokiRejectingLogs
+        exp_alerts:
+          - exp_labels: {severity: warning, reason: per_stream_rate_limit}
+            exp_annotations: {summary: "Loki rejected 45 log lines in 15 minutes (per_stream_rate_limit)"}
+
+  # DiskWritesSurge (hosts only): 8 days at 10 GB/day, then 100 GB/day → warning; a disk that
+  # always writes 100 GB/day is normal for it; partitions and guests' (virtual) disks are ignored
+  - interval: 1h
+    input_series:
+      - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="nvme0n1"}'
+        values: '0+416666667x192 80000000064+4166666667x48'
+      - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="sda"}'
+        values: '0+4166666667x240'
+      - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="nvme0n1p3"}'
+        values: '0+416666667x192 80000000064+4166666667x48'
+      - series: 'node_disk_written_bytes_total{job="guest-node-exporters",instance="vm",device="sda"}'
+        values: '0+416666667x192 80000000064+4166666667x48'
+    alert_rule_test:
+      - eval_time: 7d
+        alertname: DiskWritesSurge
+        exp_alerts: []
+      - eval_time: 8d20h
+        alertname: DiskWritesSurge
+        exp_alerts:
+          - exp_labels: {severity: warning, job: proxmox-node-exporters, instance: h, device: nvme0n1}
+            exp_annotations: {summary: "h nvme0n1 wrote 78.15GiB in 24 h, over 3× its usual day"}
+
+  # HighMemory: a level held for 30 min, not a spike. A VM at 95% for 40 min → warning; one
+  # touching 95% for 10 min → nothing; an LXC (from pve-exporter) at 95% → warning, named by
+  # its guest name; a VM at 83% (e.g. 5 of 6 GB during a test) → nothing
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{instance="busyvm",job="guest-node-exporters"}'
+        values: '100x60'
+      - series: 'node_memory_MemAvailable_bytes{instance="busyvm",job="guest-node-exporters"}'
+        values: '5x60'
+      - series: 'node_memory_MemTotal_bytes{instance="spikyvm",job="guest-node-exporters"}'
+        values: '100x60'
+      - series: 'node_memory_MemAvailable_bytes{instance="spikyvm",job="guest-node-exporters"}'
+        values: '50x20 5x10 50x30'
+      - series: 'node_memory_MemTotal_bytes{instance="testvm",job="guest-node-exporters"}'
+        values: '6x60'
+      - series: 'node_memory_MemAvailable_bytes{instance="testvm",job="guest-node-exporters"}'
+        values: '1x60'
+      - series: 'pve_memory_usage_bytes{id="lxc/1013",instance="pve"}'
+        values: '95x60'
+      - series: 'pve_memory_size_bytes{id="lxc/1013",instance="pve"}'
+        values: '100x60'
+      - series: 'pve_guest_info{id="lxc/1013",instance="pve",name="Apps",node="od01",type="lxc"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: HighMemory
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: HighMemory
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: busyvm, job: guest-node-exporters}
+            exp_annotations: {summary: "busyvm has used over 90% of its memory for 30 min: 95%"}
+          - exp_labels: {severity: warning, instance: Apps, id: lxc/1013, name: Apps}
+            exp_annotations: {summary: "Apps has used over 90% of its memory for 30 min: 95%"}
+
+  # the same full dataset seen by the host and by an LXC that mounts it: one alert, the host's;
+  # a VM's own full disk still alerts
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{instance="od01",mountpoint="/spool/encrypted/common",fstype="zfs"}'
+        values: '3x20'
+      - series: 'node_filesystem_size_bytes{instance="od01",mountpoint="/spool/encrypted/common",fstype="zfs"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{instance="Docs",kind="lxc",mountpoint="/mnt/inbox",fstype="zfs"}'
+        values: '3x20'
+      - series: 'node_filesystem_size_bytes{instance="Docs",kind="lxc",mountpoint="/mnt/inbox",fstype="zfs"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{instance="gpu",kind="vm",mountpoint="/",fstype="ext4"}'
+        values: '3x20'
+      - series: 'node_filesystem_size_bytes{instance="gpu",kind="vm",mountpoint="/",fstype="ext4"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DiskSpaceFull
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: od01, mountpoint: /spool/encrypted/common, fstype: zfs}
+            exp_annotations: {summary: "Disk /spool/encrypted/common on od01 nearly full: 97%"}
+          - exp_labels: {severity: critical, instance: gpu, kind: vm, mountpoint: /, fstype: ext4}
+            exp_annotations: {summary: "Disk / on gpu nearly full: 97%"}

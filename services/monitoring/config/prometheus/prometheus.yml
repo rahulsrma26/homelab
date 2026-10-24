@@ -15,6 +15,11 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # Loki's own metrics: rejected lines (rate limits), bytes received
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+
   # Proxmox API metrics via pve-exporter
   # One exporter instance handles all nodes via relabeling
   - job_name: 'pve-exporter'

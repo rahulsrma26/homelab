@@ -68,6 +68,36 @@ prometheus.remote_write "central" {
   }
 }
 
+// Alloy's own counters, for the log alerts: what it sent, what it dropped and why
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  targets         = prometheus.exporter.self.alloy.targets
+  forward_to      = [prometheus.relabel.alloy.receiver]
+  scrape_interval = "60s"
+}
+
+prometheus.relabel "alloy" {
+  forward_to = [prometheus.remote_write.central.receiver]
+  rule {
+    source_labels = ["__name__"]
+    regex         = "loki_(process_dropped_lines_total|write_(sent|dropped)_(bytes|entries)_total)"
+    action        = "keep"
+  }
+  rule {
+    target_label = "job"
+    replacement  = "alloy"
+  }
+  rule {
+    target_label = "host"
+    replacement  = constants.hostname
+  }
+  rule {
+    target_label = "instance"
+    replacement  = constants.hostname
+  }
+}
+
 // ── Logs ──
 
 loki.relabel "journal" {
@@ -82,8 +112,20 @@ loki.relabel "journal" {
   }
 }
 
+// per unit: at most 50 lines/s (bursts of 500); the rest is dropped and counted, so one noisy
+// service can't flood Loki for every host
+loki.process "journal" {
+  forward_to = [loki.write.central.receiver]
+  stage.limit {
+    rate          = 50
+    burst         = 500
+    by_label_name = "unit"
+    drop          = true
+  }
+}
+
 loki.source.journal "local" {
-  forward_to    = [loki.write.central.receiver]
+  forward_to    = [loki.process.journal.receiver]
   relabel_rules = loki.relabel.journal.rules
   labels = {
     host = constants.hostname,

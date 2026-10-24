@@ -13,8 +13,21 @@ groups:
       # Hosts and guests that PUSH metrics with Alloy never report up == 0 when they
       # die — their samples just stop. Remember each host for a day after its last
       # sample; after that it is forgotten (expiry does not establish recovery).
+      # When a Proxmox host goes silent, its guests do too: only the host alerts, not each guest.
+      # Guests are matched to their host by name (pve-exporter's guest list, remembered for a
+      # day, since a dead host can't be asked): a guest's Proxmox name must equal its hostname.
       - alert: HostNotReporting
-        expr: max by (instance) (max_over_time(node_boot_time_seconds[1d])) unless max by (instance) (node_boot_time_seconds)
+        expr: |
+          (max by (instance) (max_over_time(node_boot_time_seconds[1d])) unless max by (instance) (node_boot_time_seconds))
+          unless on(instance)
+          (
+            label_replace(max by (name, node) (max_over_time(pve_guest_info[1d])), "instance", "$1", "name", "(.*)")
+            * on(node) group_left()
+            label_replace(
+              max by (instance) (max_over_time(node_boot_time_seconds[1d])) unless max by (instance) (node_boot_time_seconds),
+              "node", "$1", "instance", "(.*)"
+            )
+          )
         labels:
           severity: critical
         annotations:
@@ -35,7 +48,7 @@ groups:
         expr: labber_reboot_required == 1
         for: 24h
         labels:
-          severity: warning
+          severity: info
         annotations:
           summary: "{{ $labels.instance }} has had a newer kernel installed for over a day — reboot it"
 
@@ -43,7 +56,7 @@ groups:
         expr: labber_restart_required_services > 0
         for: 24h
         labels:
-          severity: warning
+          severity: info
         annotations:
           summary: "{{ $labels.instance }}: {{ $value }} service(s) still run outdated libraries — reboot, or: sudo needrestart -r a"
 
@@ -59,29 +72,39 @@ groups:
         expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
         for: 10m
         labels:
-          severity: warning
+          severity: info
         annotations:
           summary: "High CPU on {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%"
 
+      # memory staying high: hosts and VMs from their own MemAvailable; LXCs from the host's view
+      # (pve-exporter), since inside an LXC the node metrics would show the host's memory
       - alert: HighMemory
-        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High memory on {{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%"
-
-      # disk space in steps: an early note in the daily digest, then critical (at once)
-      - alert: DiskSpaceLow
-        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 80
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+          or
+          label_replace(
+            (pve_memory_usage_bytes{id=~"lxc/.*"} / pve_memory_size_bytes{id=~"lxc/.*"} * 100) * on(id) group_left(name) pve_guest_info,
+            "instance", "$1", "name", "(.*)"
+          ) > 90
         for: 30m
         labels:
           severity: warning
         annotations:
+          summary: "{{ $labels.instance }} has used over 90% of its memory for 30 min: {{ $value | printf \"%.0f\" }}%"
+
+      # disk space in steps: an early note in the daily digest, then critical (at once)
+      # not from LXCs: the host already reports every dataset (each LXC's root disk is its
+      # subvol-<id>-disk-0; bind-mounted datasets are the host's own), so they'd count twice or more
+      - alert: DiskSpaceLow
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"} / node_filesystem_size_bytes{fstype!="tmpfs", kind!="lxc"})) * 100 > 80
+        for: 30m
+        labels:
+          severity: info
+        annotations:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} at {{ $value | printf \"%.0f\" }}%, filling up"
 
       - alert: DiskSpaceCritical
-        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 90
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"} / node_filesystem_size_bytes{fstype!="tmpfs", kind!="lxc"})) * 100 > 90
         for: 5m
         labels:
           severity: critical
@@ -89,7 +112,7 @@ groups:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} at {{ $value | printf \"%.0f\" }}%"
 
       - alert: DiskSpaceFull
-        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 95
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"} / node_filesystem_size_bytes{fstype!="tmpfs", kind!="lxc"})) * 100 > 95
         for: 5m
         labels:
           severity: critical
@@ -100,13 +123,27 @@ groups:
       # already over half full, and only a trend that holds for an hour)
       - alert: DiskFillingFast
         expr: |
-          predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs"}[6h], 24 * 3600) < 0
-          and (1 - (node_filesystem_avail_bytes{fstype!="tmpfs"} / node_filesystem_size_bytes{fstype!="tmpfs"})) * 100 > 50
+          predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"}[6h], 24 * 3600) < 0
+          and (1 - (node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"} / node_filesystem_size_bytes{fstype!="tmpfs", kind!="lxc"})) * 100 > 50
         for: 1h
         labels:
           severity: critical
         annotations:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} will be full within a day at the rate of the last 6 h"
+
+      # a physical disk on a Proxmox host writes far more than usual: a runaway process wearing out
+      # an SSD. Hosts only: guests see virtual disks, and LXCs see the host's disks again
+      - alert: DiskWritesSurge
+        expr: |
+          increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1d]) > 50e9
+          and
+          increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1d])
+            > 3 * increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[7d] offset 1d) / 7
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} {{ $labels.device }} wrote {{ $value | humanize1024 }}B in 24 h, over 3× its usual day"
 
       - alert: SmartDriveWear
         expr: smartctl_device_percentage_used > 80
@@ -177,7 +214,7 @@ groups:
       - alert: ContainerGone
         expr: max by (instance, name) (container_last_seen{job="guest-containers"} offset 10m) unless max by (instance, name) (container_last_seen{job="guest-containers"})
         labels:
-          severity: warning
+          severity: info
         annotations:
           summary: "Container {{ $labels.name }} on {{ $labels.instance }} stopped (or was removed)"
 
@@ -196,3 +233,39 @@ groups:
           severity: info
         annotations:
           summary: "{{ $labels.service }} on {{ $labels.instance }} has an update — labber {{ $labels.service }} update"
+
+  # logs: Alloy's own counters (every host) and Loki's; all warnings, for the digest
+  - name: logs
+    rules:
+      # a host hit its cap (100 lines/s per container, 50 per journal unit): something is spamming
+      - alert: LogsCapped
+        expr: sum by (host) (increase(loki_process_dropped_lines_total{reason="ratelimit_drop_stage"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} is logging more than its cap: {{ $value | humanize }} lines dropped in 15 minutes — check its noisiest container"
+
+      # logs that left a host but never arrived (Loki rejected them, or the queue overflowed)
+      - alert: LogsNotDelivered
+        expr: sum by (host, reason) (increase(loki_write_dropped_entries_total[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }}: {{ $value | humanize }} log lines lost in 15 minutes ({{ $labels.reason }})"
+
+      # sustained heavy logging, even under the cap (~8.6 GB a day at this rate; normal is a few MB)
+      - alert: LogFlood
+        expr: sum by (host) (rate(loki_write_sent_bytes_total[15m])) > 100e3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} sends {{ $value | humanize }}B/s of logs — check its noisiest container"
+
+      # Loki itself turned lines away (its own limits, behind the hosts' caps)
+      - alert: LokiRejectingLogs
+        expr: sum by (reason) (increase(loki_discarded_samples_total[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki rejected {{ $value | humanize }} log lines in 15 minutes ({{ $labels.reason }})"

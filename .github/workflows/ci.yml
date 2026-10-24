@@ -54,11 +54,12 @@ jobs:
           LABBER_TEST_LIFECYCLE: '1'
 
   monitoring:
-    name: Prometheus rules + Alertmanager config
+    name: Prometheus rules + Alertmanager config + log caps
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: tests/monitoring/run.sh
+      - run: tests/monitoring/run-log-limits.sh
 
   services:
     name: Compose variants and Authelia configuration

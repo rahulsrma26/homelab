@@ -41,7 +41,8 @@ services:
       - "3100:3100"
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
-      - loki-data:/loki
+      # a named volume, or a path: its own dataset with a quota, so a log flood can't fill Prometheus's disk
+      - ${LOKI_DATA:-loki-data}:/loki
       - ./config/loki/loki-config.yml:/etc/loki/loki-config.yml
 
   influxdb:
@@ -68,10 +69,13 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TELEGRAM_MANAGER_BOT_TOKEN=${TELEGRAM_MANAGER_BOT_TOKEN:-}
+      - TELEGRAM_MANAGER_CHAT_ID=${TELEGRAM_MANAGER_CHAT_ID:-}
+    # fills the Telegram settings into the config; the quiet chat falls back to the loud one
     entrypoint:
       - /bin/sh
       - -c
-      - 'sed "s|\$${TELEGRAM_BOT_TOKEN}|$$TELEGRAM_BOT_TOKEN|g; s|\$${TELEGRAM_CHAT_ID}|$$TELEGRAM_CHAT_ID|g" /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml && /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager'
+      - 'mt="$${TELEGRAM_MANAGER_BOT_TOKEN:-$$TELEGRAM_BOT_TOKEN}"; mc="$${TELEGRAM_MANAGER_CHAT_ID:-$$TELEGRAM_CHAT_ID}"; sed "s|\$${TELEGRAM_MANAGER_BOT_TOKEN}|$$mt|g; s|\$${TELEGRAM_MANAGER_CHAT_ID}|$$mc|g; s|\$${TELEGRAM_BOT_TOKEN}|$$TELEGRAM_BOT_TOKEN|g; s|\$${TELEGRAM_CHAT_ID}|$$TELEGRAM_CHAT_ID|g" /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml && /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager'
     user: root
     volumes:
       - ./config/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml.tmpl:ro

@@ -1,35 +1,35 @@
 global:
   resolve_timeout: 5m
 
-# Two speeds:
-#   critical (host down, pool degraded, disk failing, disk full, uncorrectable ECC):
-#     at once, then every 6 h while it lasts
-#   warnings: once a day at 15:00 UTC, as one digest — still firing then = one message;
-#     a warning that comes and goes between digests is only in Grafana. Resolved notices
-#     for them also wait for the digest. Notes (info): at the digest, then weekly.
+# Three levels, two Telegram chats:
+#   critical (host down, pool degraded, disk failing or full, uncorrectable ECC): the loud
+#     chat (TELEGRAM_BOT_TOKEN/CHAT_ID) at once, then every 6 h while it lasts
+#   warning (strong signals to act on within a day: a failed service, a restart loop, drive
+#     wear, a write surge, logs flooding): the quiet chat (TELEGRAM_MANAGER_*) at once, then
+#     daily while it lasts
+#   info (routine: reboot due, update available, disk 80 %): the quiet chat, once a day at
+#     15:00 UTC as one digest, then weekly
+# Without TELEGRAM_MANAGER_* set, the quiet messages go to the loud chat.
 route:
   group_by: ['alertname', 'instance']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 6h
-  receiver: 'telegram'
+  receiver: 'critical'
   routes:
     - matchers: ['severity = critical']
       repeat_interval: 6h
-      receiver: 'telegram'
-    # one message per digest with every warning that is firing
+      receiver: 'critical'
     - matchers: ['severity = warning']
-      group_by: ['severity']
-      active_time_intervals: ['daily-digest']
-      # just under a day, so yesterday's alert is due again when the window opens
-      repeat_interval: 23h
-      receiver: 'telegram'
-    # notes such as "update available": at the digest, then a reminder weekly
+      group_wait: 1m
+      repeat_interval: 24h
+      receiver: 'manager'
+    # one message per digest with every note that is firing
     - matchers: ['severity = info']
       group_by: ['severity']
       active_time_intervals: ['daily-digest']
       repeat_interval: 167h
-      receiver: 'telegram'
+      receiver: 'manager'
 
 time_intervals:
   - name: daily-digest
@@ -54,10 +54,21 @@ inhibit_rules:
     equal: ['instance', 'mountpoint']
 
 receivers:
-  - name: 'telegram'
+  - name: 'critical'
     telegram_configs:
       - bot_token: '${TELEGRAM_BOT_TOKEN}'
         chat_id: ${TELEGRAM_CHAT_ID}
+        message: |
+          {{ range .Alerts }}
+          *{{ .Status | toUpper }}* {{ .Labels.alertname }}
+          Instance: {{ .Labels.instance }}
+          {{ .Annotations.summary }}
+          {{ end }}
+        parse_mode: Markdown
+  - name: 'manager'
+    telegram_configs:
+      - bot_token: '${TELEGRAM_MANAGER_BOT_TOKEN}'
+        chat_id: ${TELEGRAM_MANAGER_CHAT_ID}
         message: |
           {{ range .Alerts }}
           *{{ .Status | toUpper }}* {{ .Labels.alertname }}

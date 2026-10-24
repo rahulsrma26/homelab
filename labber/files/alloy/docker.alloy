@@ -65,10 +65,32 @@ discovery.relabel "containers" {
   }
 }
 
+// known noise, dropped (and counted): lines that repeat every few seconds and carry nothing
+// per container: at most 100 lines/s (bursts of 1000); the rest is dropped and counted
+loki.process "containers" {
+  forward_to = [loki.write.central.receiver]
+  // Frigate: nginx warns on every API call (harmless)
+  stage.drop {
+    expression          = "using uninitialized \"go2rtc_stream_proxy\" variable"
+    drop_counter_reason = "noise"
+  }
+  // Joplin Server: its scheduled shared-items task logs ~8 lines per run
+  stage.drop {
+    expression          = "(ShareModel: updateSharedItems3#|TaskService: Running #\\d+ \\(Process shared items\\))"
+    drop_counter_reason = "noise"
+  }
+  stage.limit {
+    rate          = 100
+    burst         = 1000
+    by_label_name = "container"
+    drop          = true
+  }
+}
+
 loki.source.docker "containers" {
   host          = "unix:///var/run/docker.sock"
   targets       = discovery.docker.local.targets
   relabel_rules = discovery.relabel.containers.rules
   labels        = { host = constants.hostname, job = "docker" }
-  forward_to    = [loki.write.central.receiver]
+  forward_to    = [loki.process.containers.receiver]
 }

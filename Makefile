@@ -45,6 +45,7 @@ test-labber-vm:
 # promtool checks for the Prometheus alert rules
 test-monitoring:
 	tests/monitoring/run.sh
+	tests/monitoring/run-log-limits.sh
 
 test-services:
 	tests/services/run.sh
