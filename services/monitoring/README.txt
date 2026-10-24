@@ -8,6 +8,12 @@ Services:
   alertmanager  :9093  Alert routing to Telegram (Docker network only)
   pve-exporter  :9221  Proxmox API metrics for Prometheus (Docker network only)
 
+Check the stack (on its host, in this folder): ./tester
+  containers, Prometheus (rules, scrape targets, the PVE_HOSTS hosts, who stopped reporting, what's
+  firing), Loki, Alertmanager (one or two Telegram chats, failed sends), Grafana, InfluxDB; a
+  summary and an exit code. --test-alerts also sends one test alert to each chat and checks
+  Telegram accepted it; --size lists what takes up the most series.
+
 Proxmox hosts to scrape: PVE_HOSTS in .env, comma-separated (their management addresses or
 names). Prometheus turns it into a target list when it starts, so prometheus.yml is the same
 everywhere and `labber monitoring update` never touches your hosts. A change in .env needs

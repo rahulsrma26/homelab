@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Checks the monitoring stack from its own host: containers, Prometheus (rules, targets, who
+# reports), Loki, Alertmanager (Telegram chats, failed sends), Grafana, InfluxDB.
+# Optionally sends one test alert to each Telegram chat, or shows what takes up the most space.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+PROM=http://localhost:9090
+SEND=false SIZE=false
+
+usage() {
+    echo "Usage: tester [OPTIONS]   (on the monitoring host, in or next to services/monitoring)"
+    echo ""
+    echo "  -t, --test-alerts  also send one test alert to each chat (warning → the quiet one,"
+    echo "                     critical → the loud one) and check Telegram accepted them"
+    echo "  -s, --size         also list the metrics and labels taking up the most series"
+    echo "  -h, --help         this help"
+    exit "${1:-0}"
+}
+for arg in "$@"; do
+    case "$arg" in
+        -t|--test-alerts) SEND=true ;;
+        -s|--size) SIZE=true ;;
+        -h|--help) usage ;;
+        *) echo "Unknown option: $arg"; usage 1 ;;
+    esac
+done
+
+if [[ -t 1 ]]; then R=$'\033[0;31m' G=$'\033[0;32m' Y=$'\033[1;33m' N=$'\033[0m'; else R='' G='' Y='' N=''; fi
+FAILED=0 WARNED=0
+ok()   { echo "  ${G}ok${N}    $*"; }
+bad()  { echo "  ${R}FAIL${N}  $*"; FAILED=$((FAILED + 1)); }
+note() { echo "  ${Y}note${N}  $*"; WARNED=$((WARNED + 1)); }
+
+# read .env (PVE_HOSTS, TELEGRAM_MANAGER_*) without running it
+envget() { if [[ -f "$ENV_FILE" ]]; then sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; fi; }
+# a Prometheus query → "labels<TAB>value" lines
+pq() {
+    curl -fsS -G "$PROM/api/v1/query" --data-urlencode "query=$1" 2>/dev/null | python3 -c '
+import json, sys
+for r in json.load(sys.stdin)["data"]["result"]:
+    m = {k: v for k, v in r["metric"].items() if k != "__name__"}
+    print(",".join(f"{k}={v}" for k, v in sorted(m.items())), r["value"][1], sep="\t")' || true
+}
+am_metric() {   # sum of an Alertmanager counter for the telegram integration (requests = every attempt)
+    docker exec alertmanager wget -qO- http://localhost:9093/metrics 2>/dev/null \
+        | awk -v m="$1" '$1 ~ "^"m"\\{" && $1 ~ /integration="telegram"/ { s += $2 } END { print s + 0 }'
+}
+
+echo "Containers"
+for c in prometheus loki alertmanager grafana influxdb pve-exporter; do
+    st=$(docker inspect -f '{{.State.Status}}{{if .State.Health}} ({{.State.Health.Status}}){{end}} restarts={{.RestartCount}}' "$c" 2>/dev/null || echo missing)
+    case "$st" in
+        running*restarts=0) ok "$c: $st" ;;
+        running*) note "$c: $st" ;;
+        *) bad "$c: $st" ;;
+    esac
+done
+
+echo "Prometheus"
+if curl -fsS "$PROM/-/ready" >/dev/null 2>&1; then
+    ok "ready"
+    rules=$(curl -fsS "$PROM/api/v1/rules" | python3 -c '
+import json, sys
+g = json.load(sys.stdin)["data"]["groups"]
+rules = [r for x in g for r in x["rules"]]
+bad = [r["name"] for r in rules if r.get("health") not in ("ok", "unknown")]
+print(len(rules), " ".join(bad))')
+    n=${rules%% *} broken=${rules#* }; [[ "$broken" == "$n" ]] && broken=""
+    if [[ -z "$broken" ]]; then ok "$n alert rules loaded, all evaluating"; else bad "rules failing to evaluate: $broken"; fi
+    # targets Prometheus scrapes itself
+    while IFS=$'\t' read -r labels val; do
+        [[ -z "$labels" ]] && continue
+        if [[ "$val" == 1 ]]; then ok "scrape up: $labels"; else bad "scrape DOWN: $labels"; fi
+    done < <(pq 'up')
+    want=$(envget PVE_HOSTS | tr ',' '\n' | grep -c . || true)
+    have=$(pq 'up{job="pve-exporter"}' | grep -c . || true)
+    if [[ "$want" -eq 0 ]]; then note "PVE_HOSTS is empty in .env: no Proxmox host is scraped"
+    elif [[ "$have" -ne "$want" ]]; then bad "pve-exporter: $have targets, but PVE_HOSTS lists $want"
+    else ok "pve-exporter: all $want hosts from PVE_HOSTS are targets"; fi
+    # hosts and guests that push (Alloy): who stopped?
+    total=$(pq 'count(max by (instance) (max_over_time(node_boot_time_seconds[1d])))' | cut -f2)
+    silent=$(pq 'max by (instance) (max_over_time(node_boot_time_seconds[1d])) unless max by (instance) (node_boot_time_seconds)' | cut -f1 | sed 's/^instance=//' | paste -sd' ' -)
+    if [[ "${total:-0}" == 0 ]]; then note "no host or guest reports metrics (Alloy not set up yet?)"
+    elif [[ -z "$silent" ]]; then ok "$total hosts/guests reporting, none silent"
+    else bad "stopped reporting: $silent"; fi
+    firing=$(pq 'count by (severity) (ALERTS{alertstate="firing"})' | sed 's/^severity=//' | awk -F'\t' '{printf "%s %s, ", $2, $1}' | sed 's/, $//')
+    echo "  ----  firing now: ${firing:-nothing}"
+else
+    bad "not answering on $PROM"
+fi
+
+echo "Loki"
+loki_ready=false   # Loki reports ready ~15 s after it starts
+for _ in $(seq 15); do curl -fsS http://localhost:3100/ready >/dev/null 2>&1 && { loki_ready=true; break; }; sleep 2; done
+if $loki_ready; then ok "ready"; else bad "not ready on :3100 after 30 s"; fi
+rej=$(pq 'sum(increase(loki_discarded_samples_total[1h]))' | cut -f2)
+if [[ -z "$rej" || "${rej%%.*}" == 0 ]]; then ok "no lines rejected in the last hour"; else note "${rej%%.*} lines rejected in the last hour (rate limits)"; fi
+
+echo "Alertmanager"
+if docker exec alertmanager wget -qO- http://localhost:9093/-/ready >/dev/null 2>&1; then ok "ready"; else bad "not ready"; fi
+chats=$(docker exec alertmanager grep -c "bot_token" /tmp/alertmanager.yml 2>/dev/null || echo 0)
+if [[ -n "$(envget TELEGRAM_MANAGER_BOT_TOKEN)" && -n "$(envget TELEGRAM_MANAGER_CHAT_ID)" ]]; then
+    if [[ "$chats" -eq 2 ]]; then ok "two chats: critical → loud, warning/info → quiet"
+    else bad "TELEGRAM_MANAGER_* set, but the running config has $chats receivers (recreate alertmanager)"; fi
+else
+    note "TELEGRAM_MANAGER_* not set: warnings and notes go to the loud chat too"
+fi
+failed=$(am_metric alertmanager_notification_requests_failed_total) sent=$(am_metric alertmanager_notification_requests_total)
+if [[ "$failed" -eq 0 ]]; then ok "Telegram: $sent sends, none failed (since alertmanager started)"; else bad "Telegram: $failed of $sent sends failed (token, chat id, or no internet)"; fi
+
+echo "Grafana, InfluxDB"
+if curl -fsS http://localhost:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then ok "Grafana healthy"; else bad "Grafana not healthy on :3000"; fi
+if curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8086/ping 2>/dev/null | grep -q 204; then ok "InfluxDB answers"; else bad "InfluxDB not answering on :8086"; fi
+
+if $SEND; then
+    echo "Test alerts"
+    run=$(date +%s)
+    before_sent=$(am_metric alertmanager_notification_requests_total) before_failed=$(am_metric alertmanager_notification_requests_failed_total)
+    while read -r name sev chat; do
+        # an instance unique to this run, so each run is a new alert group: an existing group is
+        # only sent again after group_interval (5 min), and a repeat after repeat_interval (6 h)
+        if docker exec alertmanager amtool alert add "$name" "severity=$sev" "instance=tester-$run" \
+            --annotation="summary=\"tester: this should arrive in the $chat chat\"" \
+            --alertmanager.url=http://localhost:9093 >/dev/null 2>&1; then
+            ok "sent $name ($sev → the $chat chat)"
+        else bad "could not send $name"; fi
+    done <<< $'TestWarning warning quiet\nTestCritical critical loud'
+    echo "  ....  waiting up to 90 s for Telegram"
+    for _ in $(seq 18); do
+        sleep 5
+        [[ $(( $(am_metric alertmanager_notification_requests_total) - before_sent )) -ge 2 ]] && break
+    done
+    s=$(( $(am_metric alertmanager_notification_requests_total) - before_sent )); f=$(( $(am_metric alertmanager_notification_requests_failed_total) - before_failed ))
+    if [[ "$f" -gt 0 ]]; then bad "Telegram rejected $f of $s messages (token or chat id)"
+    elif [[ "$s" -ge 2 ]]; then ok "Telegram accepted both: check each chat (they resolve by themselves in ~5 min)"
+    else bad "only $s of 2 messages went out within 90 s"; fi
+fi
+
+if $SIZE; then
+    echo "Size (series)"
+    curl -fsS "$PROM/api/v1/status/tsdb?limit=15" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)["data"]
+print("  total head series: %d" % d["headStats"]["numSeries"])
+for k, t in (("seriesCountByMetricName", "metrics"), ("seriesCountByLabelValuePair", "labels")):
+    print("  -- top " + t)
+    for x in d[k]: print("  %7d  %s" % (x["value"], x["name"]))'
+fi
+
+echo
+notes=""; [[ $WARNED -gt 0 ]] && notes=" ($WARNED note(s))"
+if [[ $FAILED -eq 0 ]]; then echo "${G}all good${N}$notes"; else echo "${R}$FAILED problem(s)${N}$notes"; exit 1; fi
