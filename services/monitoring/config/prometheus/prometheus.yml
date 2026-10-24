@@ -19,6 +19,11 @@ scrape_configs:
   - job_name: 'loki'
     static_configs:
       - targets: ['loki:3100']
+    # only what the log alerts and the stack's own health need (Loki exports ~1500 series)
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'loki_(discarded_samples_total|distributor_(bytes|lines)_received_total|ingester_memory_streams|build_info)'
+        action: keep
 
   # Proxmox API metrics via pve-exporter
   # One exporter instance handles all nodes via relabeling
@@ -39,6 +44,11 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: pve-exporter:9221
+    # high-availability state: no cluster here
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'pve_ha_state'
+        action: drop
 
   # proxmox-node-exporters and proxmox-smartctl-exporters are pushed via
   # Alloy remote_write from each host — no scrape jobs needed here

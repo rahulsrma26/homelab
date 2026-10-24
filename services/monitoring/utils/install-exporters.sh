@@ -234,9 +234,17 @@ logging {
 // ── Metrics ──────────────────────────────────────────────────────────────────
 
 prometheus.exporter.unix "local" {
-  enable_collectors = ["systemd", "processes", "hwmon", "thermal_zone"]
+  enable_collectors  = ["systemd", "processes", "hwmon", "thermal_zone"]
+  disable_collectors = ["nfs", "nfsd"]
   textfile {
     directory = "${TEXTFILE_DIR}"
+  }
+  systemd {
+    unit_include = ".+\\\\.service"
+  }
+  // the guests' virtual interfaces (one tap/fw*/veth set per guest) are the guests' own business
+  netdev {
+    device_exclude = "^(lo|tap.*|fwbr.*|fwpr.*|fwln.*|veth.*|docker[0-9]+|br-.*|tailscale[0-9]*)$"
   }
 }
 
@@ -248,6 +256,24 @@ prometheus.scrape "node" {
 
 prometheus.relabel "node" {
   forward_to = [prometheus.remote_write.central.receiver]
+  // systemd: keep only the "failed" state (alerts use it); the other four states are noise
+  rule {
+    source_labels = ["__name__", "state"]
+    regex         = "node_systemd_unit_state;(active|inactive|activating|deactivating)"
+    action        = "drop"
+  }
+  // per-collector bookkeeping
+  rule {
+    source_labels = ["__name__"]
+    regex         = "node_scrape_collector_.*"
+    action        = "drop"
+  }
+  // network counters nothing uses (keeps bytes, packets, errors, drops, link state)
+  rule {
+    source_labels = ["__name__"]
+    regex         = "node_network_(receive_(compressed|fifo|frame|multicast)|transmit_(compressed|fifo|colls|carrier))_total|node_network_(address_assign_type|carrier_changes_total|carrier_up_changes_total|carrier_down_changes_total|device_id|dormant|flags|iface_id|iface_link|iface_link_mode|name_assign_type|net_dev_group|protocol_type|transmit_queue_length|mtu_bytes)"
+    action        = "drop"
+  }
   rule {
     target_label = "job"
     replacement  = "proxmox-node-exporters"
