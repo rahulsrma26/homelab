@@ -12,6 +12,7 @@ import tempfile
 from forgejo import check_forgejo
 from garage import check_garage
 from forgejo_s3 import check_forgejo_s3
+from vaultwarden import check_vaultwarden
 
 
 TEMPLATE = re.compile(
@@ -157,6 +158,7 @@ def checks(repo, root):
     check_forgejo(variants["forgejo"]["local"], root, repo, environment, run)
     check_garage(configurations["garage"], root, environment, run)
     check_forgejo_s3(variants["forgejo"], configurations["garage"], root, environment, run)
+    check_vaultwarden(configurations["vaultwarden"], root, environment, run)
 
 
 if __name__ == "__main__":

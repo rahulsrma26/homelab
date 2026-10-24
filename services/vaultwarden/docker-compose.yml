@@ -1,20 +1,27 @@
+# Vaultwarden — Bitwarden-compatible password manager (web vault + API for the apps).
+# Sign-ups are off: accounts come from invitations or the admin page. Everything it
+# keeps (SQLite database, attachments, its signing key) is in VAULTWARDEN_DATA.
 services:
   vaultwarden:
-    image: vaultwarden/server:latest
+    image: vaultwarden/server:1.37.4
     container_name: vaultwarden
     restart: unless-stopped
+    user: "${PUID}:${PGID}"
     ports:
-      - "80:80"
+      - "${PORT:-8222}:8080"
     environment:
       - DOMAIN=${VAULTWARDEN_DOMAIN}
+      - ROCKET_PORT=8080                 # unprivileged port: the container doesn't run as root
       - SIGNUPS_ALLOWED=false
-      - ADMIN_TOKEN=${VAULTWARDEN_ADMIN_TOKEN}
-      - WEBSOCKET_ENABLED=true
-      - PUSH_ENABLED=true
-      - PUSH_INSTALLATION_ID=${PUSH_INSTALLATION_ID}
-      - PUSH_INSTALLATION_KEY=${PUSH_INSTALLATION_KEY}
+      - SHOW_PASSWORD_HINT=false
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}     # empty: the admin page is off
+      - PUSH_ENABLED=${PUSH_ENABLED:-false}
+      - PUSH_INSTALLATION_ID=${PUSH_INSTALLATION_ID:-}
+      - PUSH_INSTALLATION_KEY=${PUSH_INSTALLATION_KEY:-}
+      - TZ=${TZ}
     volumes:
-      - vaultwarden-data:/data
-
-volumes:
-  vaultwarden-data:
+      - type: bind                       # a missing folder stops the start instead of an empty vault
+        source: ${VAULTWARDEN_DATA}
+        target: /data
+        bind:
+          create_host_path: false
