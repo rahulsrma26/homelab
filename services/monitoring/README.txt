@@ -51,7 +51,7 @@ Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
                        host goes silent, only the host alerts, not each of its guests (matched by
                        name: a guest's Proxmox name must equal its hostname)
   SystemdUnitFailed    a systemd service is failed for 15 min
-  RebootRequired       newer kernel installed for over a day
+  RebootRequired       newer kernel or NVIDIA driver installed for over a day
   ServicesNeedRestart  services on outdated libraries for over a day
   SecurityUpdatesStuck security updates pending for a week
   HighMemory           over 90% of its memory for 30 min (warning): hosts and VMs from their own
@@ -60,7 +60,8 @@ Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
   DiskSpaceCritical    over 90% (critical)
   DiskWritesSurge      a physical disk on a Proxmox host wrote over 3× its usual day (the previous
                        7 days' average) and over 50 GB in 24 h (warning): a runaway process wearing
-                       out an SSD; guests' virtual disks are left out
+                       out an SSD; guests' virtual disks are left out. Followed by serial, so
+                       disks swapping names (nvme0n1 ↔ nvme1n1) at a reboot don't count
   DiskSpaceFull        over 95% (critical); only the highest of the three is sent
   DiskFillingFast      over half full and, at the last 6 h's rate, full within a day (critical)
   (the disk alerts skip LXC filesystems: the host reports every dataset, each LXC's root

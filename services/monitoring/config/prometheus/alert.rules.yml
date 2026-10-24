@@ -50,7 +50,7 @@ groups:
         labels:
           severity: info
         annotations:
-          summary: "{{ $labels.instance }} has had a newer kernel installed for over a day — reboot it"
+          summary: "{{ $labels.instance }} has had a newer kernel or GPU driver installed for over a day — reboot it"
 
       - alert: ServicesNeedRestart
         expr: labber_restart_required_services > 0
@@ -132,18 +132,20 @@ groups:
           summary: "Disk {{ $labels.mountpoint }} on {{ $labels.instance }} will be full within a day at the rate of the last 6 h"
 
       # a physical disk on a Proxmox host writes far more than usual: a runaway process wearing out
-      # an SSD. Hosts only: guests see virtual disks, and LXCs see the host's disks again
+      # an SSD. Hosts only: guests see virtual disks, and LXCs see the host's disks again.
+      # Per disk serial, hour by hour: kernel names (nvme0n1, sda) can swap at a reboot (topk: old
+      # and new disk info overlap for a few minutes after it)
       - alert: DiskWritesSurge
         expr: |
-          increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1d]) > 50e9
+          avg_over_time((max by (instance, serial, model) (rate(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1h]) * on (instance, device) group_left (serial, model) topk by (instance, device) (1, node_disk_info)))[1d:1h]) * 86400 > 50e9
           and
-          increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1d])
-            > 3 * increase(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[7d] offset 1d) / 7
+          avg_over_time((max by (instance, serial, model) (rate(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1h]) * on (instance, device) group_left (serial, model) topk by (instance, device) (1, node_disk_info)))[1d:1h])
+            > 3 * avg_over_time((max by (instance, serial, model) (rate(node_disk_written_bytes_total{job="proxmox-node-exporters", device=~"nvme[0-9]+n[0-9]+|sd[a-z]+"}[1h]) * on (instance, device) group_left (serial, model) topk by (instance, device) (1, node_disk_info)))[7d:1h] offset 1d)
         for: 1h
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.instance }} {{ $labels.device }} wrote {{ $value | humanize1024 }}B in 24 h, over 3× its usual day"
+          summary: "{{ $labels.instance }} {{ $labels.model }} ({{ $labels.serial }}) wrote {{ $value | humanize1024 }}B in 24 h, over 3× its usual day"
 
       - alert: SmartDriveWear
         expr: smartctl_device_percentage_used > 80

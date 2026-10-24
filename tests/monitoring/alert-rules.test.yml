@@ -110,7 +110,7 @@ tests:
               severity: info
               instance: vm1
             exp_annotations:
-              summary: "vm1 has had a newer kernel installed for over a day — reboot it"
+              summary: "vm1 has had a newer kernel or GPU driver installed for over a day — reboot it"
 
   # a failed unit for 15 minutes
   - interval: 1m
@@ -397,18 +397,38 @@ tests:
           - exp_labels: {severity: warning, reason: per_stream_rate_limit}
             exp_annotations: {summary: "Loki rejected 45 log lines in 15 minutes (per_stream_rate_limit)"}
 
-  # DiskWritesSurge (hosts only): 8 days at 10 GB/day, then 100 GB/day → warning; a disk that
-  # always writes 100 GB/day is normal for it; partitions and guests' (virtual) disks are ignored
-  - interval: 1h
+  # DiskWritesSurge (hosts only, per disk serial): 8 days at 10 GB/day, then 100 GB/day → warning;
+  # a disk that always writes 100 GB/day is normal for it; partitions and guests' (virtual) disks
+  # are ignored; two disks swapping kernel names at a reboot (host r) → nothing
+  - interval: 15m   # a 1 h rate needs two samples in the hour
     input_series:
       - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="nvme0n1"}'
-        values: '0+416666667x192 80000000064+4166666667x48'
+        values: '0+104166667x768 80000000256+1041666667x192'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="h",device="nvme0n1",serial="S1",model="M1"}'
+        values: '1x960'
       - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="sda"}'
-        values: '0+4166666667x240'
+        values: '0+1041666667x960'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="h",device="sda",serial="S2",model="M2"}'
+        values: '1x960'
       - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="h",device="nvme0n1p3"}'
-        values: '0+416666667x192 80000000064+4166666667x48'
+        values: '0+104166667x768 80000000256+1041666667x192'
       - series: 'node_disk_written_bytes_total{job="guest-node-exporters",instance="vm",device="sda"}'
-        values: '0+416666667x192 80000000064+4166666667x48'
+        values: '0+104166667x768 80000000256+1041666667x192'
+      - series: 'node_disk_info{job="guest-node-exporters",instance="vm",device="sda",serial="V1",model="QEMU"}'
+        values: '1x960'
+      # host r: the quiet disk (A) was nvme0n1 and the busy one (B) nvme1n1; after a reboot at 8d, swapped
+      - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="r",device="nvme0n1"}'
+        values: '0+104166667x768 0+1041666667x192'
+      - series: 'node_disk_written_bytes_total{job="proxmox-node-exporters",instance="r",device="nvme1n1"}'
+        values: '0+1041666667x768 0+104166667x192'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="r",device="nvme0n1",serial="A",model="MA"}'
+        values: '1x768 _x192'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="r",device="nvme1n1",serial="B",model="MB"}'
+        values: '1x768 _x192'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="r",device="nvme0n1",serial="B",model="MB"}'
+        values: '_x768 1x192'
+      - series: 'node_disk_info{job="proxmox-node-exporters",instance="r",device="nvme1n1",serial="A",model="MA"}'
+        values: '_x768 1x192'
     alert_rule_test:
       - eval_time: 7d
         alertname: DiskWritesSurge
@@ -416,8 +436,8 @@ tests:
       - eval_time: 8d20h
         alertname: DiskWritesSurge
         exp_alerts:
-          - exp_labels: {severity: warning, job: proxmox-node-exporters, instance: h, device: nvme0n1}
-            exp_annotations: {summary: "h nvme0n1 wrote 78.15GiB in 24 h, over 3× its usual day"}
+          - exp_labels: {severity: warning, instance: h, serial: S1, model: M1}
+            exp_annotations: {summary: "h M1 (S1) wrote 79.16GiB in 24 h, over 3× its usual day"}
 
   # HighMemory: a level held for 30 min, not a spike. A VM at 95% for 40 min → warning; one
   # touching 95% for 10 min → nothing; an LXC (from pve-exporter) at 95% → warning, named by

@@ -3,11 +3,18 @@
 # restart needed, are security updates stuck, do services have updates?
 # Writes metrics to /var/lib/labber/metrics/labber.prom (pushed by Alloy).
 set -u
-kernel=0 services=0 security=0
-# the kernel only matters in a VM; an LXC runs the host's kernel
+kernel=0 driver=0 services=0 security=0
+# the kernel and its modules only matter in a VM; an LXC runs the host's kernel
 if ! systemd-detect-virt -cq 2>/dev/null; then
     newest=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
     [[ -n "$newest" && "$newest" != "$(uname -r)" ]] && kernel=1
+    # an updated NVIDIA driver: its libraries refuse the old module still loaded
+    nv_proc="${LABBER_NVIDIA_PROC:-/proc/driver/nvidia/version}"
+    if [[ -r "$nv_proc" ]]; then
+        loaded=$(grep -m1 -oE '[0-9]{3}\.[0-9]+(\.[0-9]+)?' "$nv_proc")
+        on_disk=$(modinfo -F version nvidia 2>/dev/null)
+        [[ -n "$loaded" && -n "$on_disk" && "$loaded" != "$on_disk" ]] && driver=1
+    fi
 fi
 if command -v needrestart >/dev/null; then
     services=$(needrestart -b -r l 2>/dev/null | grep -c '^NEEDRESTART-SVC:' || true)
@@ -35,9 +42,12 @@ flock 9
 tmp=$(mktemp "$dir/.labber.prom.XXXXXX") || exit 1
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp" <<PROM
-# HELP labber_reboot_required 1 when a newer kernel is installed than the one running
+# HELP labber_reboot_required 1 when a newer kernel or GPU driver is installed than the one running
 # TYPE labber_reboot_required gauge
-labber_reboot_required $kernel
+labber_reboot_required $(( kernel | driver ))
+# HELP labber_gpu_driver_outdated 1 when the loaded NVIDIA module is older than the installed driver
+# TYPE labber_gpu_driver_outdated gauge
+labber_gpu_driver_outdated $driver
 # HELP labber_restart_required_services services still running outdated libraries
 # TYPE labber_restart_required_services gauge
 labber_restart_required_services $services

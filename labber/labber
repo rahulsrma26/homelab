@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.3"
+VERSION="4.4.4"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"

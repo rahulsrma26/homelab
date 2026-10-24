@@ -586,6 +586,33 @@ EOF
     [ "$(st_healthcheck_status)" = "todo: newer check script" ]
 }
 
+@test "health check: an updated NVIDIA driver with the old module loaded means reboot (VMs only)" {
+    [ "$EUID" -eq 0 ] || skip "needs root"
+    apt_install() { :; }; systemctl() { :; }
+    st_healthcheck_run >/dev/null
+    f=/var/lib/labber/metrics/labber.prom
+    # fake a VM with a loaded module and an installed driver version
+    stub="$T/stub"; mkdir -p "$stub"
+    printf '#!/bin/sh\nexit 1\n' > "$stub/systemd-detect-virt"
+    printf '#!/bin/sh\necho "$ON_DISK"\n' > "$stub/modinfo"
+    chmod +x "$stub"/*
+    echo "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  595.91.07  Release Build  (dvs-builder@U22)" > "$T/nvidia-version"
+    check() { PATH="$stub:$PATH" LABBER_NVIDIA_PROC="$T/nvidia-version" ON_DISK="$1" "$HEALTH_BIN"; }
+    check 595.112.07
+    grep -qx 'labber_gpu_driver_outdated 1' "$f"
+    grep -qx 'labber_reboot_required 1' "$f"
+    run /etc/update-motd.d/95-labber-health
+    [[ "$output" == *"NVIDIA driver was updated"* ]]
+    # same version, or no module on disk to compare with → nothing
+    check 595.91.07
+    grep -qx 'labber_gpu_driver_outdated 0' "$f"
+    check ""
+    grep -qx 'labber_gpu_driver_outdated 0' "$f"
+    # no NVIDIA module loaded at all → nothing
+    PATH="$stub:$PATH" LABBER_NVIDIA_PROC="$T/none" ON_DISK=595.112.07 "$HEALTH_BIN"
+    grep -qx 'labber_gpu_driver_outdated 0' "$f"
+}
+
 @test "gpu metrics: only with nvidia-smi; nvidia-smi output becomes Prometheus metrics" {
     [ "$EUID" -eq 0 ] || skip "needs root"
     bin=$(mktemp -d)
