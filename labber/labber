@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.6"
+VERSION="4.4.7"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1007,11 +1007,6 @@ fill_env_placeholders() {
     local env="$1" keys
     mapfile -t keys < <(env_placeholders "$env")
     (( ${#keys[@]} > 0 )) || return 0
-    if ! interactive; then
-        warn "$env has ${#keys[@]} unset value(s) — run labber interactively to fill them"
-        return 0
-    fi
-
     # each name once, in order of appearance (the first occurrence's function wins)
     local -A func arg value
     local order=() k name f a
@@ -1021,6 +1016,24 @@ fill_env_placeholders() {
             func[$name]="${f:-required}"; arg[$name]="$a"; order+=("$name")
         done < <(tpl_list "$(env_get "$env" "$k")")
     done
+
+    if ! interactive; then
+        # no one to ask: a default(...) is what Enter would keep, so it's filled in; anything
+        # needing an answer (required, a choice, a secret to generate) stays for a terminal
+        local filled=() val n
+        for n in "${order[@]}"; do [[ "${func[$n]}" == default ]] && { value[$n]="${arg[$n]}"; filled+=("$n"); }; done
+        if (( ${#filled[@]} )); then
+            for k in "${keys[@]}"; do
+                val=$(env_get "$env" "$k")
+                for n in "${filled[@]}"; do val=$(tpl_fill "$val" "$n" "${value[$n]}"); done
+                env_set "$env" "$k" "$val"
+            done
+            info "filled in the defaults of ${filled[*]}"
+        fi
+        mapfile -t keys < <(env_placeholders "$env")
+        (( ${#keys[@]} == 0 )) || warn "$env has ${#keys[@]} unset value(s) — run labber interactively to fill them"
+        return 0
+    fi
     echo; info "${#order[@]} value(s) to fill in for $env"
 
     # secrets: offer to generate them all at once

@@ -1152,3 +1152,19 @@ make_repo() {   # a local git repo with services/<name>/, served as file://
     run check_env_pins "$d" </dev/null
     [ -z "$output" ]
 }
+
+@test "fill_env_placeholders without a terminal: defaults filled in, anything needing an answer left" {
+    e="$T/env"
+    printf 'A={{ a | default(telegram) }}\nB={{ b | default() }}\nC={{ c }}\nD={{ d | choice(x,y) }}\nE={{ e | generate(hex64) }}\nF=keep\nG=http://{{ g_host }}:{{ g_port | default(80) }}\n' > "$e"
+    run fill_env_placeholders "$e" </dev/null
+    [ "$status" -eq 0 ]
+    [ "$(env_get "$e" A)" = telegram ]
+    [ "$(env_get "$e" B)" = "" ]
+    [ "$(env_get "$e" C)" = "{{ c }}" ]                       # required: stays for a terminal
+    [ "$(env_get "$e" D)" = "{{ d | choice(x,y) }}" ]         # a choice: stays
+    [ "$(env_get "$e" E)" = "{{ e | generate(hex64) }}" ]     # a secret: never made without asking
+    [ "$(env_get "$e" F)" = keep ]
+    [ "$(env_get "$e" G)" = "http://{{ g_host }}:80" ]        # the default part of a mixed value
+    [[ "$output" == *"filled in the defaults of a b g_port"* ]]
+    [[ "$output" == *"4 unset value(s)"* ]]
+}
