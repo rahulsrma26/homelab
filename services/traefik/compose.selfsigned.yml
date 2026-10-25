@@ -1,0 +1,48 @@
+# selfsigned mode: lan without a certificate request — Traefik's own self-signed certificate,
+# no DNS token (test setups). See docker-compose.yml.
+services:
+  # hashes DASHBOARD_PASSWORD for the dashboard login on every start
+  dashboard-auth:
+    image: httpd:${HTTPD_VERSION:-2.4-alpine}
+    container_name: traefik-dashboard-auth
+    restart: "no"
+    environment:
+      - DASHBOARD_PASSWORD=${DASHBOARD_PASSWORD}
+    entrypoint: ["sh", "-c", 'test -n "$$DASHBOARD_PASSWORD" && htpasswd -nbB admin "$$DASHBOARD_PASSWORD" > /auth/dashboard']
+    volumes:
+      - ./auth:/auth
+    network_mode: none
+
+  traefik:
+    depends_on:
+      dashboard-auth:
+        condition: service_completed_successfully
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    command:
+      - --global.checkNewVersion=false
+      - --global.sendAnonymousUsage=false
+      - --ping=true                      # /ping on the internal :8080, for the health check
+      - --entrypoints.traefik.address=:8080                      # that internal entry point, declared…
+      - --entrypoints.traefik.http.aliasHeadersStrategy=delete   # …with the same header rule as the others
+      - --log.level=INFO
+      - --accesslog=true
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      # drop look-alike headers (X_Forwarded_For for X-Forwarded-For)
+      - --entrypoints.web.http.aliasHeadersStrategy=delete
+      - --entrypoints.websecure.http.aliasHeadersStrategy=delete
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      # no 60 s limit on uploads (Traefik v3's default)
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
+      - --entrypoints.websecure.http.tls=true   # no resolver: Traefik's default self-signed certificate
+      - --api.dashboard=true
+    volumes:
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - ./auth:/etc/traefik/auth:ro

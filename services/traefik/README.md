@@ -1,13 +1,14 @@
 # traefik
 
-Reverse proxy in one of two **modes**, chosen when labber installs it (`traefik_mode` → `COMPOSE_FILE` in `.env`):
+Reverse proxy in one of three **modes**, chosen when labber installs it (`traefik_mode` → `COMPOSE_FILE` in `.env`):
 
 | Mode | For | Routes from | TLS | Files |
 |---|---|---|---|---|
 | **`lan`** | the homelab's own proxy, for LAN + Tailscale clients | files in `dynamic/` (no Docker socket: the apps run in other LXCs/VMs) | one wildcard certificate `*.DOMAIN`, Let's Encrypt DNS-01 at Cloudflare; nothing public | `docker-compose.yml` + `compose.lan.yml` |
 | **`cf`** | the **public** entry point behind a Cloudflare Tunnel, for the few public services | Docker labels, via a read-only socket proxy | Cloudflare terminates TLS | `docker-compose.yml` + `compose.cf.yml` |
+| **`selfsigned`** | a **test** proxy: like `lan`, but holding no DNS token | files in `dynamic/`, as `lan` | Traefik's own self-signed certificate (browsers warn; `curl -k`) | `docker-compose.yml` + `compose.selfsigned.yml` |
 
-`docker-compose.yml` holds what both share; Compose merges it with the mode's file. To switch modes, change `COMPOSE_FILE` in `.env` and run `labber traefik rebuild`: containers of the other mode are removed.
+`docker-compose.yml` holds what all modes share; Compose merges it with the mode's file. To switch modes, change `COMPOSE_FILE` in `.env` and run `labber traefik rebuild`: containers of the other mode are removed.
 
 Upgrading an install from before the split (it had no `.env`): the next `labber traefik update` creates `.env` and asks `traefik_mode`. Answer **`cf`** for the public proxy, then press Enter for the three lan-only values.
 
@@ -42,6 +43,8 @@ Every web app gets a name `<name>.home.<domain>` with HTTPS, from one wildcard c
 | `dynamic/` | routes and middlewares (yours to edit) |
 | `letsencrypt/` | the certificate and ACME account (`acme.json`) |
 | `auth/` | the dashboard's hashed password, written at each start from `.env` |
+
+**`selfsigned`:** the same, without the certificate request: no `CF_DNS_API_TOKEN`, no `ACME_EMAIL`, no `letsencrypt/`. For a test proxy that shouldn't hold a token able to change the zone's DNS (Cloudflare tokens can't be limited to a sub-domain). Its local DNS and the public TXT record work as for `lan`.
 
 ---
 

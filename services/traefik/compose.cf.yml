@@ -71,6 +71,8 @@ services:
       - --global.checkNewVersion=false
       - --global.sendAnonymousUsage=false
       - --ping=true                      # /ping on the internal :8080, for the health check
+      - --entrypoints.traefik.address=:8080                      # that internal entry point, declared…
+      - --entrypoints.traefik.http.aliasHeadersStrategy=delete   # …with the same header rule as the others
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxy
