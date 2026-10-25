@@ -98,7 +98,7 @@ while IFS= read -r compose; do
         [[ "$img" == *@sha256:* ]] && continue
         name=${img##*/}
         if [[ "$name" != *:* ]]; then err "$compose:$line" "image $img has no version — pin a tag (\${NAME_VERSION:-x.y.z})"
-        elif [[ "${name##*:}" =~ ^(latest|stable|release|nightly|edge|main|master|dev|develop|beta|rolling)$ ]]; then
+        elif [[ "${name##*:}" =~ ^(latest|stable|release|nightly|edge|main|master|dev|develop|beta|rolling)$ || ! "${name##*:}" =~ [0-9] ]]; then
             err "$compose:$line" "image $img is :${name##*:}, a moving tag — pin a version (\${NAME_VERSION:-x.y.z})"; fi
     done < <(awk '
         function flush() { if (img != "" && !built) print iline "\t" img; img = ""; built = 0 }
@@ -111,6 +111,10 @@ while IFS= read -r compose; do
             img = v; iline = NR
         }
         END { flush() }' "$compose")
+    # a version variable must be the whole tag: ${X_VERSION:-v3}-openvino can't carry a digest
+    while IFS=: read -r line rest; do
+        err "$compose:$line" "a version variable with text after it can't be pinned to a digest — give that image its own variable"
+    done < <(grep -nE '^[[:space:]]+image:.*\$\{[A-Za-z0-9_]+:-[^}]*\}[^[:space:]"'"'"']' "$compose")
 done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml')
 
 fi   # tree-only checks

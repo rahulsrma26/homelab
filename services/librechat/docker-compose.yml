@@ -63,7 +63,7 @@ services:
 
   # ── Database ──────────────────────────────────────────────────────────────────
   mongodb:
-    image: mongo:8.0.20
+    image: mongo:${MONGO_VERSION:-8.0.20}
     container_name: librechat-mongodb
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
@@ -78,7 +78,7 @@ services:
 
   # ── Search ────────────────────────────────────────────────────────────────────
   meilisearch:
-    image: getmeili/meilisearch:v1.35.1
+    image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.35.1}
     container_name: librechat-meilisearch
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"

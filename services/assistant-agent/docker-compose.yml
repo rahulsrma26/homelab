@@ -6,7 +6,7 @@ services:
   # reasoning=off is required — otherwise Gemma starts answers with its thinking.
   # The MTP head (draft-mtp) speeds up generation without changing the output.
   llama-cpp:
-    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda}
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda-b11870}
     container_name: assistant-llama
     restart: unless-stopped
     command: --host 0.0.0.0 --port 5050

@@ -1,6 +1,6 @@
 services:
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:${GRAFANA_VERSION:-11.4.0}
     container_name: grafana
     restart: unless-stopped
     healthcheck:
@@ -24,7 +24,7 @@ services:
       - influxdb
 
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.1.0}
     container_name: prometheus
     restart: unless-stopped
     healthcheck:
@@ -55,7 +55,7 @@ services:
       - ./config/prometheus:/etc/prometheus
 
   loki:
-    image: grafana/loki:3.7.0
+    image: grafana/loki:${LOKI_VERSION:-3.7.0}
     container_name: loki
     restart: unless-stopped
     ports:
@@ -67,7 +67,7 @@ services:
       - ./config/loki/loki-config.yml:/etc/loki/loki-config.yml
 
   influxdb:
-    image: influxdb:2.7
+    image: influxdb:${INFLUXDB_VERSION:-2.7}
     container_name: influxdb
     restart: unless-stopped
     healthcheck:
@@ -90,7 +90,7 @@ services:
       - influxdb-data:/var/lib/influxdb2
 
   alertmanager:
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:${ALERTMANAGER_VERSION:-v0.27.0}
     container_name: alertmanager
     restart: unless-stopped
     healthcheck:
@@ -115,7 +115,7 @@ services:
       - alertmanager-data:/alertmanager
 
   pve-exporter:
-    image: prompve/prometheus-pve-exporter:3.5.1
+    image: prompve/prometheus-pve-exporter:${PVE_EXPORTER_VERSION:-3.5.1}
     container_name: pve-exporter
     restart: unless-stopped
     healthcheck:

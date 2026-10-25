@@ -1,6 +1,6 @@
 services:
   llama-cpp:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda13
+    image: ghcr.io/ggml-org/llama.cpp:${LLAMA_CPP_VERSION:-server-cuda13-b11870}
     container_name: llama-cpp
     restart: unless-stopped
     command: -hf ${MODEL} --host 0.0.0.0 --port 8080

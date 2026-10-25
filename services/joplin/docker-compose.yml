@@ -2,7 +2,7 @@
 # service folder (PBS) or a pg_dumpall.
 services:
   joplin-db:
-    image: postgres:16-alpine
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
     container_name: joplin-db
     restart: unless-stopped
     environment:

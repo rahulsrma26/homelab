@@ -42,11 +42,13 @@ services:
 YML
     run bash tests/repo/lint.sh
     [ "$status" -eq 0 ]
-    printf '  moving:\n    image: example/moving:latest\n  chan:\n    image: example/chan:stable\n  bare:\n    image: example/bare\n  defaulted:\n    image: example/def:${DEF_VERSION:-latest}\n' >> services/demo/docker-compose.yml
+    printf '  moving:\n    image: example/moving:latest\n  chan:\n    image: example/chan:stable\n  flavour:\n    image: example/flav:alpine\n  suffixed:\n    image: example/ml:${ML_VERSION:-v3}-openvino\n  bare:\n    image: example/bare\n  defaulted:\n    image: example/def:${DEF_VERSION:-latest}\n' >> services/demo/docker-compose.yml
     run bash tests/repo/lint.sh
     [ "$status" -eq 1 ]
     [[ "$output" == *"image example/moving:latest is :latest, a moving tag"* ]]
     [[ "$output" == *"image example/chan:stable is :stable, a moving tag"* ]]
+    [[ "$output" == *"image example/flav:alpine is :alpine, a moving tag"* ]]
+    [[ "$output" == *"a version variable with text after it can't be pinned to a digest"* ]]
     [[ "$output" == *"image example/bare has no version"* ]]
     [[ "$output" == *"image example/def:latest is :latest, a moving tag"* ]]
     [[ "$output" != *"example/app"* && "$output" != *"example/tool"* && "$output" != *"postgres"* && "$output" != *"demo-local"* ]]

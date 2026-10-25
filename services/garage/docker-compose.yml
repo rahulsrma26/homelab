@@ -2,7 +2,7 @@
 # Actions artifacts, logs and packages). Path-style requests only.
 services:
   garage:
-    image: dxflrs/garage:v2.4.1
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.4.1}
     container_name: garage
     restart: unless-stopped
     user: "${PUID}:${PGID}"
