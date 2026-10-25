@@ -8,7 +8,8 @@
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/../.." && pwd)"
-loki_image=$(sed -n 's/^ *image: *\(grafana\/loki:[^ ]*\).*/\1/p' "$repo/services/monitoring/docker-compose.yml")
+# the image as the template pins it (grafana/loki:${LOKI_VERSION:-x.y.z} → grafana/loki:x.y.z)
+loki_image=$(sed -nE 's/^ *image: *(grafana\/loki):(\$\{[A-Z_]+:-([^}]+)\}|([^ ]+)).*/\1:\3\4/p' "$repo/services/monitoring/docker-compose.yml")
 alloy_image=grafana/alloy:v1.20.1     # as in tests/labber/run-unit.sh
 net="loglimits-$$" out=$(mktemp -d)
 cleanup() { docker rm -f "loki-$$" "alloy-$$" "flood-$$" "quiet-$$" "noise-$$" >/dev/null 2>&1 || true
