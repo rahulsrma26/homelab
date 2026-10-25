@@ -59,6 +59,7 @@ pvesh get /nodes/$(hostname)/hardware/pci --pci-class-blacklist ""   # the GPU +
 | Machine | q35 | PCIe passthrough |
 | BIOS | OVMF (UEFI) | |
 | CPU type | host | passes the CPU's flags; also fixes OVMF's MMIO sizing for large VRAM, so no `X-PciMmio64Mb` workaround |
+| Memory | ballooning off (`balloon: 0`) | a passed-through device needs all guest memory pinned |
 | PCI device | **All Functions** + **PCI-Express** | the GPU and its audio together |
 
 ## Per GPU generation
@@ -67,7 +68,24 @@ pvesh get /nodes/$(hostname)/hardware/pci --pci-class-blacklist ""   # the GPU +
 |---|---|---|
 | `disable_idle_d3=1` | **needed**: `options vfio-pci ids=… disable_idle_d3=1`, or the GPU falls into D3cold and disappears between VM starts | not known to be needed; add only if the GPU becomes inaccessible |
 | VM: ROM-Bar / Primary GPU | **both off** | try on first |
-| Guest driver | the **open** kernel module (e.g. `nvidia-driver-*-open`): required for Blackwell | the standard `nvidia` driver |
+| Guest driver | the **open** kernel module (e.g. `nvidia-driver-*-open`): required for Blackwell | the **open** kernel module too (supported since Turing; NVIDIA's default) |
+
+## Guest driver (Debian 13)
+
+Debian's own `nvidia-driver` is an older branch (550, CUDA ≤ 12.4): recent CUDA 13 images and inference servers need a newer driver. NVIDIA's Debian repository has current branches; pin one so updates stay within it:
+
+```bash
+curl -fsSLO https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb && sudo apt update
+sudo apt install linux-headers-$(uname -r) nvidia-driver-pinning-<branch>   # e.g. 595
+sudo apt install nvidia-driver-cuda nvidia-kernel-open-dkms                  # headless; DKMS rebuilds it on kernel updates
+sudo reboot
+nvidia-smi
+```
+
+Coming from Debian's driver: purge its `nvidia*`, `libnvidia*` and `libcuda*` packages first (keep `libnvidia-container*` and `nvidia-container-toolkit*`). For Docker: install `nvidia-container-toolkit`, run `sudo nvidia-ctk runtime configure --runtime=docker`, restart Docker, check with `docker run --rm --gpus all ubuntu:24.04 nvidia-smi -L`.
+
+**After a driver change, recreate GPU containers** (`docker compose up -d --force-recreate`): a container created under an older driver can keep the toolkit's CUDA forward-compatibility library, which the newer driver rejects ("unsupported display driver / cuda driver combination"); apps such as llama.cpp then silently fall back to the CPU.
 
 ## Troubleshooting
 
