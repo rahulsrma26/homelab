@@ -1135,3 +1135,20 @@ make_repo() {   # a local git repo with services/<name>/, served as file://
     [[ "$output" == *"could not fetch file://$T/nowhere:"*"repository"* ]]
     [ -z "$(find /tmp -maxdepth 1 -name 'homelab-deploy-*' -newer "$T" 2>/dev/null)" ]   # no temp dirs left
 }
+
+@test "check_env_pins: a version left in .env that overrides the template's pin is named, never removed silently" {
+    d="$T/svc/demo"; mkdir -p "$d"
+    printf 'services:\n  app:\n    image: example/app:${APP_VERSION:-1.2.3}\n  b:\n    build: .\n    image: local:${LOCAL_VERSION:-v1}\n  c:\n    image: example/c:${C_VERSION:-2.0}\n' > "$d/docker-compose.yml"
+    printf 'PORT=1\nLOCAL_VERSION=v1\n' > "$d/.env.example"
+    printf 'PORT=1\nAPP_VERSION=latest\nLOCAL_VERSION=v2\nC_VERSION=\n' > "$d/.env"
+    run check_env_pins "$d" </dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"APP_VERSION=latest (the template pins 1.2.3)"* ]]     # stale: named, with the pin
+    [[ "$output" != *"LOCAL_VERSION"* ]]                                     # still a template setting
+    [[ "$output" != *"C_VERSION"* ]]                                         # empty: the pin applies
+    [[ "$output" == *"delete APP_VERSION from $d/.env"* ]]
+    grep -qx 'APP_VERSION=latest' "$d/.env"                                  # not removed without asking
+    printf 'PORT=1\nLOCAL_VERSION=v2\n' > "$d/.env"
+    run check_env_pins "$d" </dev/null
+    [ -z "$output" ]
+}

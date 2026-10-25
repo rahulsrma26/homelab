@@ -88,6 +88,7 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
     volumes:
       - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2     # the CLI config (otherwise a new anonymous volume at each recreate)
 
   alertmanager:
     image: prom/alertmanager:${ALERTMANAGER_VERSION:-v0.27.0}
@@ -134,4 +135,5 @@ volumes:
   prometheus-data:
   loki-data:
   influxdb-data:
+  influxdb-config:
   alertmanager-data:

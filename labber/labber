@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.5"
+VERSION="4.4.6"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -966,6 +966,31 @@ sync_env_keys() {
     (( ${#added[@]} == 0 )) || info "added new settings from .env.example: ${added[*]}"
 }
 
+# a version left in .env that the template no longer sets there (it pins it in compose
+# instead) overrides the pin, so the service never follows the template: say so, and
+# offer to remove it (only when asked interactively; never removed without asking)
+check_env_pins() {
+    local dir="$1" svc; svc=$(basename "$dir")
+    [[ -f "$dir/.env" && -f "$dir/.env.example" ]] || return 0
+    local k v def stale=() shown=()
+    while IFS= read -r k; do
+        grep -qE "^[[:space:]]*${k}=" "$dir/.env.example" && continue      # still a setting of the template
+        v=$(env_get "$dir/.env" "$k"); [[ -n "$v" ]] || continue
+        def=$(cat "$dir"/*compose*.yml 2>/dev/null | grep -oE "\\\$\\{${k}:-[^}]*\\}" | head -1)
+        [[ -n "$def" ]] || continue
+        def=${def#*:-}; def=${def%\}}
+        stale+=("$k"); shown+=("$k=$v (the template pins ${def%%@*})")
+    done < <(grep -oE '^[[:space:]]*[A-Z0-9_]+_(VERSION|IMAGE)=' "$dir/.env" | tr -d ' =')
+    (( ${#stale[@]} )) || return 0
+    warn ".env overrides the template's pinned version: ${shown[*]}"
+    if interactive && yesno "remove ${stale[*]} from .env, so $svc follows the template?" y; then
+        for k in "${stale[@]}"; do sed -i "/^[[:space:]]*${k}=/d" "$dir/.env"; done
+        ok "removed ${stale[*]} from .env"
+    else
+        info "to follow the template: delete ${stale[*]} from $dir/.env, then: labber $svc update"
+    fi
+}
+
 # keys in .env whose value still contains a placeholder, one per line
 env_placeholders() {
     local file="$1" line key
@@ -1203,6 +1228,7 @@ check_ports() {
 preflight() {
     local dir="$1" fill="${2:-}" cfg
     sync_env_keys "$dir" || return 1
+    check_env_pins "$dir"
     if [[ -f "$dir/.env" && "$fill" != --no-fill ]]; then fill_env_placeholders "$dir/.env"; fi
     cfg=$(compose_cfg "$dir")
     protect_env "$dir" "$cfg" || { warn "could not protect $dir/.env"; return 1; }
