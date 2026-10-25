@@ -5,7 +5,7 @@ Services:
   prometheus    :9090  Metrics storage (90d retention, 20GB cap)
   loki          :3100  Log aggregation (30d retention)
   influxdb      :8086  Time-series storage for Home Assistant (365d retention)
-  alertmanager  :9093  Alert routing to Telegram (Docker network only)
+  alertmanager  :9093  Alert routing to Telegram or ntfy (Docker network only)
   pve-exporter  :9221  Proxmox API metrics for Prometheus (Docker network only)
 
 Check the stack (on its host, in this folder): ./tester
@@ -40,6 +40,9 @@ Alerts to Telegram (config/alertmanager/alertmanager.yml), two chats, three leve
   info      the quiet chat, in one digest at 15:00 UTC, then weekly: routine (reboot due,
             services to restart, an update available, disk 80 %, high CPU, a stopped container)
   Without TELEGRAM_MANAGER_* set, everything goes to the loud chat.
+  ALERT_TARGET=ntfy instead: the same levels and timing, to one ntfy topic (NTFY_URL,
+  NTFY_TOPIC, NTFY_TOKEN: a send-only token, see services/ntfy); critical with the top
+  priority. The routes stay in alertmanager.yml; receivers-ntfy.yml replaces its receivers.
   Alerts appear in Grafana right away, whatever their delivery time. Alertmanager is
   private to the stack; a future authenticated proxy needs a private path to it.
   HostNotReporting stays active for up to one day after a host's last sample. After

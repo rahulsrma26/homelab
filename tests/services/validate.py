@@ -13,6 +13,7 @@ from forgejo import check_forgejo
 from garage import check_garage
 from forgejo_s3 import check_forgejo_s3
 from vaultwarden import check_vaultwarden
+from ntfy import check_ntfy
 
 
 TEMPLATE = re.compile(
@@ -159,6 +160,7 @@ def checks(repo, root):
     check_garage(configurations["garage"], root, environment, run)
     check_forgejo_s3(variants["forgejo"], configurations["garage"], root, environment, run)
     check_vaultwarden(configurations["vaultwarden"], root, environment, run)
+    check_ntfy(configurations["ntfy"], root, environment, run)
 
 
 if __name__ == "__main__":

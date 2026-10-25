@@ -1,0 +1,17 @@
+# ALERT_TARGET=ntfy: these receivers replace alertmanager.yml's (its routes stay as they are).
+# One ntfy topic; critical with the top priority, the rest normal.
+receivers:
+  - name: 'critical'
+    webhook_configs:
+      - url: '${NTFY_URL}/${NTFY_TOPIC}?template=alertmanager&priority=5&tags=rotating_light'
+        send_resolved: true
+        http_config:
+          authorization:
+            credentials: '${NTFY_TOKEN}'
+  - name: 'manager'
+    webhook_configs:
+      - url: '${NTFY_URL}/${NTFY_TOPIC}?template=alertmanager&priority=3'
+        send_resolved: true
+        http_config:
+          authorization:
+            credentials: '${NTFY_TOKEN}'

@@ -101,18 +101,33 @@ services:
       retries: 3
       start_period: 30s
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ALERT_TARGET=${ALERT_TARGET:-telegram}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
       - TELEGRAM_MANAGER_BOT_TOKEN=${TELEGRAM_MANAGER_BOT_TOKEN:-}
       - TELEGRAM_MANAGER_CHAT_ID=${TELEGRAM_MANAGER_CHAT_ID:-}
-    # fills the Telegram settings into the config; the quiet chat falls back to the loud one
+      - NTFY_URL=${NTFY_URL:-}
+      - NTFY_TOPIC=${NTFY_TOPIC:-alerts}
+      - NTFY_TOKEN=${NTFY_TOKEN:-}
+    # fills the settings into the config: Telegram (the quiet chat falls back to the loud one),
+    # or with ALERT_TARGET=ntfy the receivers from receivers-ntfy.yml (the routes stay the same)
     entrypoint:
       - /bin/sh
       - -c
-      - 'mt="$${TELEGRAM_MANAGER_BOT_TOKEN:-$$TELEGRAM_BOT_TOKEN}"; mc="$${TELEGRAM_MANAGER_CHAT_ID:-$$TELEGRAM_CHAT_ID}"; sed "s|\$${TELEGRAM_MANAGER_BOT_TOKEN}|$$mt|g; s|\$${TELEGRAM_MANAGER_CHAT_ID}|$$mc|g; s|\$${TELEGRAM_BOT_TOKEN}|$$TELEGRAM_BOT_TOKEN|g; s|\$${TELEGRAM_CHAT_ID}|$$TELEGRAM_CHAT_ID|g" /etc/alertmanager/alertmanager.yml.tmpl > /tmp/alertmanager.yml && /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager'
+      - |
+        set -e
+        src=/etc/alertmanager/tmpl/alertmanager.yml
+        if [ "$$ALERT_TARGET" = ntfy ]; then
+          sed '/^receivers:/,$$d' "$$src" > /tmp/routes.yml
+          cat /etc/alertmanager/tmpl/receivers-ntfy.yml >> /tmp/routes.yml
+          src=/tmp/routes.yml
+        fi
+        mt="$${TELEGRAM_MANAGER_BOT_TOKEN:-$$TELEGRAM_BOT_TOKEN}"; mc="$${TELEGRAM_MANAGER_CHAT_ID:-$$TELEGRAM_CHAT_ID}"
+        sed "s|\$${TELEGRAM_MANAGER_BOT_TOKEN}|$$mt|g; s|\$${TELEGRAM_MANAGER_CHAT_ID}|$$mc|g; s|\$${TELEGRAM_BOT_TOKEN}|$$TELEGRAM_BOT_TOKEN|g; s|\$${TELEGRAM_CHAT_ID}|$$TELEGRAM_CHAT_ID|g; s|\$${NTFY_URL}|$$NTFY_URL|g; s|\$${NTFY_TOPIC}|$$NTFY_TOPIC|g; s|\$${NTFY_TOKEN}|$$NTFY_TOKEN|g" "$$src" > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
     user: root
     volumes:
-      - ./config/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml.tmpl:ro
+      - ./config/alertmanager:/etc/alertmanager/tmpl:ro
       - alertmanager-data:/alertmanager
 
   pve-exporter:

@@ -44,3 +44,19 @@ if ! grep -E "start_time: '15:00'" "$am/alertmanager.yml" >/dev/null || ! grep -
     echo "FAIL: the daily digest isn't 15:00 UTC"; exit 1
 fi
 echo "ok   alertmanager: critical → loud chat at once; warning → quiet chat at once; info → quiet chat at the 15:00 UTC digest; quiet falls back to loud"
+# ALERT_TARGET=ntfy: the entrypoint keeps alertmanager.yml's routes and swaps in receivers-ntfy.yml
+cfg="$here/../../services/monitoring/config/alertmanager"
+sed '/^receivers:/,$d' "$cfg/alertmanager.yml" | cat - "$cfg/receivers-ntfy.yml" \
+    | sed "s|\${NTFY_URL}|http://ntfy.test:8080|g; s|\${NTFY_TOPIC}|alerts|g; s|\${NTFY_TOKEN}|tk_test|g" > "$am/alertmanager.yml"
+docker run --rm -v "$am:/a:ro" --entrypoint amtool prom/alertmanager:v0.27.0 check-config /a/alertmanager.yml >/dev/null \
+    || { echo "FAIL: the ntfy variant of alertmanager.yml is invalid"; exit 1; }
+if grep -vE '^[[:space:]]*#' "$am/alertmanager.yml" | grep -qE 'telegram_configs|TELEGRAM|NTFY_[A-Z_]*}'; then echo "FAIL: the ntfy variant still has a Telegram receiver or a placeholder"; exit 1; fi
+for case in critical:critical warning:manager info:manager; do
+    sev=${case%%:*} want=${case#*:}
+    got=$(route "$sev")
+    [[ "$got" == "$want" ]] || { echo "FAIL: ntfy variant: $sev alerts go to '$got', not '$want'"; exit 1; }
+done
+grep -q "alerts?template=alertmanager&priority=5" <(sed -n "/name: 'critical'/,/name: 'manager'/p" "$am/alertmanager.yml") \
+    || { echo "FAIL: ntfy variant: critical isn't sent with the top priority"; exit 1; }
+[[ $(grep -c "credentials: 'tk_test'" "$am/alertmanager.yml") -eq 2 ]] || { echo "FAIL: ntfy variant: a receiver lacks the token"; exit 1; }
+echo "ok   alertmanager (ntfy): the same routes and digest; critical with the top priority; both receivers with the token"

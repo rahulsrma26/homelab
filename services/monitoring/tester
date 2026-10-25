@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks the monitoring stack from its own host: containers, Prometheus (rules, targets, who
-# reports), Loki, Alertmanager (Telegram chats, failed sends), Grafana, InfluxDB.
-# Optionally sends one test alert to each Telegram chat, or shows what takes up the most space.
+# reports), Loki, Alertmanager (Telegram chats or ntfy, failed sends), Grafana, InfluxDB.
+# Optionally sends one test alert to each chat (or ntfy), or shows what takes up the most space.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,7 +13,8 @@ usage() {
     echo "Usage: tester [OPTIONS]   (on the monitoring host, in or next to services/monitoring)"
     echo ""
     echo "  -t, --test-alerts  also send one test alert to each chat (warning → the quiet one,"
-    echo "                     critical → the loud one) and check Telegram accepted them"
+    echo "                     critical → the loud one; with ALERT_TARGET=ntfy both to its topic)"
+    echo "                     and check they were accepted"
     echo "  -s, --size         also list the metrics and labels taking up the most series"
     echo "  -h, --help         this help"
     exit "${1:-0}"
@@ -43,9 +44,11 @@ for r in json.load(sys.stdin)["data"]["result"]:
     m = {k: v for k, v in r["metric"].items() if k != "__name__"}
     print(",".join(f"{k}={v}" for k, v in sorted(m.items())), r["value"][1], sep="\t")' || true
 }
-am_metric() {   # sum of an Alertmanager counter for the telegram integration (requests = every attempt)
+target=$(envget ALERT_TARGET); [[ "$target" == ntfy ]] || target=telegram
+integration=telegram; [[ "$target" == ntfy ]] && integration=webhook
+am_metric() {   # sum of an Alertmanager counter for the delivery integration (requests = every attempt)
     docker exec alertmanager wget -qO- http://localhost:9093/metrics 2>/dev/null \
-        | awk -v m="$1" '$1 ~ "^"m"\\{" && $1 ~ /integration="telegram"/ { s += $2 } END { print s + 0 }'
+        | awk -v m="$1" -v i="integration=\"$integration\"" '$1 ~ "^"m"\\{" && index($1, i) { s += $2 } END { print s + 0 }'
 }
 
 echo "Containers"
@@ -100,6 +103,11 @@ if [[ -z "$rej" || "${rej%%.*}" == 0 ]]; then ok "no lines rejected in the last 
 
 echo "Alertmanager"
 if docker exec alertmanager wget -qO- http://localhost:9093/-/ready >/dev/null 2>&1; then ok "ready"; else bad "not ready"; fi
+if [[ "$target" == ntfy ]]; then
+    hooks=$(docker exec alertmanager grep -c "template=alertmanager" /tmp/alertmanager.yml 2>/dev/null || echo 0)
+    if [[ -n "$(envget NTFY_URL)" && -n "$(envget NTFY_TOKEN)" && "$hooks" -eq 2 ]]; then ok "ntfy: critical (top priority) and warning/info → topic $(envget NTFY_TOPIC)"
+    else bad "ALERT_TARGET=ntfy, but NTFY_URL/NTFY_TOKEN unset or the running config has $hooks ntfy receivers (recreate alertmanager)"; fi
+else
 chats=$(docker exec alertmanager grep -c "bot_token" /tmp/alertmanager.yml 2>/dev/null || echo 0)
 if [[ -n "$(envget TELEGRAM_MANAGER_BOT_TOKEN)" && -n "$(envget TELEGRAM_MANAGER_CHAT_ID)" ]]; then
     if [[ "$chats" -eq 2 ]]; then ok "two chats: critical → loud, warning/info → quiet"
@@ -107,8 +115,9 @@ if [[ -n "$(envget TELEGRAM_MANAGER_BOT_TOKEN)" && -n "$(envget TELEGRAM_MANAGER
 else
     note "TELEGRAM_MANAGER_* not set: warnings and notes go to the loud chat too"
 fi
+fi
 failed=$(am_metric alertmanager_notification_requests_failed_total) sent=$(am_metric alertmanager_notification_requests_total)
-if [[ "$failed" -eq 0 ]]; then ok "Telegram: $sent sends, none failed (since alertmanager started)"; else bad "Telegram: $failed of $sent sends failed (token, chat id, or no internet)"; fi
+if [[ "$failed" -eq 0 ]]; then ok "$target: $sent sends, none failed (since alertmanager started)"; else bad "$target: $failed of $sent sends failed (token, chat id or address, or unreachable)"; fi
 
 echo "Grafana, InfluxDB"
 if curl -fsS http://localhost:3000/api/health 2>/dev/null | grep -q '"database": *"ok"'; then ok "Grafana healthy"; else bad "Grafana not healthy on :3000"; fi
@@ -126,15 +135,15 @@ if $SEND; then
             --alertmanager.url=http://localhost:9093 >/dev/null 2>&1; then
             ok "sent $name ($sev → the $chat chat)"
         else bad "could not send $name"; fi
-    done <<< $'TestWarning warning quiet\nTestCritical critical loud'
-    echo "  ....  waiting up to 90 s for Telegram"
+    done <<< "$([[ $target == ntfy ]] && printf 'TestWarning warning ntfy-normal\nTestCritical critical ntfy-urgent' || printf 'TestWarning warning quiet\nTestCritical critical loud')"
+    echo "  ....  waiting up to 90 s for $target"
     for _ in $(seq 18); do
         sleep 5
         [[ $(( $(am_metric alertmanager_notification_requests_total) - before_sent )) -ge 2 ]] && break
     done
     s=$(( $(am_metric alertmanager_notification_requests_total) - before_sent )); f=$(( $(am_metric alertmanager_notification_requests_failed_total) - before_failed ))
-    if [[ "$f" -gt 0 ]]; then bad "Telegram rejected $f of $s messages (token or chat id)"
-    elif [[ "$s" -ge 2 ]]; then ok "Telegram accepted both: check each chat (they resolve by themselves in ~5 min)"
+    if [[ "$f" -gt 0 ]]; then bad "$target rejected $f of $s messages (token, chat id or address)"
+    elif [[ "$s" -ge 2 ]]; then ok "$target accepted both: check $([[ $target == ntfy ]] && echo "the topic" || echo "each chat") (they resolve by themselves in ~5 min)"
     else bad "only $s of 2 messages went out within 90 s"; fi
 fi
 

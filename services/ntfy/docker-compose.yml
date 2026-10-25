@@ -1,0 +1,59 @@
+# ntfy — a self-hosted inbox for machine messages (alerts, test results): topics read in the
+# web app, or subscribed to in the phone app. Nothing without a login: a web login for you, a
+# send-only token for the services that publish, a read-only token for readers.
+services:
+  # hashes the passwords into the server config on every start (ntfy keeps only bcrypt hashes)
+  ntfy-auth:
+    image: httpd:${HTTPD_VERSION:-2.4-alpine}
+    container_name: ntfy-auth
+    restart: "no"
+    network_mode: none
+    environment:
+      - NTFY_ADMIN_PASSWORD=${NTFY_ADMIN_PASSWORD}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        test -n "$$NTFY_ADMIN_PASSWORD"
+        h() { htpasswd -nbB -C 10 x "$$1" | cut -d: -f2; }
+        rnd() { head -c 24 /dev/urandom | base64; }   # the two service users log in by token only
+        printf 'auth-users:\n  - "admin:%s:admin"\n  - "publisher:%s:user"\n  - "reader:%s:user"\n' \
+          "$$(h "$$NTFY_ADMIN_PASSWORD")" "$$(h "$$(rnd)")" "$$(h "$$(rnd)")" > /config/server.yml
+        chmod 644 /config/server.yml
+    volumes:
+      - ./config:/config
+
+  ntfy:
+    image: binwiederhier/ntfy:${NTFY_VERSION:-v2.34.0}
+    container_name: ntfy
+    restart: unless-stopped
+    user: "${PUID}:${PGID}"
+    command: ["serve"]
+    depends_on:
+      ntfy-auth:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8080/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "${PORT:-8091}:8080"
+    environment:
+      - NTFY_BASE_URL=${NTFY_BASE_URL}
+      - NTFY_LISTEN_HTTP=:8080
+      - NTFY_BEHIND_PROXY=true
+      - NTFY_CACHE_FILE=/var/lib/ntfy/cache.db
+      - NTFY_CACHE_DURATION=${NTFY_KEEP}
+      - NTFY_AUTH_FILE=/var/lib/ntfy/auth.db
+      - NTFY_AUTH_DEFAULT_ACCESS=deny-all
+      - NTFY_ENABLE_LOGIN=true
+      - NTFY_ENABLE_SIGNUP=false
+      - NTFY_AUTH_ACCESS=publisher:*:wo,reader:*:ro
+      - NTFY_AUTH_TOKENS=publisher:${NTFY_PUBLISH_TOKEN}:publish,reader:${NTFY_READ_TOKEN}:read
+      - TZ=${TZ}
+    volumes:
+      - ./data:/var/lib/ntfy
+      - ./config:/etc/ntfy:ro
