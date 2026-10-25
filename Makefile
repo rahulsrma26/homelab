@@ -14,6 +14,9 @@ hooks:
 	git config core.hooksPath .githooks
 	@echo "hooks on: every push runs the repo lint (../lint-denylist.txt or personal/lint-denylist.txt for your own words)"
 
+pull-local:
+	git pull --ff-only forgejo dev
+
 add:
 	git add services && git add labber && git add tools && git add tests && git add README.md && git commit -m "all update" && git push origin dev
 

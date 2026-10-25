@@ -41,7 +41,8 @@ pct start <ID>
 pct enter <ID>
 ```
 
-For a **combined or runner VM**, create a Debian 13 VM: q35, OVMF, CPU `host`,
+For a **combined or runner VM**, create a Debian 13 VM (the default machine type and
+BIOS are fine; q35/OVMF only matter for PCIe passthrough): CPU `host`,
 VirtIO SCSI single with discard, QEMU guest agent, and a server-VLAN NIC. Create an
 admin account during Debian installation. No hypervisor SSH/API credentials or GPU
 are needed for Compose CI.
@@ -140,57 +141,27 @@ trust Traefik's certificate; retain TLS verification.
 
 ## Native runner on the VM
 
-On the combined VM, the `runner/` templates are in the installed Forgejo directory.
-For a separate VM, copy that directory from a trusted checkout first. Run these
-commands with `runner/` in the current directory:
+[`scripts/forgejo-runner`](../scripts/forgejo-runner/README.md) installs, registers and
+updates it. First create the runner in Forgejo: **Settings → Actions → Runners → Create
+new runner**, at repository scope (or your user, for all your repos). Then, on the VM as
+root (`sudo -i` first):
 
 ```bash
-sudo apt update
-sudo apt install -y git make python3 nodejs curl ca-certificates openssh-client
-docker info
-docker compose version
-
-# Extract the Linux binary from the official multi-arch image.
-docker pull data.forgejo.org/forgejo/runner:13.2.0
-runner_image=$(docker create data.forgejo.org/forgejo/runner:13.2.0)
-runner_tmp=$(mktemp -d)
-docker cp "$runner_image:/bin/forgejo-runner" "$runner_tmp/forgejo-runner"
-docker rm -v "$runner_image"
-sudo install -m 755 "$runner_tmp/forgejo-runner" /usr/local/bin/forgejo-runner
-rm -rf "$runner_tmp"
-forgejo-runner --version
-
-# Create the dedicated user only on the first installation.
-sudo useradd --system --create-home --home-dir /var/lib/forgejo-runner \
-  --shell /bin/bash forgejo-runner
-sudo usermod -aG docker forgejo-runner
-sudo install -d -m 700 -o forgejo-runner -g forgejo-runner /etc/forgejo-runner
-sudo install -d -m 700 -o forgejo-runner -g forgejo-runner /var/lib/forgejo-runner/work
-sudo install -m 600 -o forgejo-runner -g forgejo-runner \
-  runner/config.yml.example /etc/forgejo-runner/config.yml
-sudo install -m 644 runner/forgejo-runner.service /etc/systemd/system/forgejo-runner.service
+bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/scripts/forgejo-runner/install.sh)
 ```
 
-In the repository, open **Settings → Actions → Runners → Create new runner**.
-Register at repository scope. Edit `/etc/forgejo-runner/config.yml` with `sudoedit`:
-replace the HTTPS URL, UUID and token using the UI's values. Retain mode 600 and
-ownership by `forgejo-runner`. Add explicit connections for other trusted repos.
-
-```bash
-sudo -u forgejo-runner docker info
-sudo systemctl daemon-reload
-sudo systemctl enable --now forgejo-runner
-sudo journalctl -u forgejo-runner -n 50 --no-pager
-```
+It asks for the Forgejo URL, the runner's UUID and its token (typed hidden), writes
+`/etc/forgejo-runner/config.yml` (mode 600) and starts `forgejo-runner.service`. This
+repo's CI also needs `make`, `python3` and `openssh-client` on the VM
+(`apt install -y make python3 openssh-client`).
 
 Check the runner is online with label `labber-ci`. Native execution keeps checkout
 paths on the Docker host, so this repo's bind-mounted test fixtures work. Capacity
 1 prevents overlapping jobs using shared test image tags. Docker membership grants
 root-equivalent control of the VM; the separate user is not a sandbox.
 
-The native runner is upgraded separately from the server: stop its systemd service,
-repeat binary extraction with the chosen supported runner version, then restart.
-Do not reinstall the config template over registration credentials during updates.
+The native runner is upgraded separately from the server: run the script again (the
+latest release, or `--version X.Y.Z`). It keeps the registration and restarts the runner.
 
 ## CI and stable branches
 

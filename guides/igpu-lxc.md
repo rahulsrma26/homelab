@@ -21,7 +21,7 @@ pct reboot <ID>
 
 - The group id must be the guest's (`getent group render` inside it), not the host's: they differ between distributions.
 - Some apps also want `card0` (e.g. for display-related checks): `-dev1 /dev/dri/card0,gid=<guest video gid>`.
-- Docker inside needs `nesting=1`; the compose file then passes `/dev/dri` into the container (`devices: - /dev/dri:/dev/dri`).
+- Docker inside needs `pct set <ID> --features nesting=1,keyctl=1`; the compose file then passes `/dev/dri` into the container (`devices: - /dev/dri:/dev/dri`).
 
 **Check inside the LXC:**
 
@@ -36,7 +36,8 @@ apt install -y vainfo && vainfo        # the Intel iHD driver and its H264 / HEV
 **Jellyfin:** Dashboard → Playback → Transcoding: **Intel QSV** (or VA-API) with device `/dev/dri/renderD128`; enable the codecs `vainfo` lists; tone mapping for HDR. Media can be mounted read-only.
 
 **Frigate:** detection with **OpenVINO on the iGPU** and decoding with QSV, so no discrete GPU memory is used.
-- Set hardware acceleration **only globally**: `ffmpeg: hwaccel_args: preset-intel-qsv-h264`. A per-camera `hwaccel_args: preset-vaapi` overrides it and causes `Failed to sync surface` / `hwdownload` crashes.
+- Set hardware acceleration **only globally**: `ffmpeg: hwaccel_args: preset-intel-qsv-h264`, or `preset-vaapi` if QSV fails to decode (`dec:h264_qsv … Decoding error`, seen on an Iris Xe). Mixing a per-camera preset with a different global one causes `Failed to sync surface` / `hwdownload` crashes.
+- One OpenVINO detector is usually enough: a second one on the same iGPU only splits its compute.
 - `/tmp/cache` on tmpfs keeps recording-cache writes off the SSD; `shm_size` grows with the cameras (~93 MB per 1080p stream).
 - Main stream for recording, sub stream for detection.
 
