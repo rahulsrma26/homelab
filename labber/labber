@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.4"
+VERSION="4.4.5"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -1972,7 +1972,7 @@ SETUP_DOCKER=1         # 0: not a Docker host — Docker steps are left out
 SETUP_PROM=""          # --prometheus URL: Alloy's Prometheus, without asking
 SETUP_LOKI=""          # --loki URL: Alloy's Loki, without asking
 SETUP_YES=0            # --yes: never ask — flags, else the remembered/default answers
-declare -A SETUP_ANS=()   # answers given as flags (setup_args), by question
+declare -gA SETUP_ANS=()  # answers given as flags (setup_args), by question (-g: global even when sourced in a function)
 SETUP_WITH="" SETUP_WITHOUT=""   # --with / --without: steps added to / removed from the checklist
 SETUP_DRY=0            # --dry-run: show what would be done and with which answers; change nothing
 
@@ -2190,9 +2190,14 @@ current_tz() {
     else readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||' || true; fi
 }
 st_hostname_status() {
-    local tz; tz=$(current_tz)
-    # UTC is how a fresh LXC/VM starts: only "done" once someone confirmed it here
-    if [[ -n "$tz" && ( "$tz" != *UTC* || "$tz" == "$(state_get timezone)" ) ]]; then
+    local tz want_tz="${SETUP_ANS[timezone]:-}" want_host="${SETUP_ANS[hostname]:-}"; tz=$(current_tz)
+    # a zone or name given as a flag that differs from the machine's: still to do
+    if [[ -n "$want_tz" && "$want_tz" != "$tz" ]]; then
+        echo "todo: timezone ${tz:-unset} → $want_tz"
+    elif [[ -n "$want_host" && "$want_host" != "$(hostname)" ]]; then
+        echo "todo: hostname $(hostname) → $want_host"
+    # UTC is how a fresh LXC/VM starts: only "done" once someone confirmed it (here or by flag)
+    elif [[ -n "$tz" && ( "$tz" != *UTC* || "$tz" == "$(state_get timezone)" || "$tz" == "$want_tz" ) ]]; then
         echo "done: $(hostname), $tz"
     else
         echo "todo: timezone ${tz:-unset}"

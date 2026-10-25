@@ -87,6 +87,20 @@ setup() {
     [[ "$(st_hostname_status)" == "todo: timezone unset" ]]
 }
 
+@test "timezone step: a zone or hostname given as a flag that differs is still to do" {
+    # an installer's zone counts as chosen — unless --timezone says otherwise
+    current_tz() { echo Region/City; }
+    [[ "$(st_hostname_status)" == done:* ]]
+    SETUP_ANS[timezone]=Etc/UTC
+    [[ "$(st_hostname_status)" == "todo: timezone Region/City → Etc/UTC" ]]
+    current_tz() { echo Etc/UTC; }
+    [[ "$(st_hostname_status)" == "done: $(hostname), Etc/UTC" ]]
+    SETUP_ANS[hostname]="not-$(hostname)"
+    [[ "$(st_hostname_status)" == "todo: hostname $(hostname) → not-$(hostname)" ]]
+    SETUP_ANS[hostname]="$(hostname)"
+    [[ "$(st_hostname_status)" == done:* ]]
+}
+
 @test "choice: values, validation and template parsing" {
     run tpl_list 'COMPOSE_FILE=a.yml:compose.{{ mode | choice(lan, cf) }}.yml'
     [ "$output" = $'mode\tchoice\tlan, cf' ]
