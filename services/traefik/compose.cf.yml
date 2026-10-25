@@ -2,7 +2,7 @@
 services:
   docker-socket-proxy:
     # read-only (POST=0); only what the Docker provider needs is on
-    image: lscr.io/linuxserver/socket-proxy:latest
+    image: lscr.io/linuxserver/socket-proxy:${SOCKET_PROXY_VERSION:-3.4.7}
     container_name: traefik-socket-proxy
     restart: unless-stopped
     read_only: true

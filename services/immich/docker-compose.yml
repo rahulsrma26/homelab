@@ -9,7 +9,8 @@ name: immich
 services:
   immich-server:
     container_name: immich_server
-    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
+    # v3: the newest 3.x on every update, never a jump to the next major version
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-v3}
     devices:
       - /dev/dri:/dev/dri          # Intel iGPU: hardware transcoding (enable in Admin → Video transcoding)
     volumes:
@@ -39,7 +40,7 @@ services:
   immich-machine-learning:
     container_name: immich_machine_learning
     profiles: [ml-yes]
-    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}-openvino
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-v3}-openvino
     devices:
       - /dev/dri:/dev/dri
     volumes:
@@ -75,7 +76,7 @@ services:
   # Immich Kiosk: a slideshow web page (:3502)
   immich-kiosk:
     profiles: [kiosk-yes]
-    image: ghcr.io/damongolding/immich-kiosk:latest
+    image: ghcr.io/damongolding/immich-kiosk:${IMMICH_KIOSK_VERSION:-0.45.2}
     container_name: immich_kiosk
     tty: true
     environment:
@@ -110,7 +111,7 @@ services:
   # (connect it to Immich there); settings are stored in IMMICHFRAME_CONFIG_LOCATION.
   immichframe:
     profiles: [frame-yes]
-    image: ghcr.io/immichframe/immichframe:latest
+    image: ghcr.io/immichframe/immichframe:${IMMICHFRAME_VERSION:-v1.0.39.0}
     container_name: immichframe
     environment:
       TZ: ${TZ}
@@ -125,7 +126,7 @@ services:
   # Reads Immich's database directly, with the same DB_* values as the server.
   immich-power-tools:
     profiles: [powertools-yes]
-    image: ghcr.io/immich-power-tools/immich-power-tools:latest
+    image: ghcr.io/immich-power-tools/immich-power-tools:${IMMICH_POWER_TOOLS_VERSION:-0.25.0}
     container_name: immich_power_tools
     environment:
       IMMICH_URL: http://immich-server:2283

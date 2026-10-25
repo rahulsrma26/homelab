@@ -13,7 +13,7 @@ Changing the optional containers later: edit COMPOSE_PROFILES in .env (e.g. ml-y
 ml-no), then `labber immich rebuild` — containers that are no longer wanted are removed.
 
 Before deployment:
-  .env — UPLOAD_LOCATION (the library), IMMICH_VERSION, DB_PASSWORD, the optional containers;
+  .env — UPLOAD_LOCATION (the library), DB_PASSWORD, the optional containers;
          their API keys (Kiosk, Power Tools) come from Immich → Account Settings → API Keys
   iGPU: /dev/dri must exist (LXC: pass /dev/dri/renderD128 with the render group's gid)
 
@@ -23,7 +23,7 @@ The library is mounted at /data. The database stores every file as /data/library
 Restoring a backup (e.g. moving Immich to a new machine):
   1. Copy the library into UPLOAD_LOCATION (library/, upload/, thumbs/, encoded-video/,
      profile/, backups/). Keep owners and times (rsync -aHAX).
-  2. .env: IMMICH_VERSION = the version in the dump's name (immich-db-backup-…-v2.0.1-…),
+  2. .env: add IMMICH_VERSION = the version in the dump's name (immich-db-backup-…-v2.0.1-…),
      DB_PASSWORD = the old one (the dump resets the database role to it),
      KIOSK_IMMICH_API_KEY = the old key.
   3. Start only the database:   docker compose up -d database   (wait ~10 s)
@@ -32,7 +32,7 @@ Restoring a backup (e.g. moving Immich to a new machine):
          | sed "s/SELECT pg_catalog.set_config('search_path', '', false);/SELECT pg_catalog.set_config('search_path', 'public, pg_catalog', true);/g" \
          | docker exec -i immich_postgres psql --dbname=postgres --username=immich
   5. Start everything (labber immich start), log in, check albums, people, shared links.
-  6. Then upgrade (labber immich update after changing IMMICH_VERSION). Within a major
+  6. Then upgrade: delete the IMMICH_VERSION line from .env, labber immich update. Within a major
      version (v3) every update is safe; for a new major version, read its breaking changes
      (GitHub discussions, label changelog:breaking-change) and the extras' requirements
      (Kiosk ≥ Immich v3.2, ImmichFrame ≥ v3). Update the mobile apps first.

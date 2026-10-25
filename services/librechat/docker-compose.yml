@@ -2,7 +2,7 @@ services:
 
   # ── App ───────────────────────────────────────────────────────────────────────
   librechat:
-    image: registry.librechat.ai/danny-avila/librechat-dev:latest
+    image: registry.librechat.ai/danny-avila/librechat-dev:${LIBRECHAT_VERSION:-latest@sha256:b278c620834c5653801030091072cad1974b47d0fc15a5009ed1a7d6e4c4f0d7}
     container_name: librechat
     restart: unless-stopped
     depends_on:
@@ -42,7 +42,7 @@ services:
 
   # ── Admin panel ───────────────────────────────────────────────────────────────
   librechat-admin:
-    image: registry.librechat.ai/clickhouse/librechat-admin-panel:latest
+    image: registry.librechat.ai/clickhouse/librechat-admin-panel:${LIBRECHAT_ADMIN_VERSION:-latest@sha256:a395465d1daa3c11495810a8c224df86675985d50de42e98e36eeedbd8aecb94}
     container_name: librechat-admin
     restart: unless-stopped
     depends_on:

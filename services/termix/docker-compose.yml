@@ -1,6 +1,6 @@
 services:
   termix:
-    image: ghcr.io/lukegus/termix:latest
+    image: ghcr.io/lukegus/termix:${TERMIX_VERSION:-26.10.5}
     container_name: termix
     restart: unless-stopped
     ports:
@@ -14,7 +14,7 @@ services:
       - guacd
 
   guacd:
-    image: guacamole/guacd:latest
+    image: guacamole/guacd:${GUACD_VERSION:-1.6.0}
     container_name: guacd
     restart: unless-stopped
     expose:

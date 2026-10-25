@@ -8,9 +8,9 @@ Before deployment:
   .env — JOPLIN_BASE_URL (what the apps use), JOPLIN_DB_PASSWORD
 
 Restoring a dump (pg_dumpall of Postgres 16):
-  1. .env: JOPLIN_DB_PASSWORD = the old password, JOPLIN_VERSION = the old version
+  1. .env: JOPLIN_DB_PASSWORD = the old password; add JOPLIN_VERSION = the old version
   2. docker compose up -d joplin-db     (wait until healthy)
   3. gunzip -c joplin.sql.gz | docker exec -i joplin-db psql -U joplin -d postgres
   4. labber joplin start; log in at JOPLIN_BASE_URL/login; let one app sync
-  5. JOPLIN_VERSION=latest, then labber joplin update
+  5. Delete the JOPLIN_VERSION line from .env, then labber joplin update
 The dump must come from Postgres 16 (the major version must match).

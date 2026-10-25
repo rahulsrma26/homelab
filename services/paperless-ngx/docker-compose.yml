@@ -6,7 +6,7 @@ services:
       - redisdata:/data
 
   webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION:-3.3.4}
     restart: unless-stopped
     depends_on:
       - broker
@@ -35,7 +35,7 @@ services:
       - "--chromium-allow-list=file:///tmp/.*"
 
   tika:
-    image: docker.io/apache/tika:latest
+    image: docker.io/apache/tika:${TIKA_VERSION:-4.1.0}
     restart: unless-stopped
 
   # ── optional (paperless_gpt = yes at install; COMPOSE_PROFILES in .env) ──

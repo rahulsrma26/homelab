@@ -17,7 +17,7 @@ services:
       retries: 5
 
   joplin:
-    image: joplin/server:${JOPLIN_VERSION}
+    image: joplin/server:${JOPLIN_VERSION:-3.7.3}
     container_name: joplin
     restart: unless-stopped
     ports:

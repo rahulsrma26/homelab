@@ -1,6 +1,6 @@
 services:
   immich-public-proxy:
-    image: alangrainger/immich-public-proxy:latest
+    image: alangrainger/immich-public-proxy:${IMMICH_PUBLIC_PROXY_VERSION:-4.1.2}
     container_name: immich-public-proxy
     restart: unless-stopped
     expose:

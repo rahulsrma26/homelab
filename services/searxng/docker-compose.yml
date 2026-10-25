@@ -1,6 +1,6 @@
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:${GLUETUN_VERSION:-v3.41.3}
     container_name: searxng-vpn
     restart: unless-stopped
     cap_add:
@@ -23,7 +23,7 @@ services:
         max-file: "1"
 
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:${SEARXNG_VERSION:-2026.10.24-ef0ec03da}
     container_name: searxng
     restart: unless-stopped
     network_mode: "service:gluetun"

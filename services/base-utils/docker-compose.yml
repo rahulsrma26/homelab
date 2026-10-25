@@ -2,14 +2,14 @@
 services:
   # IT-Tools, the maintained fork
   it-tools:
-    image: ghcr.io/sharevb/it-tools:latest
+    image: ghcr.io/sharevb/it-tools:${IT_TOOLS_VERSION:-2026.9.27}
     container_name: it-tools
     restart: unless-stopped
     ports:
       - "${IT_TOOLS_PORT:-7001}:8080"
 
   omni-tools:
-    image: iib0011/omni-tools:latest
+    image: iib0011/omni-tools:${OMNI_TOOLS_VERSION:-0.7.0}
     container_name: omni-tools
     restart: unless-stopped
     ports:
@@ -17,7 +17,7 @@ services:
 
   # BentoPDF, the self-hosted build
   bentopdf:
-    image: ghcr.io/alam00000/bentopdf-simple:latest
+    image: ghcr.io/alam00000/bentopdf-simple:${BENTOPDF_VERSION:-v2.8.10}
     container_name: bentopdf
     restart: unless-stopped
     ports:
@@ -26,7 +26,7 @@ services:
   # LibreSpeed: its upload endpoint reads the whole upload, so it measures right behind
   # a reverse proxy too
   librespeed:
-    image: ghcr.io/librespeed/speedtest:latest
+    image: ghcr.io/librespeed/speedtest:${SPEEDTEST_VERSION:-6.3.1}
     container_name: librespeed
     restart: unless-stopped
     environment:

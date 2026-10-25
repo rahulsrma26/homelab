@@ -90,6 +90,29 @@ while IFS= read -r compose; do
                 | sed -E 's/^\$\{([A-Za-z0-9_]+).*/\1/' | sort -u)
 done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml')
 
+echo ":: image versions"
+# every image pinned: a tag (from ${VAR:-default}, or written out) that isn't a moving one
+# (latest, stable, release, nightly, …), or a digest; images a service builds itself are exempt
+while IFS= read -r compose; do
+    while IFS=$'\t' read -r line img; do
+        [[ "$img" == *@sha256:* ]] && continue
+        name=${img##*/}
+        if [[ "$name" != *:* ]]; then err "$compose:$line" "image $img has no version — pin a tag (\${NAME_VERSION:-x.y.z})"
+        elif [[ "${name##*:}" =~ ^(latest|stable|release|nightly|edge|main|master|dev|develop|beta|rolling)$ ]]; then
+            err "$compose:$line" "image $img is :${name##*:}, a moving tag — pin a version (\${NAME_VERSION:-x.y.z})"; fi
+    done < <(awk '
+        function flush() { if (img != "" && !built) print iline "\t" img; img = ""; built = 0 }
+        /^  [A-Za-z0-9_.-]+:[[:space:]]*$/ { flush() }
+        /^[A-Za-z]/                         { flush() }
+        /^[[:space:]]+build:/               { built = 1 }
+        /^[[:space:]]+image:/ {
+            v = $0; sub(/^[[:space:]]+image:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); gsub(/["\047]/, "", v)
+            while (match(v, /\$\{[A-Za-z_][A-Za-z0-9_]*:?-[^}]*\}/)) { d = substr(v, RSTART, RLENGTH); sub(/^\$\{[A-Za-z_][A-Za-z0-9_]*:?-/, "", d); sub(/\}$/, "", d); v = substr(v, 1, RSTART - 1) d substr(v, RSTART + RLENGTH) }
+            img = v; iline = NR
+        }
+        END { flush() }' "$compose")
+done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml')
+
 fi   # tree-only checks
 
 echo ":: private IP addresses"

@@ -1,6 +1,6 @@
 services:
   authelia:
-    image: authelia/authelia:latest
+    image: authelia/authelia:${AUTHELIA_VERSION:-4.39.28}
     container_name: authelia
     restart: unless-stopped
     ports:
@@ -22,7 +22,7 @@ services:
         condition: service_healthy
 
   lldap:
-    image: lldap/lldap:stable
+    image: lldap/lldap:${LLDAP_VERSION:-v0.6.3}
     container_name: lldap
     restart: unless-stopped
     ports:

@@ -3,7 +3,7 @@
 
 # slskd's settings, shared by slskd (direct) and slskd-vpn (through gluetun)
 x-slskd: &slskd
-  image: slskd/slskd:latest
+  image: slskd/slskd:${SLSKD_VERSION:-0.26.2}
   container_name: slskd
   restart: unless-stopped
   environment:
@@ -21,7 +21,7 @@ x-slskd: &slskd
 
 services:
   soulsync:
-    image: boulderbadgedad/soulsync:latest
+    image: boulderbadgedad/soulsync:${SOULSYNC_VERSION:-3.5.9}
     container_name: soulsync
     restart: unless-stopped
     environment:
@@ -80,7 +80,7 @@ services:
 
   gluetun:
     profiles: [slskd-vpn]
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:${GLUETUN_VERSION:-v3.41.3}
     container_name: soulsync-vpn
     restart: unless-stopped
     cap_add:

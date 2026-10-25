@@ -1,7 +1,7 @@
 # Trilium Notes (TriliumNext). Everything is in its data folder (SQLite + attachments).
 services:
   trilium:
-    image: triliumnext/trilium:${TRILIUM_VERSION}
+    image: triliumnext/trilium:${TRILIUM_VERSION:-v0.106.1}
     container_name: trilium
     restart: unless-stopped
     environment:

@@ -1,6 +1,6 @@
 services:
   gluetun:
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:${GLUETUN_VERSION:-v3.41.3}
     container_name: scrap-downloader-vpn
     restart: unless-stopped
     cap_add:
@@ -23,7 +23,7 @@ services:
         max-file: "1"
 
   scrap-downloader:
-    image: welcometors/scrap_downloader:latest
+    image: welcometors/scrap_downloader:${SCRAP_DOWNLOADER_VERSION:-latest@sha256:bf9ea2339db4b843b9baa78314c6ac1bdfee1002e0fa57b9c5f1314640fef219}
     container_name: scrap-downloader
     restart: unless-stopped
     network_mode: "service:gluetun"
