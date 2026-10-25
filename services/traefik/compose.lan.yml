@@ -25,6 +25,7 @@ services:
     command:
       - --global.checkNewVersion=false
       - --global.sendAnonymousUsage=false
+      - --ping=true                      # /ping on the internal :8080, for the health check
       - --log.level=INFO
       - --accesslog=true
       - --providers.file.directory=/etc/traefik/dynamic

@@ -5,6 +5,12 @@ services:
     image: ghcr.io/sharevb/it-tools:${IT_TOOLS_VERSION:-2026.9.27}
     container_name: it-tools
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     ports:
       - "${IT_TOOLS_PORT:-7001}:8080"
 
@@ -12,6 +18,12 @@ services:
     image: iib0011/omni-tools:${OMNI_TOOLS_VERSION:-0.7.0}
     container_name: omni-tools
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     ports:
       - "${OMNI_TOOLS_PORT:-7002}:80"
 
@@ -20,6 +32,12 @@ services:
     image: ghcr.io/alam00000/bentopdf-simple:${BENTOPDF_VERSION:-v2.8.10}
     container_name: bentopdf
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     ports:
       - "${BENTOPDF_PORT:-7003}:8080"
 

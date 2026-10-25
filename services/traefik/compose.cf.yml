@@ -70,6 +70,7 @@ services:
     command:
       - --global.checkNewVersion=false
       - --global.sendAnonymousUsage=false
+      - --ping=true                      # /ping on the internal :8080, for the health check
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=proxy

@@ -121,6 +121,12 @@ services:
     volumes:
       - ${IMMICHFRAME_CONFIG_LOCATION}:/app/Config
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # Immich Power Tools: bulk tools (people merging, missing locations, …) (:3504).
   # Reads Immich's database directly, with the same DB_* values as the server.
