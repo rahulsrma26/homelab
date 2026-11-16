@@ -13,6 +13,12 @@ Storage mode (COMPOSE_FILE in .env):
          stay local. Forgejo refuses to start while the bucket is unreachable and
          retries until it is back; a running Forgejo keeps serving Git. Put the S3
          server on the same host, or switch to local to start without it.
+Merge signing (optional): add compose.signing.yml to COMPOSE_FILE, after creating the
+key pair in FORGEJO_DATA/signing/ (ssh-keygen -t ed25519 -N '' -f key; owned by PUID).
+Only approved merges are signed; web/API edits and initial commits are not. The setting
+names the PUBLIC key: pointing it at the private key makes Forgejo print that key in
+its log. Keep a copy of the key pair in your password manager.
+
 Packages are off by default (PACKAGES_ENABLED); artifacts are kept 7 days and
 Actions logs 90 days.
 

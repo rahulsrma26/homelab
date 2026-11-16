@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# Maintenance commands for Paperless (run on its host, from anywhere): file names, the AI and
+# search indexes, re-matching, near-duplicates, the consistency check, and a status of the AI
+# connections.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <command> [options]
+
+  status                  containers, the AI settings (API key hidden), and whether the LLM and
+                          embedding servers answer from inside Paperless
+  rename                  move every file to its current storage path / PAPERLESS_FILENAME_FORMAT
+  llmindex [update]       the AI's similarity index: add new and changed documents now (it runs
+                          nightly); 'rebuild' starts it over, e.g. after changing the embedding model
+  index [reindex]         the full-text search index; 'optimize' compacts it
+  retag [options]         apply the matching rules (Matching algorithm) to existing documents
+      -T tags  -t document types  -c correspondents  -s storage paths   (default: all four)
+      -i  inbox documents only      -f  overwrite what is set (and drop tags that no longer match)
+      -n, --dry-run  show what would change, change nothing
+  duplicates [options]    near-duplicates by their text (a rescan, a re-saved PDF): tags the newer
+                          document of each pair possible-duplicate, and untags those that no longer
+                          match. Exact copies are refused at import when
+                          PAPERLESS_CONSUMER_DELETE_DUPLICATES=true (older ones: document list →
+                          Duplicates). Not a duplicate: tag the newer one not-duplicate, and it's
+                          left alone.
+      -r ratio  how similar, 1-100 (default 95)      -n, --dry-run  list the pairs, change no tags
+  check                   files against the database: missing, damaged or orphaned files
+  -h, --help              this help
+
+Examples: $(basename "$0") status        $(basename "$0") retag -t -n        $(basename "$0") duplicates -n
+
+Nightly duplicates check (crontab -e, as a user in the docker group):
+  30 3 * * *  $SCRIPT_DIR/tools duplicates 2>&1 | logger -t paperless-duplicates
+EOF
+    exit "${1:-0}"
+}
+
+[[ -f "$ENV_FILE" ]] || { echo "error: .env not found at $ENV_FILE (run labber paperless-ngx install first)"; exit 1; }
+cd "$SCRIPT_DIR"
+
+running() {
+    docker compose ps --status running --services 2>/dev/null | grep -qx webserver \
+        || { echo "error: Paperless (webserver) isn't running: labber paperless-ngx start"; exit 1; }
+}
+
+# a management command inside the running webserver container (as Paperless's own user)
+run() {
+    running
+    docker compose exec -T webserver "$@"
+}
+
+envval() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1 | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
+
+status() {
+    echo "== containers"
+    docker compose ps --format '  {{.Service}}: {{.State}} {{.Health}}' 2>/dev/null || true
+    echo "== AI settings (.env)"
+    local k v
+    for k in PAPERLESS_AI_ENABLED PAPERLESS_AI_LLM_BACKEND PAPERLESS_AI_LLM_ENDPOINT PAPERLESS_AI_LLM_MODEL \
+             PAPERLESS_AI_LLM_EMBEDDING_BACKEND PAPERLESS_AI_LLM_EMBEDDING_ENDPOINT PAPERLESS_AI_LLM_EMBEDDING_MODEL \
+             PAPERLESS_AI_LLM_REQUEST_TIMEOUT PAPERLESS_AI_LLM_EXTRA_PARAMS PAPERLESS_FILENAME_FORMAT \
+             PAPERLESS_CONSUMER_DELETE_DUPLICATES COMPOSE_PROFILES; do
+        v=$(envval "$k"); [[ -n "$v" ]] && printf '  %-38s %s\n' "$k" "$v"
+    done
+    v=$(envval PAPERLESS_AI_LLM_API_KEY); [[ -n "$v" && "$v" != none ]] && printf '  %-38s %s\n' PAPERLESS_AI_LLM_API_KEY '(set)'
+    if [[ "$(envval COMPOSE_PROFILES)" == *gpt-yes* ]]; then
+        v=$(envval PAPERLESS_API_TOKEN)
+        printf '  %-38s %s\n' PAPERLESS_API_TOKEN "$([[ -n "$v" ]] && echo '(set)' || echo '(empty: paperless-gpt cannot work)')"
+    fi
+    echo "== AI servers, from inside Paperless"
+    local ep any=false
+    for k in PAPERLESS_AI_LLM_ENDPOINT PAPERLESS_AI_LLM_EMBEDDING_ENDPOINT; do
+        ep=$(envval "$k"); [[ -n "$ep" ]] || continue
+        any=true
+        printf '  %-38s ' "$k"
+        run python3 - "${ep%/}/models" <<'PY' || true
+import json, sys, urllib.request
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=10) as r:
+        d = json.load(r)
+    names = [m.get('id') or m.get('name') for m in d.get('data') or d.get('models') or []]
+    print('answers, models:', ', '.join(n for n in names if n) or '?')
+except Exception as e:
+    print('NO ANSWER:', str(e)[:120])
+PY
+    done
+    $any || echo "  (none set)"
+}
+
+retag() {
+    local args=() what=() a
+    for a in "$@"; do
+        case "$a" in
+            -T|-t|-c|-s) what+=("$a") ;;
+            -i|-f) args+=("$a") ;;
+            -n|--dry-run) args+=(--suggest) ;;
+            -h|--help) usage ;;
+            *) echo "Unknown retag option: $a"; usage 1 ;;
+        esac
+    done
+    [[ ${#what[@]} -gt 0 ]] || what=(-T -t -c -s)
+    run document_retagger "${what[@]}" "${args[@]}"
+}
+
+# Similarity: the share of 5-word phrases two texts have in common (Jaccard). Unlike Paperless's
+# document_fuzzy_match it tags, and it skips pairs whose lengths alone rule out a match.
+duplicates_py() {
+    cat <<'PY'
+import os, re, sys
+from documents import bulk_edit
+from documents.models import Document, MatchingModel, Tag
+
+RATIO = float(os.environ["DUP_RATIO"]) / 100
+DRY_RUN = os.environ["DUP_DRY_RUN"] == "1"
+TAG, IGNORE = "possible-duplicate", "not-duplicate"
+if not 0.01 <= RATIO <= 1:
+    sys.exit("duplicates: -r takes a number, 1-100")
+
+fields = {f.name for f in Document._meta.get_fields()}
+sums = [f for f in ("checksum", "archive_checksum") if f in fields]
+
+def shingles(text):
+    w = re.findall(r"\w+", (text or "").lower())
+    return {hash(" ".join(w[i:i + 5])) for i in range(len(w) - 4)}
+
+ignored = set(Document.objects.filter(tags__name=IGNORE).values_list("id", flat=True))
+docs = []
+for d in Document.objects.only("id", "title", "added", "content", *sums).iterator():
+    s = shingles(d.content)
+    if len(s) >= 16:   # ~20 words: empty or near-empty texts would all match each other
+        docs.append((len(s), d, s, {getattr(d, f) for f in sums} - {None, ""}))
+docs.sort(key=lambda x: x[0])
+
+flagged = set()
+pairs = 0
+for i, (n1, a, s1, c1) in enumerate(docs):
+    for n2, b, s2, c2 in docs[i + 1:]:
+        if n1 < n2 * RATIO:   # the overlap can't exceed the smaller set
+            break
+        keep, dup = sorted((a, b), key=lambda d: (d.added, d.id))
+        if dup.id in ignored or c1 & c2:   # c1 & c2: an exact copy, which Paperless itself shows
+            continue
+        j = len(s1 & s2) / len(s1 | s2)
+        if j >= RATIO:
+            pairs += 1
+            flagged.add(dup.id)
+            print(f"{j * 100:5.1f}%  keep #{keep.id} {keep.title!r}  duplicate #{dup.id} {dup.title!r}")
+
+print(f"{pairs} pair(s) at {RATIO * 100:g}% or more, among {len(docs)} documents with text")
+if DRY_RUN:
+    sys.exit(0)
+tag, _ = Tag.objects.get_or_create(name=TAG, defaults={"matching_algorithm": MatchingModel.MATCH_NONE})
+tagged = set(Document.objects.filter(tags=tag).values_list("id", flat=True))
+# through bulk_edit, like the web UI: it also updates the search index and runs the workflows
+add, remove = sorted(flagged - tagged), sorted(tagged - flagged)
+if add:
+    bulk_edit.add_tag(add, tag.id)
+if remove:
+    bulk_edit.remove_tag(remove, tag.id)
+print(f"{TAG}: {len(add)} tagged, {len(remove)} untagged, {len(flagged)} in all")
+PY
+}
+
+duplicates() {
+    local ratio=95 dry=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -r) [[ "${2:-}" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "duplicates: -r takes a number, 1-100"; exit 1; }
+                ratio=$2; shift 2 ;;
+            -n|--dry-run) dry=1; shift ;;
+            -h|--help) usage ;;
+            *) echo "Unknown duplicates option: $1"; usage 1 ;;
+        esac
+    done
+    running
+    # as the paperless user: Django run as root would leave root-owned files in data/log
+    docker compose exec -T -u paperless -e DUP_RATIO="$ratio" -e DUP_DRY_RUN="$dry" webserver \
+        python3 manage.py shell -v 0 -c "$(duplicates_py)"
+}
+
+cmd="${1:-}"; [[ $# -gt 0 ]] && shift
+case "$cmd" in
+    status) status ;;
+    rename) run document_renamer ;;
+    llmindex)
+        sub="${1:-update}"
+        [[ "$sub" =~ ^(update|rebuild)$ ]] || { echo "llmindex: update or rebuild"; exit 1; }
+        [[ "$(envval PAPERLESS_AI_ENABLED)" == true ]] || { echo "error: PAPERLESS_AI_ENABLED isn't true in .env"; exit 1; }
+        run document_llmindex "$sub" ;;
+    index)
+        sub="${1:-reindex}"
+        [[ "$sub" =~ ^(reindex|optimize)$ ]] || { echo "index: reindex or optimize"; exit 1; }
+        run document_index "$sub" ;;
+    retag) retag "$@" ;;
+    duplicates) duplicates "$@" ;;
+    check) run document_sanity_checker ;;
+    -h|--help) usage ;;
+    "") usage 1 ;;
+    *) echo "Unknown command: $cmd"; usage 1 ;;
+esac

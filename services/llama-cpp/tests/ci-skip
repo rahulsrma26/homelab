@@ -1,0 +1,1 @@
+needs an NVIDIA GPU and ~10 GB of models (CI has neither): tested by hand on the GPU VM

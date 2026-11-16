@@ -1,0 +1,4 @@
+# CI's test install (tests/ci/smoke.sh)
+PAPERLESS_URL=http://localhost:8075
+PAPERLESS_AI_ENABLED=false
+COMPOSE_PROFILES=gpt-no

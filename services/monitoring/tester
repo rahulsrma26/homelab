@@ -88,7 +88,7 @@ print(len(rules), " ".join(bad))')
     if [[ "${total:-0}" == 0 ]]; then note "no host or guest reports metrics (Alloy not set up yet?)"
     elif [[ -z "$silent" ]]; then ok "$total hosts/guests reporting, none silent"
     else bad "stopped reporting: $silent"; fi
-    firing=$(pq 'count by (severity) (ALERTS{alertstate="firing"})' | sed 's/^severity=//' | awk -F'\t' '{printf "%s %s, ", $2, $1}' | sed 's/, $//')
+    firing=$(pq 'count by (severity) (ALERTS{alertstate="firing",alertname!="Watchdog"})' | sed 's/^severity=//' | awk -F'\t' '{printf "%s %s, ", $2, $1}' | sed 's/, $//')
     echo "  ----  firing now: ${firing:-nothing}"
 else
     bad "not answering on $PROM"

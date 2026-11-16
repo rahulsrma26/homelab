@@ -1,0 +1,1 @@
+needs two sm_120 NVIDIA GPUs with 16 GB and a 17 GB model (CI has neither): tested by hand on the GPU VM

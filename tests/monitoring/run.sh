@@ -15,6 +15,7 @@ fill() {  # fill <manager token> <manager chat> → $am/alertmanager.yml, like t
     local mt="${1:-123:loud}" mc="${2:--1001}"
     sed "s|\${TELEGRAM_MANAGER_BOT_TOKEN}|$mt|g; s|\${TELEGRAM_MANAGER_CHAT_ID}|$mc|g; s|\${TELEGRAM_BOT_TOKEN}|123:loud|g; s|\${TELEGRAM_CHAT_ID}|-1001|g" \
         "$here/../../services/monitoring/config/alertmanager/alertmanager.yml" > "$am/alertmanager.yml"
+    echo "  - name: 'watchdog'" >> "$am/alertmanager.yml"     # the entrypoint adds it (WATCHDOG_URL or none)
     chmod 644 "$am/alertmanager.yml"
 }
 for variant in "456:quiet -1002" ""; do
@@ -48,6 +49,7 @@ echo "ok   alertmanager: critical → loud chat at once; warning → quiet chat 
 cfg="$here/../../services/monitoring/config/alertmanager"
 sed '/^receivers:/,$d' "$cfg/alertmanager.yml" | cat - "$cfg/receivers-ntfy.yml" \
     | sed "s|\${NTFY_URL}|http://ntfy.test:8080|g; s|\${NTFY_TOPIC}|alerts|g; s|\${NTFY_TOKEN}|tk_test|g" > "$am/alertmanager.yml"
+echo "  - name: 'watchdog'" >> "$am/alertmanager.yml"
 docker run --rm -v "$am:/a:ro" --entrypoint amtool prom/alertmanager:v0.27.0 check-config /a/alertmanager.yml >/dev/null \
     || { echo "FAIL: the ntfy variant of alertmanager.yml is invalid"; exit 1; }
 if grep -vE '^[[:space:]]*#' "$am/alertmanager.yml" | grep -qE 'telegram_configs|TELEGRAM|NTFY_[A-Z_]*}'; then echo "FAIL: the ntfy variant still has a Telegram receiver or a placeholder"; exit 1; fi

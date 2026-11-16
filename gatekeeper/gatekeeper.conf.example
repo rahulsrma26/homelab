@@ -1,0 +1,35 @@
+# /etc/gatekeeper/gatekeeper.conf (root:gatekeeper 640): key=value, read by gatekeeper.py at each run.
+
+# Forgejo, as the gatekeeper's own user sees it (on the Forgejo guest itself)
+forgejo=http://localhost:3002
+owner=<repo-owner>
+homelab=homelab
+config=homelab-config
+user=gatekeeper
+token_file=/etc/gatekeeper/token
+# the key that signs release records; its public half goes to every enrolled guest
+key=/etc/gatekeeper/release-key
+
+# who opens which PRs: Renovate's low-risk ones and your own get approved
+renovate_user=renovate
+approve_authors=<your-login>
+
+# the canary: positive evidence from its Prometheus for the whole window before main moves
+canary_prometheus=http://192.168.canary.canary:9090
+canary_host=canary
+evidence_window=2h
+
+# main: wave 2 once wave1_host runs the release healthy for wave_window (empty: no wave 2 yet)
+main_prometheus=http://192.168.server.monitoring:9090
+wave1_host=
+wave_window=10m
+
+# fixed rules: CI must pass; Renovate's age check, and the proposal unchanged for min_age_days
+require_ci=yes
+require_age_check=yes
+min_age_days=3
+
+state=/var/lib/gatekeeper
+metrics=/var/lib/labber/metrics/gatekeeper.prom
+# a file here stops everything but the metrics
+pause_file=/etc/gatekeeper/pause

@@ -1,0 +1,10 @@
+# defaultPermissions: what a new user gets — nothing: grant each user what they need
+# (Settings → Users). The admin keeps full access. Changing these never touches existing users.
+server:
+  cacheDir: /cache
+  sources:
+    # scratch for moving files between machines: never backed up
+    - path: /srv/extra
+      config:
+        defaultEnabled: true
+        defaultPermissions: {view: false, download: false, create: false, modify: false, delete: false, configured: true}

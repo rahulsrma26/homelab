@@ -1,0 +1,123 @@
+# Scraper: Firecrawl (self-hosted), API on FIRECRAWL_PORT. Turns a URL into clean Markdown
+# (JavaScript pages through a headless Chromium); its /v2/search uses this SearXNG.
+# For LibreChat's web search (scraperProvider firecrawl) and n8n. No API key: limit the port by firewall.
+x-firecrawl-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "5m"
+    max-file: "2"
+
+services:
+  firecrawl:
+    image: ghcr.io/firecrawl/firecrawl:${FIRECRAWL_VERSION:-2.11.739@sha256:1cf2a32909c2e1dee4eb560696dadd3cce6c64155fba2398c505230f19ff62f9}
+    container_name: firecrawl
+    restart: unless-stopped
+    command: node dist/src/harness.js --start-docker
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    environment:
+      HOST: "0.0.0.0"
+      PORT: 3002
+      ENV: local
+      USE_DB_AUTHENTICATION: "false"
+      REDIS_URL: redis://firecrawl-redis:6379
+      REDIS_RATE_LIMIT_URL: redis://firecrawl-redis:6379
+      NUQ_RABBITMQ_URL: amqp://firecrawl-rabbitmq:5672
+      PLAYWRIGHT_MICROSERVICE_URL: http://firecrawl-playwright:3000/scrape
+      POSTGRES_HOST: firecrawl-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      # searches go to this SearXNG (through the VPN); page fetches leave directly
+      SEARXNG_ENDPOINT: http://gluetun:8080
+      NUM_WORKERS_PER_QUEUE: ${FIRECRAWL_WORKERS:-4}
+      MAX_CONCURRENT_JOBS: ${FIRECRAWL_CONCURRENT_JOBS:-3}
+      CRAWL_CONCURRENT_REQUESTS: ${FIRECRAWL_CONCURRENT_PAGES:-4}
+      BROWSER_POOL_SIZE: ${FIRECRAWL_BROWSERS:-2}
+      HARNESS_STARTUP_TIMEOUT_MS: 120000
+      LOGGING_LEVEL: ${FIRECRAWL_LOG_LEVEL:-info}
+      # load checks read the container's cgroup (its own limits), not /proc (the whole host inside an LXC)
+      IS_KUBERNETES: "true"
+    ports:
+      - "${FIRECRAWL_PORT:-3002}:3002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 2m
+      retries: 3
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_healthy
+      firecrawl-postgres:
+        condition: service_healthy
+    mem_limit: ${FIRECRAWL_MEMORY:-4g}
+    logging: *logging
+
+  # headless Chromium for pages that need JavaScript
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:${FIRECRAWL_PLAYWRIGHT_VERSION:-latest@sha256:227ce3d8059173925a5a0697c63a1e947662cca934a609151651f578774edd5d}
+    container_name: firecrawl-playwright
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      MAX_CONCURRENT_PAGES: ${FIRECRAWL_CONCURRENT_PAGES:-4}
+      BLOCK_MEDIA: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=1g
+    mem_limit: ${FIRECRAWL_BROWSER_MEMORY:-2g}
+    logging: *logging
+
+  # Firecrawl's cache and rate limits (in memory)
+  firecrawl-redis:
+    image: redis:${REDIS_VERSION:-8-alpine@sha256:9f8d2d789b9a1d1e3f283f979aa9cbf393373806472e1ccd460e2f9c869b833b}
+    container_name: firecrawl-redis
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly "no"
+    tmpfs:
+      - /data
+    logging: *logging
+
+  # the job queue's messages
+  firecrawl-rabbitmq:
+    image: rabbitmq:${FIRECRAWL_RABBITMQ_VERSION:-4.3.7-alpine@sha256:d363f79df91b170122c5ab6043d39d1c2612e83d333b1fc2bc84c8125272af79}
+    container_name: firecrawl-rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    logging: *logging
+
+  # the job queue (Postgres with Firecrawl's schema); jobs only, nothing to keep
+  firecrawl-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:${FIRECRAWL_POSTGRES_VERSION:-latest@sha256:d719b36160eac2fcbe16dc7e7360ddb9c82c40ea5da183d07bf4a755c6a0b2ae}
+    container_name: firecrawl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${FIRECRAWL_POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    command: ["postgres", "-c", "cron.log_statement=off"]   # pg_cron's jobs run every 15 s: no log lines per run
+    volumes:
+      - ${FIRECRAWL_DB_DIR:-./firecrawl-db}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    logging: *logging

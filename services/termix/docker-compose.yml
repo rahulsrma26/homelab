@@ -1,6 +1,6 @@
 services:
   termix:
-    image: ghcr.io/lukegus/termix:${TERMIX_VERSION:-26.10.5}
+    image: ghcr.io/lukegus/termix:${TERMIX_VERSION:-26.11.0@sha256:2cb95d37f13c2b98edb404a2cfa13cff190ac3043033f8d9be04c0798e43a5d4}
     container_name: termix
     restart: unless-stopped
     ports:
@@ -14,7 +14,7 @@ services:
       - guacd
 
   guacd:
-    image: guacamole/guacd:${GUACD_VERSION:-1.6.0}
+    image: guacamole/guacd:${GUACD_VERSION:-1.6.0@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f}
     container_name: guacd
     restart: unless-stopped
     healthcheck:                         # the image's own check runs only every 5 minutes

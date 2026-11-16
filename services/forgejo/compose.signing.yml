@@ -1,0 +1,13 @@
+# Forgejo signs approved merges with an SSH key, so clients can verify what was merged.
+# Add it to COMPOSE_FILE (e.g. docker-compose.yml:compose.local.yml:compose.signing.yml).
+# The key pair lives in FORGEJO_DATA/signing/ (key + key.pub); SIGNING_KEY names the PUBLIC key.
+services:
+  forgejo:
+    environment:
+      - FORGEJO__repository_0X2E_signing__FORMAT=ssh
+      - FORGEJO__repository_0X2E_signing__SIGNING_KEY=/data/signing/key.pub
+      - FORGEJO__repository_0X2E_signing__SIGNING_NAME=${SIGNING_NAME:-Forgejo}
+      - FORGEJO__repository_0X2E_signing__MERGES=approved
+      - FORGEJO__repository_0X2E_signing__CRUD_ACTIONS=never
+      - FORGEJO__repository_0X2E_signing__INITIAL_COMMIT=never
+      - FORGEJO__repository_0X2E_signing__WIKI=never

@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+# Verify the seeded data (default), or, with --live, only that the real instance answers (read-only).
+import sys
+sys.path.insert(0, __file__.rsplit('/', 1)[0]); from _api import call, wait_ready
+wait_ready()
+if '--live' in sys.argv:
+    n = call('/documents/?page_size=1')['count']
+    call('/search/autocomplete/?term=a')
+    print(f'check --live: {n} documents, search answers'); sys.exit(0)
+titles = sorted(d['title'] for d in call('/documents/?title__istartswith=labseed&page_size=50')['results'])
+assert titles == ['labseed-alpha', 'labseed-beta'], f'documents: {titles}'
+hits = [d['title'] for d in call('/documents/?query=quokka')['results']]
+assert hits == ['labseed-alpha'], f'full-text search for quokka: {hits}'
+print('check: 2 documents, full-text search finds alpha')

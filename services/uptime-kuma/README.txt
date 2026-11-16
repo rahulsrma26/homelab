@@ -13,6 +13,8 @@ Volumes:
             on an SD card, use a high-endurance card.
 
 Once after deployment (http://<host>:3001):
+  0. Database: choose SQLite (Kuma 2 asks on the first start; the embedded MariaDB needs far
+     more memory, worth it only for hundreds of monitors).
   1. Create the admin account (strong password: the UI can see your whole network layout).
   2. Settings → Notifications → add Telegram (same bot and chat as monitoring's .env),
      tick "Default enabled".
@@ -24,3 +26,5 @@ Once after deployment (http://<host>:3001):
 
 Moving it (e.g. from the old monitoring stack): stop the container, copy its data
 (the old named volume uptime-kuma-data, or ./data) into ./data on the new host, start it.
+Data from Kuma 1 is converted on the first start of Kuma 2 (one way, slow with a long history):
+keep a copy of ./data until it runs.

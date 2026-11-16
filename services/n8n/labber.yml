@@ -1,0 +1,4 @@
+# What labber needs to know about this service (labber-design: labber.yml).
+#   state: what it writes on its own guest disk: copied, with the service stopped, before an
+#          automatic update and put back if the update rolls back (n8n migrates its database).
+state: ["${N8N_DATA:-./data}"]

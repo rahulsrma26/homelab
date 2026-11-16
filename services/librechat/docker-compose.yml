@@ -11,6 +11,10 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # web search's services (SEARXNG_HOST etc. in .env)
+      - "librechat-searxng:${SEARXNG_HOST:-127.0.0.1}"
+      - "librechat-firecrawl:${FIRECRAWL_HOST:-127.0.0.1}"
+      - "librechat-reranker:${RERANK_HOST:-127.0.0.1}"
     environment:
       - HOST=0.0.0.0
       - PORT=${PORT:-3080}
@@ -28,7 +32,7 @@ services:
         source: ./.env
         target: /app/.env
       - type: bind
-        source: ./librechat.yaml
+        source: ./${LIBRECHAT_CONFIG:-librechat.yaml}
         target: /app/librechat.yaml
       - ./images:/app/client/public/images
       - ./uploads:/app/uploads
@@ -63,7 +67,7 @@ services:
 
   # ── Database ──────────────────────────────────────────────────────────────────
   mongodb:
-    image: mongo:${MONGO_VERSION:-8.0.20}
+    image: mongo:${MONGO_VERSION:-8.0.20@sha256:098862b1339f031900ca66cf8fef799e616d6324fa41b9a263f2ec899552c1ef}
     container_name: librechat-mongodb
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"
@@ -78,7 +82,7 @@ services:
 
   # ── Search ────────────────────────────────────────────────────────────────────
   meilisearch:
-    image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.35.1}
+    image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.35.1@sha256:8b57fc3c7f46535ddef3828df1538465ac19d892eb57c9a10da6df0880bd5856}
     container_name: librechat-meilisearch
     restart: unless-stopped
     user: "${UID:-1000}:${GID:-1000}"

@@ -479,7 +479,7 @@
         },
         {
           "refId": "D",
-          "expr": "((max by (instance, device) (last_over_time(smartctl_device_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) > 0) or max by (instance, device) (last_over_time(smartctl_device_nvme_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}",
           "legendFormat": "",
           "datasource": {
             "type": "prometheus",
@@ -1247,16 +1247,16 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
-        "y": 14
+        "y": 14,
+        "w": 24,
+        "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "((max by (instance, device) (smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
-          "legendFormat": "{{instance}} {{device}}",
+          "expr": "((max by (instance, serial_number, model_name) ((((max by (instance, device) (smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) or ((max by (instance, serial_number, model_name) ((((max by (instance, device) (smartctl_device_temperature{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",temperature_type=\"current\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) unless on (instance, serial_number) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end())))",
+          "legendFormat": "{{instance}} {{device}} {{model_name}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1302,10 +1302,7 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": ["mean", "min", "max"]
         },
         "tooltip": {
           "mode": "multi",
@@ -1323,16 +1320,16 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 14
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "node_hwmon_temp_celsius{job=\"proxmox-node-exporters\",instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",chip=~\"nvme.*\"} * on (instance, chip, sensor) group_left(label) node_hwmon_sensor_label{job=\"proxmox-node-exporters\",instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",chip=~\"nvme.*\"}",
-          "legendFormat": "{{instance}} {{chip}} {{label}}",
+          "expr": "((max by (instance, serial_number, model_name, label) ((label_replace(node_hwmon_temp_celsius{job=\"proxmox-node-exporters\",instance=~\"$instance\",chip=~\"nvme_nvme[0-9]+\"} * on (instance, chip, sensor) group_left (label) node_hwmon_sensor_label{job=\"proxmox-node-exporters\",instance=~\"$instance\",chip=~\"nvme_nvme[0-9]+\"}, \"device\", \"$1\", \"chip\", \"nvme_(nvme[0-9]+)\")) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) or ((max by (instance, serial_number, model_name, label) ((label_replace(node_hwmon_temp_celsius{job=\"proxmox-node-exporters\",instance=~\"$instance\",chip=~\"nvme_nvme[0-9]+\"} * on (instance, chip, sensor) group_left (label) node_hwmon_sensor_label{job=\"proxmox-node-exporters\",instance=~\"$instance\",chip=~\"nvme_nvme[0-9]+\"}, \"device\", \"$1\", \"chip\", \"nvme_(nvme[0-9]+)\")) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) unless on (instance, serial_number) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end())))",
+          "legendFormat": "{{instance}} {{device}} {{model_name}} {{label}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1378,10 +1375,7 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": ["mean", "min", "max"]
         },
         "tooltip": {
           "mode": "multi",
@@ -1399,16 +1393,16 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
-        "y": 22
+        "y": 30,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "((max by (instance, device) (smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (100 - smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
-          "legendFormat": "{{instance}} {{device}}",
+          "expr": "((max by (instance, serial_number, model_name) ((((max by (instance, device) (smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (100 - smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) or ((max by (instance, serial_number, model_name) ((((max by (instance, device) (smartctl_device_percentage_used{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (100 - smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Media_Wearout_Indicator|Wear_Leveling_Count|Percent_Lifetime_Remain|SSD_Life_Left\",attribute_value_type=\"value\"})) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})) * on (instance, device) group_left (serial_number, model_name) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))) unless on (instance, serial_number) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end())))",
+          "legendFormat": "{{instance}} {{device}} {{model_name}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
@@ -1434,10 +1428,7 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": ["mean", "min", "max"]
         },
         "tooltip": {
           "mode": "multi",
@@ -1449,21 +1440,21 @@
       "id": 11,
       "type": "timeseries",
       "title": "Written in the previous 24 h",
-      "description": "Host writes per disk over a rolling 24 h. For ZFS pools, every member of a mirror/raidz writes.",
+      "description": "Host writes per disk over a rolling 24 h. For ZFS pools, every member of a mirror/raidz writes. Where the SMART exporter has no bytes-written counter for an NVMe drive (e.g. a multi-namespace enterprise drive), the kernel's own write counter for it is used.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 12,
-        "y": 22
+        "y": 30,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "((max by (instance, device) (increase(smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[1d])) or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}[1d])) * 33554432 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}[1d])) * 512 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824 or max by (instance, device) (increase(smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}[1d])) * 1073741824) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "expr": "(((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[1d:5m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[1d:5m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}) or ((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[1d:5m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[1d:5m]))) unless on (instance, serial_number) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end())))",
           "legendFormat": "{{instance}} {{device}}",
           "datasource": {
             "type": "prometheus",
@@ -1491,15 +1482,181 @@
         "legend": {
           "displayMode": "table",
           "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": ["mean", "min", "max"]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Written",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Bytes written to each disk in the period: the drive's own SMART counter where it has one, else the kernel's (the same as the graph). Prometheus keeps 90 days.",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[1h:5m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[1h:5m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[12h:5m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[12h:5m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[1d:5m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[1d:5m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "D",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[7d:30m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[7d:30m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "E",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[30d:30m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[30d:30m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "F",
+          "expr": "max by (instance, device) (((sum by (instance, serial_number) (increase(((max by (instance, device) (smartctl_device_bytes_written{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}) or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_32MiB\",attribute_value_type=\"raw\"}) * 33554432 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_LBAs_Written\",attribute_value_type=\"raw\"}) * 512 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Host_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Total_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824 or max by (instance, device) (smartctl_device_attribute{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\",attribute_name=~\"Lifetime_Writes_GiB\",attribute_value_type=\"raw\"}) * 1073741824) * on (instance, device) group_left (serial_number) (topk by (instance, device) (1, timestamp(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"})) * 0 + 1))[90d:30m])) or sum by (instance, serial_number) (increase(label_replace(max by (instance, device) (node_disk_written_bytes_total{job=\"proxmox-node-exporters\",instance=~\"$instance\",device=~\"nvme[0-9]+n1|sd[a-z]+\"}) * on (instance, device) group_left (serial) (topk by (instance, device) (1, timestamp(node_disk_info{job=\"proxmox-node-exporters\",instance=~\"$instance\"})) * 0 + 1), \"serial_number\", \"$1\", \"serial\", \"(.+)\")[90d:30m]))) * on (instance, serial_number) group_left (device) max by (instance, serial_number, device) (last_over_time(smartctl_device{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m] @ end()))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"})",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "G",
+          "expr": "((max by (instance, device) (last_over_time(smartctl_device_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m])) > 0) or max by (instance, device) (last_over_time(smartctl_device_nvme_capacity_bytes{instance=~\"$instance\",device!~\"zd[0-9]+|dm-[0-9]+|loop[0-9]+|nbd[0-9]+|rbd[0-9]+|zram[0-9]+|md[0-9]+\"}[15m]))) unless on (instance, device) smartctl_device{model_name=~\"(?i).*(qemu|virtual|vbox|vmware|msft).*\"}",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "1 h",
+              "Value #B": "12 h",
+              "Value #C": "1 d",
+              "Value #D": "7 d",
+              "Value #E": "30 d",
+              "Value #F": "90 d",
+              "instance": "host",
+              "device": "disk",
+              "Value #G": "capacity"
+            },
+            "indexByName": {
+              "instance": 0,
+              "device": 1,
+              "Value #G": 2,
+              "Value #A": 3,
+              "Value #B": 4,
+              "Value #C": 5,
+              "Value #D": 6,
+              "Value #E": 7,
+              "Value #F": 8
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "1 d",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capacity"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     },
     {
@@ -1511,7 +1668,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 30
+        "y": 48
       },
       "panels": [
         {
@@ -1527,7 +1684,7 @@
             "h": 14,
             "w": 24,
             "x": 0,
-            "y": 31
+            "y": 49
           },
           "targets": [
             {

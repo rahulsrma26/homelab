@@ -30,6 +30,20 @@ The data datasets live on the **host** and are bind-mounted into the LXCs. There
 - **Read-only where an app owns the files.** Immich and Paperless track their files in a database, so changes behind their back break it. New files go in through the apps' own import paths (`common/inbox` → Paperless; Immich's upload).
 - **Data mount points are excluded from PBS** (`backup=0`): PBS keeps the LXC disks, ZFS replication keeps the data.
 
+## Generated files
+
+What can be pulled or rebuilt (Docker's images, LLM models, queues, search indexes, caches) goes on a guest's **no-backup disk** at `/opt/generated`: an LXC mount point or a second VM disk, both `backup=0`. Optional per guest; worth it where images or models are big.
+
+| On a guest | Where | Backup |
+|---|---|---|
+| OS, labber, compose files, `.env`, small databases, **Docker's named volumes** | the guest's own disk | PBS |
+| Important data | host datasets, bind-mounted ([Data tiers](#data-tiers)) | snapshots + replication |
+| Docker's images (containerd's store), templates' `generated_dir()` folders | `/opt/generated` | none |
+
+- **Only containerd's store moves** (`/opt/generated/containerd`): Docker's own folder, with the named volumes, stays on the guest's disk.
+- **Without the disk, Docker doesn't start** (a start guard on containerd and Docker), instead of pulling every image again onto the guest's disk.
+- **Lost?** A new disk, `labber setup`, then `labber <svc> rebuild` for each service.
+
 ## Ownership
 
 Unprivileged LXCs map uid *n* to host uid 100000 + *n*. Check each app's runtime uid before `chown`:

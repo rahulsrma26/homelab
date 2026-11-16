@@ -6,6 +6,27 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # Traefik's metrics port unreachable: a warning about certificate checks, not a host down
+  - interval: 1m
+    input_series:
+      - series: 'up{job="traefik",instance="traefik:8082"}'
+        values: '0x30'
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CertMetricsUnreachable
+        exp_alerts:
+          - exp_labels: {severity: warning, job: traefik, instance: "traefik:8082"}
+            exp_annotations:
+              summary: "Traefik's metrics at traefik:8082 can't be read: certificate expiry isn't checked (firewall, or the metrics port)"
+      - eval_time: 20m
+        alertname: HostDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: prometheus, instance: "localhost:9090"}
+            exp_annotations:
+              summary: "Host localhost:9090 is down"
+
   # a Proxmox host goes silent with its two guests: one alert, the host's. A guest that dies on
   # its own (its host fine) alerts by itself. A guest without a pve-exporter entry still alerts.
   - interval: 1m
@@ -498,3 +519,206 @@ tests:
             exp_annotations: {summary: "Disk /spool/encrypted/common on od01 nearly full: 97%"}
           - exp_labels: {severity: critical, instance: gpu, kind: vm, mountpoint: /, fstype: ext4}
             exp_annotations: {summary: "Disk / on gpu nearly full: 97%"}
+
+  # the automation: a refused release pages at once; a rolled-back update warns after 10 minutes
+  # (not before); a healthy guest raises nothing
+  - interval: 1m
+    input_series:
+      - series: 'labber_sync_refused{instance="apps"}'
+        values: '0x5 1x10'
+      - series: 'labber_sync_refused{instance="docs"}'
+        values: '0x15'
+      - series: 'labber_sync_failed{instance="apps",service="navidrome"}'
+        values: '1x15'
+      - series: 'labber_service_healthy{instance="docs",service="paperless-ngx"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ConfigSyncRefused
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: apps}
+            exp_annotations: {summary: "apps refused a release (a signature, the stage or a backwards move didn't check out): nothing applied — labber sync status"}
+      - eval_time: 5m
+        alertname: ConfigSyncFailed
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ConfigSyncFailed
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: apps, service: navidrome}
+            exp_annotations: {summary: "navidrome on apps: an update failed and was rolled back (not retried until a newer version)"}
+      - eval_time: 12m
+        alertname: ServiceUnhealthy
+        exp_alerts: []
+
+  # canary → main waiting more than a day; the gatekeeper silent for 15 minutes
+  - interval: 1h
+    input_series:
+      - series: 'gatekeeper_promotion_waiting_seconds'
+        values: '0+3600x30'
+    alert_rule_test:
+      - eval_time: 20h
+        alertname: PromotionStuck
+        exp_alerts: []
+      - eval_time: 26h
+        alertname: PromotionStuck
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: {summary: "canary → main has been waiting over a day (no positive evidence from the canary)"}
+
+  # a new required setting: the service waits, and after 30 minutes the digest asks for it
+  # (a service the guest lists but hasn't installed: no alert)
+  - interval: 1m
+    input_series:
+      - series: 'labber_sync_waiting{instance="apps",service="ntfy",why="needs settings: NTFY_NEW_KEY"}'
+        values: '1x60'
+      - series: 'labber_sync_waiting{instance="canary",service="immich",why="not installed (sync never installs: a new service needs its settings from you)"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ConfigSyncNeedsYou
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: ConfigSyncNeedsYou
+        exp_alerts:
+          - exp_labels: {severity: info, instance: apps, service: ntfy, why: "needs settings: NTFY_NEW_KEY"}
+            exp_annotations: {summary: "ntfy on apps waits for you: needs settings: NTFY_NEW_KEY"}
+
+  # Forgejo down: two guests can't reach it → one alert, not "stale" per guest; a guest stale for
+  # its own reason (it reaches Forgejo) still alerts by itself
+  - interval: 1m
+    input_series:
+      - series: 'labber_sync_last_success_timestamp{instance="apps"}'
+        values: '0x150'
+      - series: 'labber_sync_forgejo_unreachable{instance="apps"}'
+        values: '1x150'
+      - series: 'labber_sync_last_success_timestamp{instance="docs"}'
+        values: '0x150'
+      - series: 'labber_sync_forgejo_unreachable{instance="docs"}'
+        values: '1x150'
+      - series: 'labber_sync_last_success_timestamp{instance="canary"}'
+        values: '0x150'
+      - series: 'labber_sync_forgejo_unreachable{instance="canary"}'
+        values: '0x150'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: ConfigSyncForgejoUnreachable
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: ConfigSyncStale
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: canary}
+            exp_annotations: {summary: "canary hasn't synced successfully for an hour"}
+      - eval_time: 2h
+        alertname: ConfigSyncForgejoUnreachable
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations: {summary: "2 guest(s) haven't reached Forgejo for an hour: they keep running what they have; sync resumes by itself"}
+
+  # the chipset by its label: 82 °C idle → nothing; 91 °C for 10 minutes → warning; 96 °C → critical.
+  # The same chip's other labelled sensors (its own max, a 127 °C open input) never count.
+  - interval: 1m
+    input_series:
+      - series: 'node_hwmon_temp_celsius{instance="w680",chip="platform_nct6775_656",sensor="temp11"}'
+        values: '82x10 91x15 96x10'
+      - series: 'node_hwmon_sensor_label{instance="w680",chip="platform_nct6775_656",sensor="temp11",label="PCH_CHIP_TEMP"}'
+        values: '1x40'
+      - series: 'node_hwmon_temp_celsius{instance="w680",chip="platform_nct6775_656",sensor="temp10"}'
+        values: '127x40'
+      - series: 'node_hwmon_sensor_label{instance="w680",chip="platform_nct6775_656",sensor="temp10",label="PCH_CHIP_CPU_MAX_TEMP"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ChipsetTemperatureHigh
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: ChipsetTemperatureHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: w680}
+            exp_annotations: {summary: "The chipset (PCH) on w680 has been at 91 °C or more for 10 minutes: check its airflow (fans)"}
+      - eval_time: 24m
+        alertname: ChipsetTemperatureCritical
+        exp_alerts: []
+      - eval_time: 33m
+        alertname: ChipsetTemperatureCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: w680}
+            exp_annotations: {summary: "The chipset (PCH) on w680 is at 96 °C (its limit is about 100 °C): more airflow now, or shut down"}
+
+  # a guest whose syncs succeed but whose release record stays behind the gatekeeper's for 2h
+  # alerts; one on the current record, or another stage's numbers, doesn't
+  - interval: 1m
+    input_series:
+      - series: 'gatekeeper_record_seq{instance="Forgejo",stage="main"}'
+        values: '4x300'
+      - series: 'gatekeeper_record_seq{instance="Forgejo",stage="canary"}'
+        values: '9x300'
+      - series: 'labber_sync_record_seq{instance="traefik",stage="main"}'
+        values: '3x300'
+      - series: 'labber_sync_record_seq{instance="canary",stage="canary"}'
+        values: '9x300'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: ReleaseFeedBehind
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: ReleaseFeedBehind
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: traefik, stage: main}
+            exp_annotations: {summary: "traefik is on main record 3 for 2 hours, older than the gatekeeper's: a frozen feed?"}
+
+  # Traefik's certificate (time() starts at 0): 25 days left → nothing; 19 days → warning;
+  # 4 days → critical too
+  - interval: 1h
+    input_series:
+      - series: 'traefik_tls_certs_not_after{instance="Traefik",cn="*.home.example"}'
+        values: '2160000x600'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: CertificateExpiresSoon
+        exp_alerts: []
+      - eval_time: 6d
+        alertname: CertificateExpiresSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: Traefik, cn: "*.home.example"}
+            exp_annotations: {summary: "*.home.example (Traefik on Traefik) expires in 19d 0h 0m 0s: renewal is failing"}
+      - eval_time: 6d
+        alertname: CertificateExpiresVerySoon
+        exp_alerts: []
+      - eval_time: 21d
+        alertname: CertificateExpiresVerySoon
+        exp_alerts:
+          - exp_labels: {severity: critical, instance: Traefik, cn: "*.home.example"}
+            exp_annotations: {summary: "*.home.example (Traefik on Traefik) expires in 4d 0h 0m 0s"}
+  # sanoid's newest snapshot over a day old alerts; a fresh one doesn't. A guest's backups
+  # stop: it alerts while the guest exists; a deleted guest's old backups never do
+  - interval: 1h
+    input_series:
+      - series: 'zfs_snapshot_newest_timestamp{instance="od01",dataset="spool/encrypted/vault"}'
+        values: '0x60'
+      - series: 'zfs_snapshot_newest_timestamp{instance="od01",dataset="spool/encrypted/media"}'
+        values: '0+3600x60'
+      - series: 'pve_backup_newest_timestamp{instance="od01",storage="pbs",vmid="1011"}'
+        values: '0x60'
+      - series: 'pve_backup_newest_timestamp{instance="w680",storage="pbs",vmid="1065"}'
+        values: '0x60'
+      - series: 'pve_guest_info{id="lxc/1011",name="Immich",node="od01"}'
+        values: '1x60'
+      - series: 'backup_age_metrics_last_run_timestamp{instance="od01"}'
+        values: '0+3600x60'
+    alert_rule_test:
+      - eval_time: 20h
+        alertname: SnapshotsStale
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: SnapshotsStale
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: od01, dataset: spool/encrypted/vault}
+            exp_annotations: {summary: "spool/encrypted/vault on od01: no sanoid snapshot for 1d 3h 0m 0s"}
+      - eval_time: 27h
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: od01, vmid: "1011"}
+            exp_annotations: {summary: "guest 1011 (backed up from od01): no backup for 1d 3h 0m 0s"}
+      - eval_time: 27h
+        alertname: BackupAgeMetricsStale
+        exp_alerts: []

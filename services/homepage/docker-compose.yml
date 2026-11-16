@@ -2,11 +2,14 @@
 # reloaded by itself.
 services:
   homepage:
-    image: ghcr.io/gethomepage/homepage:${HOMEPAGE_VERSION:-v2.7.0}
+    image: ghcr.io/gethomepage/homepage:${HOMEPAGE_VERSION:-v2.7.0@sha256:19c5c09184458a41b7b5915e71463a39f36cd33540f41bdbed008791b8182d5f}
     container_name: homepage
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
+    # HOMEPAGE_VAR_* / HOMEPAGE_FILE_* in .env reach the container: {{HOMEPAGE_VAR_X}} in the
+    # YAML keeps API keys out of the config files
+    env_file: .env
     environment:
       HOMEPAGE_ALLOWED_HOSTS: ${HOMEPAGE_ALLOWED_HOSTS}
       PUID: ${PUID}

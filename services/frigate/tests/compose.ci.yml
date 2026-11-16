@@ -1,0 +1,4 @@
+# CI only: no iGPU (/dev/dri) here: it runs on the CPU
+services:
+  frigate:
+    devices: !reset []

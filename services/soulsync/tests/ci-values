@@ -1,0 +1,2 @@
+# CI's test install (tests/ci/smoke.sh): slskd directly (a VPN can't connect with test credentials)
+COMPOSE_PROFILES=slskd-yes

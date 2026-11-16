@@ -1,14 +1,34 @@
 groups:
+  # always firing: Alertmanager sends it every minute to an outside watcher (WATCHDOG_URL, e.g.
+  # an Uptime Kuma push monitor), which alerts when it stops: Prometheus, its rules or Alertmanager down
+  - name: watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "The alert path works (Prometheus → Alertmanager → the outside watcher)"
+
   - name: proxmox-hosts
     rules:
       # Targets Prometheus scrapes itself (pve-exporter, prometheus)
       - alert: HostDown
-        expr: up == 0
+        expr: up{job!="traefik"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "Host {{ $labels.instance }} is down"
+
+      # Traefik's metrics port: only the certificate-expiry data (Traefik itself down shows everywhere)
+      - alert: CertMetricsUnreachable
+        expr: up{job="traefik"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Traefik's metrics at {{ $labels.instance }} can't be read: certificate expiry isn't checked (firewall, or the metrics port)"
 
       # Hosts and guests that PUSH metrics with Alloy never report up == 0 when they
       # die — their samples just stop. Remember each host for a day after its last
@@ -121,9 +141,11 @@ groups:
 
       # a runaway log or copy: at the rate of the last 6 h, full within a day (only disks
       # already over half full, and only a trend that holds for an hour)
+      # still filling in the last hour too: a finished burst (a new guest set up, images pulled) is no alarm
       - alert: DiskFillingFast
         expr: |
           predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"}[6h], 24 * 3600) < 0
+          and predict_linear(node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"}[1h], 24 * 3600) < 0
           and (1 - (node_filesystem_avail_bytes{fstype!="tmpfs", kind!="lxc"} / node_filesystem_size_bytes{fstype!="tmpfs", kind!="lxc"})) * 100 > 50
         for: 1h
         labels:
@@ -190,6 +212,24 @@ groups:
         annotations:
           summary: "ZFS pool {{ $labels.zpool }} on {{ $labels.instance }} is {{ $labels.state }}"
 
+      # the chipset (PCH) by its sensor's label, not its number (the number can change at a reboot);
+      # Intel's chipsets allow about 100 °C: 90 °C held for 10 minutes means too little airflow
+      - alert: ChipsetTemperatureHigh
+        expr: |
+          min_over_time((max by (instance) (node_hwmon_temp_celsius * on (instance, chip, sensor) group_left node_hwmon_sensor_label{label=~"(?i)pch_chip_temp|pch_temp"}))[10m:1m]) >= 90
+        labels:
+          severity: warning
+        annotations:
+          summary: "The chipset (PCH) on {{ $labels.instance }} has been at {{ printf \"%.0f\" $value }} °C or more for 10 minutes: check its airflow (fans)"
+
+      - alert: ChipsetTemperatureCritical
+        expr: |
+          min_over_time((max by (instance) (node_hwmon_temp_celsius * on (instance, chip, sensor) group_left node_hwmon_sensor_label{label=~"(?i)pch_chip_temp|pch_temp"}))[5m:1m]) >= 95
+        labels:
+          severity: critical
+        annotations:
+          summary: "The chipset (PCH) on {{ $labels.instance }} is at {{ printf \"%.0f\" $value }} °C (its limit is about 100 °C): more airflow now, or shut down"
+
   # NVIDIA GPUs (labber setup's gpu step: /usr/local/sbin/labber-gpu-metrics)
   - name: gpu
     rules:
@@ -236,7 +276,148 @@ groups:
         annotations:
           summary: "{{ $labels.service }} on {{ $labels.instance }} has an update — labber {{ $labels.service }} update"
 
+  # automation: labber sync on enrolled guests, the gatekeeper on the Forgejo guest
+  - name: automation
+    rules:
+      - alert: ConfigSyncRefused
+        expr: max by (instance) (labber_sync_refused) == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} refused a release (a signature, the stage or a backwards move didn't check out): nothing applied — labber sync status"
+
+      - alert: ConfigSyncRollbackFailed
+        expr: max by (instance, service) (labber_sync_rollback_failed) == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }}: an update failed and so did its rollback — the service is down"
+
+      - alert: ConfigSyncFailed
+        expr: max by (instance, service) (labber_sync_failed) == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }}: an update failed and was rolled back (not retried until a newer version)"
+
+      - alert: ConfigSyncStale
+        expr: (time() - max by (instance) (labber_sync_last_success_timestamp) > 3600) unless on (instance) (max by (instance) (labber_sync_forgejo_unreachable) == 1)
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} hasn't synced successfully for an hour"
+
+      # syncs succeed but the guest still sees an older release record than the gatekeeper
+      # published (a frozen or replayed feed, or a releases branch it can't fetch)
+      - alert: ReleaseFeedBehind
+        expr: max by (instance, stage) (labber_sync_record_seq) < on (stage) group_left max by (stage) (gatekeeper_record_seq)
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is on {{ $labels.stage }} record {{ $value }} for 2 hours, older than the gatekeeper's: a frozen feed?"
+
+      # one alert for every guest that can't reach Forgejo (they keep running what they have)
+      - alert: ConfigSyncForgejoUnreachable
+        expr: count(max by (instance) (labber_sync_forgejo_unreachable) == 1) > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} guest(s) haven't reached Forgejo for an hour: they keep running what they have; sync resumes by itself"
+
+      - alert: ServiceUnhealthy
+        expr: max by (instance, service) (labber_service_healthy) == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }} is unhealthy (a container unhealthy, restarting or exited)"
+
+      - alert: ConfigSyncNeedsYou
+        expr: max by (instance, service, why) (labber_sync_waiting{why=~"needs settings.*"}) == 1
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }} waits for you: {{ $labels.why }}"
+
+      - alert: ConfigSyncHeld
+        expr: time() - max by (instance, service) (labber_sync_hold) > 7 * 86400
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }}: {{ $labels.service }} has been on hold for over a week — labber sync release"
+
+      - alert: UpdateReady
+        expr: max by (instance, service) (labber_sync_ready) == 1
+        for: 14d
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.service }} on {{ $labels.instance }}: an update has been ready for two weeks (the maintenance queue)"
+
+      - alert: PromotionStuck
+        expr: max(gatekeeper_promotion_waiting_seconds) > 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "canary → main has been waiting over a day (no positive evidence from the canary)"
+
+      - alert: GatekeeperNotRunning
+        expr: time() - max(gatekeeper_last_run_timestamp) > 900 or max(gatekeeper_last_run_ok) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "the gatekeeper hasn't run cleanly for 15 minutes (journalctl -u gatekeeper on the Forgejo guest)"
+
   # logs: Alloy's own counters (every host) and Loki's; all warnings, for the digest
+  - name: certificates
+    rules:
+      # Let's Encrypt renews 30 days ahead: under 20 days left, renewal has been failing for 10
+      - alert: CertificateExpiresSoon
+        expr: min by (instance, cn) (traefik_tls_certs_not_after) - time() < 20 * 86400
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.cn }} (Traefik on {{ $labels.instance }}) expires in {{ $value | humanizeDuration }}: renewal is failing"
+
+      - alert: CertificateExpiresVerySoon
+        expr: min by (instance, cn) (traefik_tls_certs_not_after) - time() < 5 * 86400
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.cn }} (Traefik on {{ $labels.instance }}) expires in {{ $value | humanizeDuration }}"
+  - name: backups
+    rules:
+      # sanoid stopped (or lost a dataset): its newest snapshot is over a day old. From
+      # backup-age-metrics on each host (install-exporters.sh)
+      - alert: SnapshotsStale
+        expr: time() - zfs_snapshot_newest_timestamp > 26 * 3600
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.dataset }} on {{ $labels.instance }}: no sanoid snapshot for {{ $value | humanizeDuration }}"
+
+      # a guest that exists (pve-exporter lists it) and has backups, but none in over a day
+      - alert: BackupStale
+        expr: |
+          (time() - max by (instance, vmid) (pve_backup_newest_timestamp) > 26 * 3600)
+            and on (vmid) label_replace(max by (id) (pve_guest_info), "vmid", "$1", "id", ".*/([0-9]+)")
+        labels:
+          severity: warning
+        annotations:
+          summary: "guest {{ $labels.vmid }} (backed up from {{ $labels.instance }}): no backup for {{ $value | humanizeDuration }}"
+
+      - alert: BackupAgeMetricsStale
+        expr: time() - max by (instance) (backup_age_metrics_last_run_timestamp) > 3 * 3600
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }}: the backup-age check hasn't run for 3 hours (backup-age-metrics.timer)"
+
   - name: logs
     rules:
       # a host hit its cap (100 lines/s per container, 50 per journal unit): something is spamming

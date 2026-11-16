@@ -24,6 +24,7 @@ Every web app gets a name `<name>.home.<domain>` with HTTPS, from one wildcard c
 |---|---|
 | 80 | redirects to 443 |
 | 443 | every route; the dashboard at `traefik.home.<domain>` (user `admin`, `DASHBOARD_PASSWORD` from `.env`) |
+| 8082 | Prometheus metrics, for the monitoring stack's certificate-expiry alert (`TRAEFIK_METRICS` there); allow only the monitoring host |
 
 **Before deployment** (`.env`): `DOMAIN` (e.g. `home.<domain>`), `ACME_EMAIL`, `CF_DNS_API_TOKEN` (Cloudflare: My Profile → API Tokens → "Edit zone DNS" template, limited to your domain's zone; it covers the sub-domain too). `DASHBOARD_PASSWORD` is generated.
 
@@ -31,7 +32,8 @@ Every web app gets a name `<name>.home.<domain>` with HTTPS, from one wildcard c
 1. **DNS:** one local record `*.home.<domain>` → this LXC's IP, in UniFi (Technitium later). If your UniFi can't do wildcards, one record per name. No public DNS records are needed — except, with a public wildcard `*.<domain>`, a record at `home.<domain>` (e.g. a TXT), so that wildcard doesn't cover `*.home.<domain>`. Check from a client: `nslookup traefik.home.<domain>` returns this LXC's IP.
 2. **Certificate:** the first start requests it (about a minute). Check `labber traefik logs` for errors from the `cloudflare` resolver. It's stored in `letsencrypt/acme.json`; keep that file, because Let's Encrypt limits how often a certificate can be issued.
 3. **Routes:** edit `dynamic/routes.yml` and replace the examples with your apps (router + service per app, `entryPoints: [websecure]`). Traefik picks up changes by itself, and labber keeps your edits on update. `dynamic/common.yml` has the shared security headers (`secure-headers`, or `secure-headers-sameorigin` for apps that embed their own pages), the dashboard login, and `skip-verify`, a transport for backends with self-signed certificates (Proxmox, PBS, TrueNAS).
-4. **Firewall:** clients (home VLAN, Tailscale) → this LXC on 80/443; this LXC → each app's port.
+4. **Firewall:** clients (home VLAN, Tailscale) → this LXC on 80/443; the monitoring host → 8082; this LXC → each app's port.
+6. **TLS:** TLS 1.2 or newer is Traefik's default. With your real certificate in place, add `sniStrict` in `dynamic/routes.yml` (a client must ask for one of your names; a scan by IP gets no certificate): `tls: {options: {default: {minVersion: VersionTLS12, sniStrict: true}}}`. Not in `common.yml`: with only Traefik's own certificate (selfsigned mode) it refuses every client, and Traefik rejects the same option defined in two files.
 5. **Remote (Tailscale):** split DNS for `home.<domain>` only → the local DNS server, plus a route to this LXC (subnet router or exit node).
 
 **When the internet is down**, everything keeps working: the names resolve locally and the certificate is stored here (renewal needs the internet, but starts 30 days before expiry). Unless a client asks someone else than the local DNS:
@@ -86,4 +88,4 @@ labels:
 
 ### Forwarded headers and visitor IPs
 
-cloudflared runs on the VM and reaches Traefik through Docker's gateway, so Traefik trusts forwarded headers from Docker's private ranges (port 80 is published on `127.0.0.1` only). Apps then see `X-Forwarded-Proto: https` and the visitor's IP in `X-Forwarded-For`; `CF-Connecting-IP` always holds the visitor's IP. Rate limits must count per visitor: `ratelimit.sourcecriterion.requestheadername=CF-Connecting-IP`, otherwise every visitor shares one limit (all requests come from the gateway). The access log keeps `CF-Connecting-IP` and `CF-Ray`.
+cloudflared runs on the VM and reaches Traefik through Docker's gateway, so Traefik trusts forwarded headers from Docker's range only (`172.16.0.0/12`, plus `127.0.0.1`; port 80 is published on `127.0.0.1` only): not the LAN's. Apps then see `X-Forwarded-Proto: https` and the visitor's IP in `X-Forwarded-For`; `CF-Connecting-IP` always holds the visitor's IP. Rate limits must count per visitor: `ratelimit.sourcecriterion.requestheadername=CF-Connecting-IP`, otherwise every visitor shares one limit (all requests come from the gateway). The access log keeps `CF-Connecting-IP` and `CF-Ray`.

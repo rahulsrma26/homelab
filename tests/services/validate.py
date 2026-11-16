@@ -18,7 +18,7 @@ from ntfy import check_ntfy
 
 TEMPLATE = re.compile(
     r"\{\{\s*([a-z_][a-z0-9_]*)\s*"
-    r"(?:\|\s*(default|generate|choice)\((.*?)\)\s*)?\}\}"
+    r"(?:\|\s*(default|generate|choice|generated_dir)\((.*?)\)\s*)?\}\}"
 )
 
 
@@ -28,6 +28,8 @@ def fill(match):
         return argument
     if function == "choice":
         return argument.split(",")[0].strip()
+    if function == "generated_dir":
+        return f"./generated/{argument}"     # as labber fills it on a guest without the no-backup disk
     if function == "generate":
         if argument == "uuid":
             return "00000000-0000-4000-8000-000000000001"
@@ -64,15 +66,18 @@ def reclaim(root):
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def main(repo):
+def main(repo, only):
     with tempfile.TemporaryDirectory(prefix="homelab-service-check-") as temporary:
         try:
-            checks(repo, Path(temporary))
+            checks(repo, Path(temporary), only)
         finally:
             reclaim(temporary)
 
 
-def checks(repo, root):
+def checks(repo, root, only):
+    def want(*names):   # the real-app checks: every one, or those of the services named
+        return not only or any(name in only for name in names)
+
     paths = run(["git", "-C", str(repo), "ls-files", "-co", "--exclude-standard", "-z", "--", "services"]).split("\0")
     for relative in set(filter(None, paths)):
         source, target = repo / relative, root / relative
@@ -108,7 +113,9 @@ def checks(repo, root):
                 assert not services["pve-exporter"].get("ports"), "exporter must stay private"
                 assert not services["alertmanager"].get("ports"), "Alertmanager must stay private"
                 assert "--web.enable-lifecycle" not in services["prometheus"]["command"]
-                assert services["prometheus"].get("ports") and services["loki"].get("ports")
+                # pushes and queries reach Prometheus and Loki only through push-gate (it checks push tokens)
+                assert not services["prometheus"].get("ports") and not services["loki"].get("ports"), "only push-gate publishes 9090/3100"
+                assert {p["published"] for p in services["push-gate"]["ports"]} == {"9090", "3100"}
                 assert services["grafana"]["environment"]["INFLUXDB_ADMIN_TOKEN"]
             if directory.name == "soulsync":
                 active = run(args + ["config", "--services"], env=environment).splitlines()
@@ -119,6 +126,21 @@ def checks(repo, root):
                 assert 5000 not in targets, "Frigate's unauthenticated API must stay private"
                 assert 8971 in targets, "Home Assistant needs Frigate's authenticated API"
     print(f"ok   {count} Compose configurations, monitoring/Frigate boundaries and active profiles")
+    if want("authelia"):
+        check_authelia(configurations, root, environment)
+    if want("forgejo"):
+        check_forgejo(variants["forgejo"]["local"], root, repo, environment, run)
+    if want("garage"):
+        check_garage(configurations["garage"], root, environment, run)
+    if want("forgejo", "garage"):
+        check_forgejo_s3(variants["forgejo"], configurations["garage"], root, environment, run)
+    if want("vaultwarden"):
+        check_vaultwarden(configurations["vaultwarden"], root, environment, run)
+    if want("ntfy"):
+        check_ntfy(configurations["ntfy"], root, environment, run)
+
+
+def check_authelia(configurations, root, environment):
     config = configurations["authelia"]["services"]["authelia"]
     args = ["docker", "run", "--rm", "--network", "none"]
     for key, value in config["environment"].items():
@@ -132,13 +154,21 @@ def checks(repo, root):
     # cannot detect an incorrect bind DN or a mismatched LDAP password.
     smoke = configurations["authelia"]
     smoke.pop("name", None)
+    made = []
     for service in smoke["services"].values():
         service.pop("ports", None)
         service.pop("container_name", None)
         service["restart"] = "no"
+        for volume in service.get("volumes", []):    # data folders that must exist (no create_host_path): made, as an install does
+            if volume.get("type") == "bind" and volume.get("bind", {}).get("create_host_path") is False:
+                Path(volume["source"]).mkdir(parents=True, exist_ok=True)
+                made.append(Path(volume["source"]).relative_to(root))
     for volume in smoke.get("volumes", {}).values():
         volume.pop("name", None)
     smoke["networks"] = {"default": {"internal": True}}
+    # owned by uid 1000, as the template says (Authelia runs as PUID, default 1000; LLDAP as 1000)
+    run(["docker", "run", "--rm", "--network", "none", "-v", f"{root}:/work", "labber-unit",
+         "chown", "-R", "1000:1000", *[f"/work/{m}" for m in made]])
     config_path = root / "services/authelia/config/authelia/configuration.yml"
     # The disposable network has no internet access; NTP is unrelated to LDAP.
     with config_path.open("a") as config_file:
@@ -156,12 +186,6 @@ def checks(repo, root):
     finally:
         run(command + ["down", "--volumes", "--remove-orphans"], env=environment)
 
-    check_forgejo(variants["forgejo"]["local"], root, repo, environment, run)
-    check_garage(configurations["garage"], root, environment, run)
-    check_forgejo_s3(variants["forgejo"], configurations["garage"], root, environment, run)
-    check_vaultwarden(configurations["vaultwarden"], root, environment, run)
-    check_ntfy(configurations["ntfy"], root, environment, run)
-
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]).resolve())
+    main(Path(sys.argv[1]).resolve(), set(sys.argv[2:]))   # services named: only their real-app checks

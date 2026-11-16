@@ -1,0 +1,3 @@
+# CI's test install (tests/ci/smoke.sh): no iGPU on the CI host, the optional parts off
+COMPOSE_FILE=docker-compose.yml:tests/compose.ci.yml
+COMPOSE_PROFILES=ml-no,kiosk-no,frame-no,powertools-no

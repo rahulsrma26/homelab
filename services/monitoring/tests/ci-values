@@ -1,0 +1,4 @@
+# CI's test install (tests/ci/smoke.sh): alerts to a dummy ntfy address (no Telegram token in CI)
+ALERT_TARGET=ntfy
+NTFY_URL=http://127.0.0.1:9
+NTFY_TOKEN=ci-test

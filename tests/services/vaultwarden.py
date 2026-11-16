@@ -59,7 +59,8 @@ def check_vaultwarden(config, root, environment, run):
             "disabled" in curl("-X", "POST", "-d", "token=anything", "http://vaultwarden:8080/admin").lower()
         key = run(command + ["exec", "-T", "vaultwarden", "sha256sum", "/data/rsa_key.pem"], env=environment)
         run(command + ["restart", "vaultwarden"], env=environment)
-        run(command + ["up", "-d", "--wait", "--wait-timeout", "60"], env=environment)
+        # the image's healthcheck first runs about 60 s after a start: 60 s of waiting was a race
+        run(command + ["up", "-d", "--wait", "--wait-timeout", "90"], env=environment)
         assert run(command + ["exec", "-T", "vaultwarden", "sha256sum", "/data/rsa_key.pem"], env=environment) == key, \
             "the signing key changed across a restart (logins would break)"
         logs = run(command + ["logs", "--no-color", "vaultwarden"], env=environment)

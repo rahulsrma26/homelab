@@ -18,10 +18,14 @@ for SETUP_VIRT in vm lxc; do
     printf 'http://mon.example:9090\n\n' | st_alloy_run >/dev/null 2>&1 || true
     [ -s "$out/$SETUP_VIRT.alloy" ] || { echo "no $SETUP_VIRT config generated" >&2; exit 1; }
 done
-# a Docker host (VM): adds container metrics + container logs
+# a Docker host (VM): adds container metrics + container logs; with a push token
 docker() { :; }
 SETUP_DOCKER=1 SETUP_VIRT=vm
+PUSH_TOKEN_FILE=$(mktemp -u); SETUP_PUSHTOKEN=0123456789abcdef0123456789abcdef
 alloy() { cp "$2" "$out/docker.alloy"; }
 printf 'http://mon.example:9090\n\n' | st_alloy_run >/dev/null 2>&1 || true
 grep -q 'prometheus.exporter.cadvisor "docker"' "$out/docker.alloy" || { echo "docker config lacks cadvisor" >&2; exit 1; }
 grep -q 'loki.source.docker' "$out/docker.alloy" || { echo "docker config lacks container logs" >&2; exit 1; }
+[ "$(grep -c "bearer_token_file = \"$PUSH_TOKEN_FILE\"" "$out/docker.alloy")" -eq 2 ] || { echo "the push token isn't on both endpoints" >&2; exit 1; }
+[ "$(stat -c %a "$PUSH_TOKEN_FILE")" = 600 ] || [ "$(stat -c %a "$PUSH_TOKEN_FILE")" = 640 ] || { echo "the token file is readable by others" >&2; exit 1; }
+! grep -q '@AUTH@' "$out/vm.alloy" "$out/lxc.alloy" || { echo "an unfilled @AUTH@" >&2; exit 1; }

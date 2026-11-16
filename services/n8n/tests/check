@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# The seeded workflow is still there (default), or, with --live, only that the instance answers.
+import sys
+sys.path.insert(0, __file__.rsplit('/', 1)[0]); from _api import req, wait_ready, login, data
+wait_ready()
+if '--live' in sys.argv:
+    print('check --live: ready (/healthz/readiness)'); sys.exit(0)
+login()
+st, out = req('GET', '/rest/workflows')
+names = sorted(w.get('name') for w in data(out)) if st == 200 else []
+assert 'labseed' in names, f'workflows: {st} {names or out}'
+print('check: the seeded workflow is there')

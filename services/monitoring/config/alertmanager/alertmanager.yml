@@ -17,6 +17,13 @@ route:
   repeat_interval: 6h
   receiver: 'critical'
   routes:
+    # the heartbeat: only to the outside watcher, every minute, never to a chat
+    - matchers: ['alertname = Watchdog']
+      group_by: ['alertname']
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 50s     # just under group_interval: sent at every check (1m)
+      receiver: 'watchdog'
     - matchers: ['severity = critical']
       repeat_interval: 6h
       receiver: 'critical'

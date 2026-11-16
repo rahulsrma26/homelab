@@ -1,0 +1,82 @@
+# CI on Forgejo (homelab-private: plans/automation-design.md → CI). Runs on our runner
+# (label labber-ci: a disposable Docker host). No secrets in these jobs.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [dev]
+jobs:
+  static:
+    runs-on: labber-ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: lint
+        run: bash tests/repo/lint.sh
+      - name: lint's own tests
+        run: bats tests/repo/unit.bats
+      - name: shellcheck
+        run: bash tests/repo/shellcheck.sh
+      - name: labber sync's checks
+        run: python3 -W error tests/labber/sync_test.py
+      - name: the gatekeeper's rules
+        run: python3 -W error gatekeeper/rules_test.py && python3 -W error tests/ci/hold_check_test.py
+      - name: Grafana dashboards (JSON, uids, every Prometheus query parses; they skip the canary)
+        run: python3 -W error tests/ci/dashboards_check.py
+      - name: renovate.json (Renovate's own validator)
+        run: docker run --rm -v "$PWD/renovate.json:/usr/src/app/renovate.json:ro" -w /usr/src/app --entrypoint renovate-config-validator renovate/renovate:44.183.0
+  services:
+    runs-on: labber-ci
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: smoke test of each changed service (base → this change)
+        run: |
+          base_ref="${GITHUB_BASE_REF:-dev}"
+          git worktree add -f /tmp/ci-base-$$ "origin/$base_ref" >/dev/null 2>&1 || git worktree add -f /tmp/ci-base-$$ "HEAD~1"
+          changed=$(git diff --name-only "$(git merge-base HEAD "origin/$base_ref" 2>/dev/null || echo HEAD~1)" HEAD -- services/ \
+            | cut -d/ -f2 | sort -u)
+          echo "changed: ${changed:-none}"
+          for s in $changed; do
+            [ -d "services/$s" ] || continue
+            bash tests/ci/smoke.sh "$s" /tmp/ci-base-$$ "$PWD"
+          done
+          git worktree remove --force /tmp/ci-base-$$
+      - name: the tests of each changed service (tests/<service>/run*.sh; its real-app checks in tests/services)
+        if: always()
+        run: |
+          base_ref="${GITHUB_BASE_REF:-dev}"
+          bash tests/ci/service-tests.sh "$(git merge-base HEAD "origin/$base_ref" 2>/dev/null || echo HEAD~1)"
+      - name: tidy the CI host (images unused for 2 hours; the rest stays cached)
+        if: always()
+        run: docker image prune -af --filter "until=2h" >/dev/null && df -h / | tail -1
+  labber:
+    runs-on: labber-ci
+    needs: static
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: labber's tests (unit, audit, source, labber-host; setup from scratch, integration, commands)
+        run: |
+          # a PR: what it changes against its base; a push to dev: the merge it adds (its first parent)
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then from=$(git merge-base HEAD "origin/$GITHUB_BASE_REF"); else from=$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD); fi
+          if ! git diff --name-only "$from" HEAD | grep -qE '^(labber/|tests/labber/|tools/|services/labber$)'; then
+            echo "labber, its tests and setup's tools unchanged: nothing to run"; exit 0
+          fi
+          bash tests/labber/run-unit.sh
+          LABBER_TEST_LIFECYCLE=1 bash tests/labber/run-setup.sh
+      - name: tidy the CI host (images unused for 2 hours)
+        if: always()
+        run: docker image prune -af --filter "until=2h" >/dev/null && df -h / | tail -1
+  hold:
+    runs-on: labber-ci
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: the hold check (later releases' notes; a local model if reachable)
+        env:
+          HOLD_CHECK_MODEL_URL: ${{ vars.HOLD_CHECK_MODEL_URL }}
+        run: |
+          git diff "$(git merge-base HEAD "origin/${GITHUB_BASE_REF:-dev}")" HEAD -- services/ > /tmp/pr-$$.diff
+          python3 .forgejo/hold-check.py /tmp/pr-$$.diff; rc=$?; rm -f /tmp/pr-$$.diff; exit $rc

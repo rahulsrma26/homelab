@@ -2,7 +2,7 @@
 # mounted read-only; Navidrome keeps its database and cache in ./data.
 services:
   navidrome:
-    image: deluan/navidrome:${NAVIDROME_VERSION:-0.64.2}
+    image: deluan/navidrome:${NAVIDROME_VERSION:-0.64.2@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52}
     container_name: navidrome
     restart: unless-stopped
     healthcheck:

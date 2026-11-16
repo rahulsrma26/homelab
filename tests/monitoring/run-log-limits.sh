@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end test of the log caps: the Alloy config `labber setup` writes for a Docker host,
 # shipping to a Loki with services/monitoring's loki-config.yml. Three containers log at once:
-#   - flood: as fast as it can     → capped (100 lines/s per container, bursts of 1000)
+#   - flood: 2000 lines a second   → capped (100 lines/s per container, bursts of 1000)
 #   - quiet: one line a second     → arrives complete, despite the flood next to it
 #   - noise: a known noise line    → dropped, counted as reason="noise"
 # Alloy's own counters (dropped lines, sent bytes) must show it. Needs only Docker.
@@ -23,6 +23,8 @@ docker build -q -t labber-unit -f "$repo/tests/labber/Dockerfile.unit" "$repo/te
 docker run --rm -v "$repo:/repo:ro" -v "$out:/out" labber-unit bash -c "bash /repo/tests/labber/gen-alloy-configs.sh /out >/dev/null; chown -R $(id -u):$(id -g) /out"
 [[ -s "$out/docker.alloy" ]] || fail "no docker config generated"
 sed -i -E 's#url = "http://[^"]*/loki/api/v1/push"#url = "http://loki-'$$':3100/loki/api/v1/push"#' "$out/docker.alloy"
+# this test's Loki has no push-gate in front: no token (its file exists only where it was generated)
+sed -i '/bearer_token_file = /d' "$out/docker.alloy"
 # the journal isn't there in a container: drop that source, keep everything else as generated
 python3 - "$out/docker.alloy" <<'EOF'
 import re, sys
@@ -46,7 +48,7 @@ for _ in $(seq 60); do q "http://loki-$$:3100/ready" >/dev/null 2>&1 && q "http:
 q "http://alloy-$$:12345/-/ready" >/dev/null || fail "alloy didn't start"
 
 secs=20
-docker run -d --name "flood-$$" alpine:3 sh -c "end=\$((\$(date +%s)+$secs)); i=0; while [ \$(date +%s) -lt \$end ]; do i=\$((i+1)); echo flood \$i; done; echo produced \$i; sleep 60" >/dev/null
+docker run -d --name "flood-$$" alpine:3 sh -c "end=\$((\$(date +%s)+$secs)); i=0; while [ \$(date +%s) -lt \$end ]; do for _ in \$(seq 2000); do i=\$((i+1)); echo flood \$i; done; sleep 1; done; echo produced \$i; sleep 60" >/dev/null
 docker run -d --name "quiet-$$" alpine:3 sh -c "for i in \$(seq $secs); do echo quiet \$i; sleep 1; done; sleep 60" >/dev/null
 docker run -d --name "noise-$$" alpine:3 sh -c "for i in \$(seq $secs); do echo 'nginx: using uninitialized \"go2rtc_stream_proxy\" variable'; sleep 1; done; sleep 60" >/dev/null
 # wait until the quiet container's lines are all in (or 2 minutes), then count
@@ -60,8 +62,8 @@ produced=$(docker logs "flood-$$" 2>&1 | sed -n 's/^produced //p')
 flood=$(count "flood-$$") quiet=$(count "quiet-$$") noise=$(count "noise-$$")
 echo "     flood: $produced written, $flood in Loki · quiet: $quiet of $secs · noise: $noise"
 
-[[ -n "$produced" && "$produced" -gt 20000 ]] || fail "the flood container didn't produce enough lines ($produced)"
 max=$(( 100 * (secs + 60) + 1000 ))   # its whole life at 100/s + one burst
+[[ -n "$produced" && "$produced" -gt $((2 * max)) ]] || fail "the flood container didn't produce enough lines to test the cap ($produced; needs > $((2 * max)))"
 [[ "$flood" -le "$max" ]] || fail "flood not capped: $flood lines arrived (allowed ≤ $max)"
 [[ "$flood" -ge 1000 ]] || fail "flood capped too hard: only $flood lines arrived"
 pass "a flooding container is capped ($flood of $produced lines; ≤ 100/s + a burst of 1000)"

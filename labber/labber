@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="4.4.7"
+VERSION="5.0.19"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -17,13 +17,21 @@ LABBER_BIN="/usr/local/bin/labber"         # a link to $LABBER_LIB/labber
 SERVICE_BASE="${LABBER_SERVICE_BASE:-/opt/homelab/services}"
 SOURCE_CONFIG="${LABBER_SOURCE_CONFIG:-/etc/labber/source.conf}"
 SOURCE_SPEC="" SOURCE_REF="" SOURCE_LOCAL="" SOURCE_CUSTOM=0
+# What labber installs is checked: an enrolled guest (labber sync) installs from sync's
+# verified release tree; with Forgejo's key in SIGNERS, a fetched tip must carry its
+# signature. SOURCE_ORIGIN: default, saved, env, cli, or release (sync's tree).
+SYNC_CONF="${LABBER_SYNC_CONF:-/etc/labber/sync.conf}"
+SIGNERS="${LABBER_SYNC_SIGNERS:-/etc/labber/allowed_signers}"
+SOURCE_ORIGIN=""
+FORCE=0
 SOURCE_ARGS=()
 # this labber's own files/ — next to the script (installed, or a repo checkout). Run
 # as `bash <(curl …)` or `curl … | bash` there are none: setup downloads them
 # (labber_need_files)
 LABBER_FILES=""
 _self=$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)
-if [[ -n "${BASH_SOURCE[0]:-}" && -f "$_self" ]]; then LABBER_FILES="$(dirname "$_self")/files"; fi
+LABBER_HOME=""      # the folder this labber runs from (its sync.py lives next to it)
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "$_self" ]]; then LABBER_FILES="$(dirname "$_self")/files"; LABBER_HOME="$(dirname "$_self")"; fi
 unset _self
 
 # ── colours ───────────────────────────────────────────────────────────────────
@@ -138,7 +146,16 @@ source_resolve() {
     elif [[ -n "${LABBER_REF:-}" ]]; then SOURCE_REF="$LABBER_REF"; SOURCE_CUSTOM=1; fi
     if [[ -n "$cli_source" ]]; then SOURCE_SPEC="$cli_source"; SOURCE_REF=""; SOURCE_CUSTOM=1; fi
     if [[ -n "$cli_ref" ]]; then SOURCE_REF="$cli_ref"; SOURCE_CUSTOM=1; fi
+    SOURCE_ORIGIN=default
+    [[ -z "$saved_source" ]] || SOURCE_ORIGIN=saved
+    [[ -z "${LABBER_SOURCE:-}${LABBER_REF:-}" ]] || SOURCE_ORIGIN="env"
+    [[ -z "$cli_source$cli_ref" ]] || SOURCE_ORIGIN=cli
+    # enrolled: by-hand commands install what labber sync verified, not a branch tip
+    if [[ "$SOURCE_ORIGIN" == default || "$SOURCE_ORIGIN" == saved ]] && enrolled; then
+        SOURCE_SPEC="$SYNC_TREE" SOURCE_REF="" SOURCE_CUSTOM=1
+    fi
     source_validate "${3:-1}"
+    [[ -z "$SOURCE_LOCAL" || "$SOURCE_LOCAL" != "$(readlink -m -- "$SYNC_TREE")" ]] || SOURCE_ORIGIN=release
     # sudo drops environment overrides. Pass the effective choice explicitly when
     # setup elevates; no global sudo environment preservation is needed.
     SOURCE_ARGS=()
@@ -148,12 +165,30 @@ source_resolve() {
     fi
 }
 
+enrolled() { [[ -f "$SYNC_CONF" ]]; }
+
+# Forgejo's key is set: every fetched Git tip must be signed with it
+verify_on() { [[ -s "$SIGNERS" && -z "$SOURCE_LOCAL" ]]; }
+
+# fetched sources go through Git (not GitHub's tarball) when they're custom or checked
+use_git() { (( SOURCE_CUSTOM )) || verify_on; }
+
+# the checked-out tip in $1 is signed by a key in SIGNERS
+verify_tip() {
+    command -v ssh-keygen >/dev/null || { echo "error: checking signatures needs ssh-keygen (apt install openssh-client)" >&2; return 1; }
+    git -C "$1" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$SIGNERS" verify-commit HEAD < /dev/null >/dev/null 2>&1 && return 0
+    echo -e "${R}error: ${SOURCE_REF:-the default branch} of $REPO ($(git -C "$1" rev-parse --short HEAD 2>/dev/null)) isn't signed by Forgejo's key ($SIGNERS): nothing installed${N}" >&2
+    return 1
+}
+
 source_validate() {
     SOURCE_LOCAL=""
     [[ -n "$SOURCE_SPEC" && "$SOURCE_SPEC" != -* && "$SOURCE_SPEC" != *$'\n'* && "$SOURCE_SPEC" != *$'\r'* ]] \
         || die "invalid source"
     case "$SOURCE_SPEC" in
-        https://*|http://*)
+        http://*)
+            die "http:// sources are refused (anyone on the path could change what's installed): use https:// or ssh://" ;;
+        https://*)
             # Credentials in URLs leak via process listings, Git diagnostics and
             # source show. Use an SSH key or Git credential helper instead.
             [[ "${SOURCE_SPEC#*://}" != *@* && "$SOURCE_SPEC" != *'?'* && "$SOURCE_SPEC" != *'#'* ]] \
@@ -170,6 +205,9 @@ source_validate() {
             # Fetches and source show/set check availability. Operational commands
             # such as stop/logs/go/help must work even if a saved checkout vanished.
             if (( ${1:-1} )); then
+                if [[ ! -d "$SOURCE_LOCAL" && "$SOURCE_LOCAL" == "$(readlink -m -- "$SYNC_TREE")" ]]; then
+                    die "enrolled in labber sync, but its release tree isn't there yet: labber sync run first (or --source … once)"
+                fi
                 [[ -d "$SOURCE_LOCAL" ]] || die "local source is not a directory"
                 local root
                 root=$(git -c safe.directory="$SOURCE_LOCAL" -C "$SOURCE_LOCAL" rev-parse --show-toplevel 2>/dev/null) \
@@ -190,17 +228,31 @@ do_source() {
     case "$action" in
         show)
             (( $# == 0 )) || die "usage: labber source show"
-            if [[ -n "$SOURCE_LOCAL" ]]; then
+            if [[ "$SOURCE_ORIGIN" == release ]]; then
+                printf 'source=%s\nref=labber sync'"'"'s verified release\nmode=release\n' "$SOURCE_SPEC"
+            elif [[ -n "$SOURCE_LOCAL" ]]; then
                 printf 'source=%s\nref=working tree\nmode=worktree\n' "$SOURCE_SPEC"
             else
                 printf 'source=%s\nref=%s\nmode=git\n' "$SOURCE_SPEC" "${SOURCE_REF:-remote HEAD}"
             fi
+            if [[ -s "$SIGNERS" ]]; then printf 'signed-by=%s\n' "$(awk 'NF >= 4 { print $3, substr($4, 1, 16) "…"; exit }' "$SIGNERS")"
+            else printf 'signed-by=not checked (labber source key <Forgejo signing key> to check)\n'; fi
             return ;;
+        key)
+            (( $# == 1 )) && [[ "$1" =~ ^ssh-(ed25519|rsa)\ [A-Za-z0-9+/=]+ ]] || die "usage: labber source key '<Forgejo's SSH signing key: ssh-ed25519 AAAA…>'"
+            ! enrolled || die "enrolled in labber sync: its enrolment set the key (labber sync enroll --force to change it)"
+            (( EUID == 0 )) || s=sudo
+            tmp=$(mktemp /tmp/labber-signers-XXXXXX) || return 1
+            printf 'forgejo namespaces="git" %s\n' "$(cut -d' ' -f1,2 <<< "$1")" > "$tmp"
+            if ! { $s install -d -m 755 -- "$(dirname "$SIGNERS")" && $s install -m 644 -- "$tmp" "$SIGNERS"; } < /dev/null; then
+                rm -f "$tmp"; die "could not save the key"
+            fi
+            rm -f "$tmp"; ok "fetched sources must now be signed by this key ($SIGNERS)"; return ;;
         set)
             (( $# >= 1 && $# <= 2 )) || die "usage: labber source set <Git URL|working-tree path> [branch|tag|SHA]"
             SOURCE_SPEC="$1" SOURCE_REF="${2:-}"; source_validate ;;
         reset) (( $# == 0 )) || die "usage: labber source reset" ;;
-        *) die "usage: labber source [show|set <URL|path> [ref]|reset]" ;;
+        *) die "usage: labber source [show|set <URL|path> [ref]|reset|key <ssh key>]" ;;
     esac
     (( EUID == 0 )) || s=sudo
     if [[ "$action" == reset ]]; then
@@ -218,6 +270,7 @@ do_source() {
     fi
     rm -f "$tmp"
     ok "source saved in $SOURCE_CONFIG"
+    ! enrolled || warn "enrolled in labber sync: labber installs from sync's verified release, not this source (used again after labber sync unenroll)"
     [[ -z "$SOURCE_LOCAL" ]] || warn "working-tree mode: unattended checks need this path and include uncommitted changes"
 }
 
@@ -268,6 +321,7 @@ clone_repo_dir() {
         # must never eat answers typed ahead for labber's prompts; stdout is just progress
         if err=$(fetch_source "$tmpdir" "$@" < /dev/null 2>&1 >/dev/null) \
             && err=$(git -C "$tmpdir" sparse-checkout set "$@" < /dev/null 2>&1 >/dev/null); then
+            if verify_on && ! verify_tip "$tmpdir"; then rm -rf "$tmpdir"; return 1; fi
             echo "$tmpdir"
             return 0
         fi
@@ -429,19 +483,20 @@ copy_svc_files() {
         fi
     fi
     while IFS= read -r f; do
+        inside "$dest" "$f" || return 1
         mkdir -p "$(dirname "$dest/$f")" || return 1
         if repo_wins "$f" || ! locally_edited "$dest" "$f" "$prefix"; then
-            cp "$src/$f" "$dest/$f" || return 1
+            safe_cp "$src/$f" "$dest/$f" || return 1
         elif [[ "$mode" == reinstall || -n "${use_repo[$f]:-}" ]]; then
-            cp -p "$dest/$f" "$dest/$f.labber-bak" || return 1
+            safe_cp "$dest/$f" "$dest/$f.labber-bak" -p || return 1
             give_back "$dest/$f.labber-bak"
-            cp "$src/$f" "$dest/$f" || return 1
+            safe_cp "$src/$f" "$dest/$f" || return 1
             saved+=("$f")
         else
             # edited here; only worth a note when the repo has moved on since
             b=$(base_sum "$dest" "$f")
             if [[ -z "$b" || "$(file_sum "$src/$f")" != "$b" ]]; then
-                cp "$src/$f" "$dest/$f.labber-new" || return 1
+                safe_cp "$src/$f" "$dest/$f.labber-new" || return 1
                 give_back "$dest/$f.labber-new"; kept+=("$f")
             fi
         fi
@@ -471,9 +526,19 @@ copy_svc_files() {
 
 # before an update: keep the installed copy of every file the repo is about to
 # replace, so a rollback can put them back. Prints the backup folder.
+# where an update keeps the files it replaced (not /tmp: shared, and gone at a reboot)
+bak_root() {
+    local d="${LABBER_BAK_DIR:-/var/lib/labber/backups}"
+    if (( EUID != 0 )) && ! { mkdir -p "$d" 2>/dev/null && [[ -w "$d" ]]; }; then
+        d="${XDG_STATE_HOME:-$(target_home)/.local/state}/labber/backups"
+    fi
+    mkdir -p "$d" && chmod 700 "$d" && echo "$d"
+}
+
 backup_svc_files() {
-    local src="$1" dest="$2" bak f
-    bak=$(mktemp -d /tmp/labber-rollback-XXXXXX) || return 1
+    local src="$1" dest="$2" bak f root
+    root=$(bak_root) || return 1
+    bak=$(mktemp -d "$root/rollback-XXXXXX") || return 1
     mkdir -p "$bak/files" && : > "$bak/new" || { rm -rf "$bak"; return 1; }
     if (( EUID == 0 )); then chown --reference="$dest" "$bak/files" || { rm -rf "$bak"; return 1; }; fi
     chmod --reference="$dest" "$bak/files" || { rm -rf "$bak"; return 1; }
@@ -493,13 +558,51 @@ backup_svc_files() {
     else
         echo "$BASE_FILE" >> "$bak/new" || { rm -rf "$bak"; return 1; }
     fi
+    # .env too: an update adds keys and may fill values, which a rollback must undo
+    if [[ -f "$dest/.env" && ! -L "$dest/.env" ]]; then
+        cp -p "$dest/.env" "$bak/files/" || { rm -rf "$bak"; return 1; }
+    fi
     echo "$bak"
+}
+
+# copy $1 to $2 without writing through a link someone planted there: a link is removed first; a
+# regular file is written in place, which needs only that file to be writable (removing it
+# would need the folder, and a container may own the folder: Authelia's config). $3: -p to keep
+# mode and times where allowed
+safe_cp() {
+    if [[ -L "$2" ]]; then rm -f -- "$2" || return 1; fi
+    if [[ "${3:-}" == -p ]]; then cp -P --preserve=mode,timestamps -- "$1" "$2" 2>/dev/null || cp -P -- "$1" "$2" 2>/dev/null && return 0
+    else cp -P -- "$1" "$2" 2>/dev/null && return 0; fi
+    # a file a container gave to root (an older Authelia handed its /config to root): with
+    # passwordless sudo, copied as root (the file keeps its owner); otherwise the error
+    if (( EUID != 0 )) && [[ -e "$2" && ! -w "$2" ]] && sudo -n true 2>/dev/null; then
+        warn "$2 belongs to $(stat -c %U "$2" 2>/dev/null): written with sudo"
+        sudo -n cp -P -- "$1" "$2" && return 0
+    fi
+    cp -P -- "$1" "$2"                                     # again, for its error message
+}
+
+# $2 (a path under the instance $1) stays inside it: no symlinked folder on the way leads out,
+# so labber (often root) never writes through a link someone planted
+inside() {
+    local top real; top=$(readlink -f -- "$1") || return 1
+    real=$(readlink -m -- "$1/$(dirname -- "$2")")
+    [[ "$real" == "$top" || "$real" == "$top"/* ]] && return 0
+    echo -e "${R}error: $2 leads outside $1 (a symlinked folder): not written${N}" >&2
+    return 1
 }
 
 # undo an update's file changes: put the saved files back, remove the ones it added
 restore_svc_files() {
     local bak="$1" dest="$2" f
-    cp -pR "$bak/files/." "$dest/" || return 1
+    # file by file (not cp -pR of the folders: a folder a container took over, e.g. Authelia's
+    # config, can't get its times or owner back, which failed the whole restore)
+    while IFS= read -r -d '' f; do
+        f="${f#./}"
+        inside "$dest" "$f" || return 1
+        mkdir -p "$(dirname "$dest/$f")" || return 1
+        safe_cp "$bak/files/$f" "$dest/$f" -p || return 1
+    done < <(cd "$bak/files" && find . \( -type f -o -type l \) -print0)
     while IFS= read -r f; do
         [[ -n "$f" ]] || continue
         rm -f -- "$dest/$f" || return 1
@@ -522,6 +625,8 @@ give_back_files() {
 # ── health check + rollback ──
 
 HEALTH_SETTLE=10       # seconds a new container must stay up (catches crash-on-start)
+AUTO_ROLLBACK=0        # update --rollback-on-failure: roll back without asking (labber sync)
+LABBER_ONLY=0          # update --labber-only: labber itself, no system update
 HEALTH_TIMEOUT=180     # seconds to wait for healthchecks to pass
 
 # what each container of the service runs now: "image-ref<TAB>image-id" per line
@@ -627,6 +732,9 @@ rollback_service() {
     if [[ -n "$files_bak" ]]; then restore_svc_files "$files_bak" "$dir" || return 1; fi
     while IFS=$'\t' read -r ref id; do
         [[ -n "$ref" && -n "$id" ]] || continue
+        # pinned by digest: the old image is still there under that reference (Docker refuses
+        # a tag with a digest in it, and none is needed)
+        [[ "$ref" == *@sha256:* ]] && continue
         docker tag "labber-rollback:${id#sha256:}" "$ref" || return 1
     done <<< "$before"
     (cd "$dir" && docker compose down --remove-orphans && docker compose up -d)
@@ -686,9 +794,21 @@ compose_refresh() {
         return 1
     fi
 
+    # --rollback-on-failure: the service's own data (labber.yml state) is copied with the
+    # service stopped, so a rollback can put it back with the old images and files
+    local state_bak=""
+    if (( AUTO_ROLLBACK )) && [[ -n "$before" ]]; then
+        if ! state_bak=$(state_save "$dir"); then
+            warn "could not copy the service's state — nothing changed"
+            (cd "$dir" && docker compose up -d) >/dev/null 2>&1 || true
+            abort_refresh "$dir" "$before" "$files_bak" || true
+            return 1
+        fi
+    fi
     info "waiting for the containers to come up healthy..."
     if (cd "$dir" && docker compose down --remove-orphans && docker compose up -d) && wait_healthy "$dir"; then
         unpin_images "$before"
+        [[ -z "$state_bak" ]] || state_drop "$state_bak"
         docker image prune -f >/dev/null || warn "could not prune unused images"
         return 0
     fi
@@ -696,6 +816,22 @@ compose_refresh() {
     if [[ -z "$before" ]]; then
         warn "nothing to roll back to (it wasn't running before)"
         return 1
+    fi
+    if (( AUTO_ROLLBACK )); then
+        info "rolling back by itself (--rollback-on-failure): images, files and state..."
+        (cd "$dir" && docker compose down --remove-orphans) >/dev/null 2>&1 || true
+        if [[ -n "$state_bak" ]] && ! state_restore "$state_bak"; then
+            warn "could not put the state back — kept at $state_bak"
+        fi
+        if rollback_service "$dir" "$before" "$files_bak" && wait_healthy "$dir"; then
+            ok "rolled back — running the previous version"
+            [[ -z "$state_bak" ]] || state_drop "$state_bak"
+            unpin_images "$before"
+            return 1
+        fi
+        warn "the previous version doesn't come up either — state copy kept at ${state_bak:-(none)}"
+        unpin_images "$before"
+        return 3      # the service is down: labber sync raises this apart from a clean rollback
     fi
     # an app may already have migrated its data for the new version, which the old
     # one can't read — so a person decides; without a terminal it's left as it is
@@ -718,14 +854,16 @@ compose_refresh() {
 
 # home directory of the person running labber (their own home, even under sudo)
 target_home() {
-    if [[ -n "${SUDO_USER:-}" ]]; then getent passwd "$SUDO_USER" | cut -d: -f6; else echo "$HOME"; fi
+    # HOME is unset under systemd (labber sync's self-update): the user's own from passwd
+    if [[ -n "${SUDO_USER:-}" ]]; then getent passwd "$SUDO_USER" | cut -d: -f6
+    else echo "${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"; fi
 }
 
 # Fetch labber and files/ together from the selected source. The default GitHub
 # bootstrap still needs only curl/tar; custom Git sources require Git beforehand.
 labber_download() {
     local into="$1" script tmp
-    if (( SOURCE_CUSTOM )); then
+    if use_git; then
         command -v git &>/dev/null || { echo 'error: Git is required for a custom source' >&2; return 1; }
         tmp=$(clone_repo_dir labber/) || return 1
         if [[ ! -f "$tmp/labber/labber" || ! -d "$tmp/labber/files" ]] \
@@ -767,7 +905,7 @@ labber_place() {
 
 # setup run as `bash <(curl …)` has no files/ next to it: download them for this run
 labber_need_files() {
-    if (( ! SOURCE_CUSTOM )) && [[ -n "$LABBER_FILES" && -d "$LABBER_FILES" ]]; then return 0; fi
+    if ! use_git && [[ -n "$LABBER_FILES" && -d "$LABBER_FILES" ]]; then return 0; fi
     local tmp dir; tmp=$(mktemp -d /tmp/labber-files-XXXXXX)
     trap "rm -rf '$tmp'" EXIT
     dir=$(labber_download "$tmp") || die "could not fetch labber's files from the selected source"
@@ -792,6 +930,10 @@ labber_file() {
 #   {{ name | default(8000) }}            asked; Enter keeps the default (default() = empty)
 #   {{ name | generate(hex64) }}          a secret, typed hidden; Enter generates it
 #   {{ name | choice(lan,cf) }}           one of the listed values (Enter = skip, like a required one)
+#   {{ name | generated_dir(models) }}    a folder for files that can be pulled or rebuilt (models,
+#                                         caches, queues): /opt/generated/services/<svc>/models on a guest
+#                                         with the no-backup disk, else ./generated/models; asked like
+#                                         a default, filled in without a terminal; never moved later
 #       hexN            N random hex characters (typed value: exactly N hex chars)
 #       base64_N        N random bytes, base64-encoded
 #       uuid            a random UUID
@@ -801,17 +943,39 @@ labber_file() {
 #                       warning ("use it anyway?"), e.g. an existing password a dump expects
 # A name used several times in one .env is asked once and filled in everywhere.
 
-TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate|choice)\(([^}]*)\)[[:space:]]*)?\}\}'
+TPL_RE='\{\{[[:space:]]*([a-z_][a-z0-9_]*)[[:space:]]*(\|[[:space:]]*(default|generate|choice|generated_dir)\(([^}]*)\)[[:space:]]*)?\}\}'
+
+# ── the no-backup disk for generated files ────────────────────────────────────
+# /opt/generated, when it is a mount point (an LXC mount point or a VM's extra disk), holds
+# what can be pulled or rebuilt: Docker's images (containerd's store) and the folders
+# templates ask for with generated_dir(). Without it, those stay on the root disk.
+GEN_DIR="${LABBER_GENERATED_DIR:-/opt/generated}"
+generated_mounted() { mountpoint -q -- "$GEN_DIR" 2>/dev/null; }
+
+# generated_dir(sub) is valid: a relative path of plain names (no .., no leading /)
+generated_sub_ok() {
+    [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*$ ]] || return 1
+    [[ "/$1/" != */../* && "/$1/" != */./* ]]
+}
+
+# the folder generated_dir(sub) stands for, for the service in folder $1: on the disk under
+# services/ (like /opt/homelab/services; Docker's images are in containerd/ next to it)
+generated_value() {
+    local svc; svc=$(basename -- "$1")
+    if generated_mounted; then echo "$GEN_DIR/services/$svc/$2"; else echo "./generated/$2"; fi
+}
 
 # N random characters from a tr character set, e.g. rand_chars 32 'A-Za-z0-9'.
 # Fails (instead of looping forever) on a set that yields nothing.
 rand_chars() {
-    local out="" i
-    for (( i = 0; i < 100 && ${#out} < $1; i++ )); do
+    local out="" i n
+    [[ "$1" =~ ^[0-9]+$ ]] || return 1
+    n=$((10#$1))             # a length, never octal (hex064 is 64)
+    for (( i = 0; i < 100 && ${#out} < n; i++ )); do
         out+=$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc "$2" 2>/dev/null || true)
     done
-    (( ${#out} >= $1 )) || return 1
-    echo "${out:0:$1}"
+    (( ${#out} >= n )) || return 1
+    echo "${out:0:n}"
 }
 
 rand_uuid() {
@@ -858,6 +1022,9 @@ gen_desc() {
     esac
 }
 
+# a placeholder that holds a secret by its name: typed without echo (scrollback, screen sharing)
+secret_name() { [[ "${1,,}" =~ (password|passwd|secret|token|api_?key|private_?key|credential) ]]; }
+
 gen_value() {
     case "$1" in
         hex*)     rand_chars "${1#hex}" 'a-f0-9' ;;
@@ -889,10 +1056,10 @@ gen_valid() {
     local spec="$1" v="$2"
     [[ -n "$v" ]] || return 1
     case "$spec" in
-        hex*)     [[ "$v" =~ ^[0-9a-fA-F]+$ ]] && (( ${#v} == ${spec#hex} )) ;;
+        hex*)     [[ "$v" =~ ^[0-9a-fA-F]+$ && "${spec#hex}" =~ ^[0-9]+$ ]] && (( ${#v} == 10#${spec#hex} )) ;;
         uuid)     [[ "$v" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]] ;;
         base64_*) return 0 ;;
-        *)        (( ${#v} >= ${spec##*,} )) ;;
+        *)        [[ "${spec##*,}" =~ ^[0-9]+$ ]] && (( ${#v} >= 10#${spec##*,} )) ;;
     esac
 }
 
@@ -903,7 +1070,17 @@ env_get() {
     line=$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | tail -1) || return 0
     line="${line%$'\r'}"
     line="${line#*=}"
-    if [[ "$line" =~ ^\"([^\"]*)\" || "$line" =~ ^\'([^\']*)\' ]]; then
+    if [[ "$line" == \"* ]]; then
+        # double quotes: \\ \" \$ are escapes (what env_set writes, and compose reads)
+        local out="" i c
+        for (( i = 1; i < ${#line}; i++ )); do
+            c="${line:i:1}"
+            if [[ "$c" == '\' && "${line:i+1:1}" == [\\\"\$] ]]; then out+="${line:i+1:1}"; i=$((i + 1))
+            elif [[ "$c" == '"' ]]; then break
+            else out+="$c"; fi
+        done
+        line="$out"
+    elif [[ "$line" =~ ^\'([^\']*)\' ]]; then
         line="${BASH_REMATCH[1]}"
     else
         [[ "$line" =~ ^(.*[^[:space:]])?[[:space:]]+#.*$ ]] && line="${BASH_REMATCH[1]}"
@@ -920,9 +1097,11 @@ env_set() {
     local file="$1" key="$2" val="$3"
     if [[ ! "$val" =~ ^[A-Za-z0-9_./:@+=,-]*$ ]]; then
         if [[ "$val" != *"'"* ]]; then
-            val="'$val'"
+            val="'$val'"            # single quotes: compose takes everything literally
         else
-            warn "$key contains both ' and special characters — check how it was written in $file"
+            # a ' inside: double quotes, with \, " and $ escaped (compose reads them back literally)
+            val="${val//\\/\\\\}"; val="${val//\"/\\\"}"; val="${val//\$/\\\$}"
+            val="\"$val\""
         fi
     fi
     local tmp; tmp=$(mktemp)
@@ -993,12 +1172,20 @@ check_env_pins() {
 
 # keys in .env whose value still contains a placeholder, one per line
 env_placeholders() {
-    local file="$1" line key
+    local file="$1" line key example
     [[ -f "$file" ]] || return 0
+    # only the template's own questions: with a .env.example next to it, a key counts only if its
+    # value there is a placeholder too (a line you added, e.g. Paperless's {{ title }} file name
+    # format, is never asked about)
+    example="$(dirname "$file")/.env.example"
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
         key="${BASH_REMATCH[1]}"
-        if [[ "$(env_get "$file" "$key")" =~ $TPL_RE ]]; then echo "$key"; fi
+        [[ "$(env_get "$file" "$key")" =~ $TPL_RE ]] || continue
+        if [[ -f "$example" && "$(basename "$file")" != .env.example ]] && ! [[ "$(env_get "$example" "$key")" =~ $TPL_RE ]]; then
+            continue
+        fi
+        echo "$key"
     done < "$file"
 }
 
@@ -1016,12 +1203,28 @@ fill_env_placeholders() {
             func[$name]="${f:-required}"; arg[$name]="$a"; order+=("$name")
         done < <(tpl_list "$(env_get "$env" "$k")")
     done
+    # generated_dir(sub): this service's folder for it, then asked and filled in like a default
+    local svcdir; svcdir=$(readlink -m -- "$(dirname -- "$env")")
+    for name in "${order[@]}"; do
+        [[ "${func[$name]}" == generated_dir ]] || continue
+        if generated_sub_ok "${arg[$name]}"; then
+            func[$name]=default; arg[$name]=$(generated_value "$svcdir" "${arg[$name]}")
+        else
+            warn "$name: generated_dir(${arg[$name]}) needs a relative folder name — left unset"; func[$name]=invalid
+        fi
+    done
 
     if ! interactive; then
         # no one to ask: a default(...) is what Enter would keep, so it's filled in; anything
-        # needing an answer (required, a choice, a secret to generate) stays for a terminal
+        # needing an answer (required, a choice, a secret to generate) stays for a terminal.
+        # LABBER_AUTOGEN=1 (CI's test installs only) also generates the secrets, as Enter would.
         local filled=() val n
         for n in "${order[@]}"; do [[ "${func[$n]}" == default ]] && { value[$n]="${arg[$n]}"; filled+=("$n"); }; done
+        if [[ "${LABBER_AUTOGEN:-}" == 1 ]]; then
+            for n in "${order[@]}"; do
+                [[ "${func[$n]}" == generate ]] && gen_known "${arg[$n]}" && value[$n]=$(gen_value "${arg[$n]}") && filled+=("$n")
+            done
+        fi
         if (( ${#filled[@]} )); then
             for k in "${keys[@]}"; do
                 val=$(env_get "$env" "$k")
@@ -1067,6 +1270,7 @@ fill_env_placeholders() {
             default)
                 read -rp "  $n [${arg[$n]}]: " v
                 value[$n]="${v:-${arg[$n]}}" ;;
+            invalid) continue ;;
             choice)
                 local opts; opts=$(choice_values "${arg[$n]}" | paste -sd'|' -)
                 if ! choice_known "${arg[$n]}"; then warn "$n: choice(${arg[$n]}) needs at least two values — left unset"; continue; fi
@@ -1077,7 +1281,8 @@ fill_env_placeholders() {
                     warn "$n must be one of: $opts — try again"
                 done ;;
             *)
-                read -rp "  $n (required), Enter to skip: " v
+                if secret_name "$n"; then read -rsp "  $n (required, hidden), Enter to skip: " v; echo
+                else read -rp "  $n (required), Enter to skip: " v; fi
                 if [[ -n "$v" ]]; then value[$n]="$v"; else warn "$n left unset"; fi ;;
         esac
     done
@@ -1481,6 +1686,12 @@ do_uninstall() {
             sudo rm -rf -- "$dir" < /dev/null
         fi
         ok "service directory deleted"
+        # its generated_dir() folders on the no-backup disk (models, caches) go with it
+        local gen; gen="$GEN_DIR/services/$(basename -- "$dir")"
+        if [[ -d "$gen" && ! -L "$gen" ]]; then
+            rm -rf -- "$gen" 2>/dev/null || sudo rm -rf -- "$gen" < /dev/null
+            ok "deleted $gen (its generated files)"
+        fi
     else
         info "service directory kept at $dir"
     fi
@@ -1492,7 +1703,7 @@ do_start() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
-    preflight "$dir" || { info "aborted"; return; }
+    preflight "$dir" || { info "aborted"; return 1; }
     info "starting $svc..."
     # up -d (not start): recreates containers if they were removed while stopped
     (cd "$dir" && docker compose up -d)
@@ -1521,7 +1732,7 @@ do_rebuild() {
     check_deps
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
-    preflight "$dir" || { info "aborted"; return; }
+    preflight "$dir" || { info "aborted"; return 1; }
     info "rebuilding '$svc': pull/build → down → up → prune dangling images"
     compose_refresh "$dir" || return 1
     mark_updated "$svc" no ""
@@ -1534,6 +1745,7 @@ do_svc_upgrade() {
     check_svc_writable
     local svc; svc=$(resolve_svc "${1:-}")
     local dir; dir=$(need_svc "$svc")
+    sync_lock
 
     info "fetching latest '$svc' from repo..."
     local tmpdir; tmpdir=$(clone_repo_dir services/)
@@ -1555,7 +1767,8 @@ do_svc_upgrade() {
 
     preflight "$dir" || { info "files updated but not restarted — run: labber $svc start (backup retained at $bak)"; return 1; }
     info "rebuilding '$svc': pull/build → down → up → prune dangling images"
-    compose_refresh "$dir" "$bak" || { warn "previous files retained at $bak"; return 1; }
+    local crc=0; compose_refresh "$dir" "$bak" || crc=$?
+    if (( crc != 0 )); then warn "previous files retained at $bak"; return "$crc"; fi
     rm -rf "$bak"
     mark_updated "$svc" no "$(config_update_status "$src" "$dir")"
     ok "'$svc' updated and running"
@@ -1743,7 +1956,7 @@ _labber_complete() {
         cur="${COMP_WORDS[COMP_CWORD]}"; arg1="${COMP_WORDS[1]}"
     fi
     local svc_cmds="install uninstall start stop restart rebuild update shell logs status go"
-    local global_cmds="install deploy setup ls check-updates clean update tool source help"
+    local global_cmds="install deploy setup ls check-updates clean update tool source disks help"
     local svcs; svcs=$(find /opt/homelab/services -maxdepth 3 -name docker-compose.yml \
         -exec dirname {} \; 2>/dev/null | sed 's|.*/services/||' | sort)
     if [[ $COMP_CWORD -eq 1 ]]; then
@@ -1763,7 +1976,7 @@ BASHRC
 }
 
 do_self_install() {
-    if (( ! SOURCE_CUSTOM )); then command -v curl &>/dev/null || die "curl is required for self-install"; fi
+    if ! use_git; then command -v curl &>/dev/null || die "curl is required for self-install"; fi
     # piped (`curl … | bash -s install`) there's no one to ask: installing is what was
     # asked for, with tab completion
     local ans
@@ -1789,6 +2002,8 @@ do_update() {
 
     # same as setup's update step: never stops at a config-file prompt (keeps yours).
     # A failure (e.g. unattended-upgrades holding the lock) doesn't skip labber's own update.
+    if (( LABBER_ONLY )); then info "labber only (no system update)"
+    else
     info "running system update..."
     if $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get update -q < /dev/null \
         && $sudo_cmd env DEBIAN_FRONTEND=noninteractive apt-get -y -q \
@@ -1796,6 +2011,7 @@ do_update() {
         ok "system updated"
     else
         warn "system update failed (another apt running? try again in a few minutes) — continuing with labber"
+    fi
     fi
     echo
     if [[ ! -f "$LABBER_BIN" ]]; then
@@ -1805,7 +2021,11 @@ do_update() {
         return
     fi
     info "checking for labber update..."
-    if (( ! SOURCE_CUSTOM )) && ! command -v curl &>/dev/null; then
+    if enrolled && [[ "$SOURCE_ORIGIN" != release ]] && (( ! FORCE )); then
+        warn "enrolled in labber sync: it updates labber from the verified release — not from $SOURCE_SPEC (--force to install it anyway)"
+        return 1
+    fi
+    if ! use_git && ! command -v curl &>/dev/null; then
         warn "curl not found — skipping labber self-update"
         return
     fi
@@ -1815,7 +2035,13 @@ do_update() {
         warn "labber self-update failed (network issue?) — labber unchanged"
         return
     fi
-    local remote_ver; remote_ver=$(labber_version_of "$dir")
+    local remote_ver have; remote_ver=$(labber_version_of "$dir")
+    have=$(labber_version_of "$LABBER_LIB" 2>/dev/null || true); have=${have:-$VERSION}
+    if [[ "$remote_ver" != "$have" && "$(printf '%s\n%s\n' "$have" "$remote_ver" | sort -V | tail -1)" == "$have" ]] && (( ! FORCE )); then
+        rm -rf "$tmp"
+        warn "the source has labber v${remote_ver}, older than v${have}: only forward (--force to go back)"
+        return 1
+    fi
     # A branch or local working tree can change without a version bump. Compare
     # the actual script and assets so these updates are not silently skipped.
     if cmp -s "$dir/labber" "$LABBER_LIB/labber" && diff -qr "$dir/files" "$LABBER_LIB/files" >/dev/null 2>&1; then
@@ -1825,7 +2051,7 @@ do_update() {
     fi
     labber_place "$dir" || { rm -rf "$tmp"; warn "could not install the new labber — v${VERSION} unchanged"; return; }
     rm -rf "$tmp"
-    ok "labber updated: v${VERSION} → v${remote_ver}"
+    ok "labber updated: v${have} → v${remote_ver}"
     echo
     info "checking shell integration..."
     _install_shell_fn
@@ -2000,7 +2226,7 @@ show_overview() {
 LABBER_STATE_DIR="/var/lib/labber"
 SETUP_SSH_CONF="/etc/ssh/sshd_config.d/10-labber.conf"
 SETUP_JOURNAL_CONF="/etc/systemd/journald.conf.d/10-labber.conf"
-SETUP_STEPS=(update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck gpu alloy zsh labber fzf nfs fail2ban network)
+SETUP_STEPS=(pkgcache update packages locale admin hostname timesync ssh unattended journal swap generated docker dockerstore dockerlogs guestagent healthcheck gpu alloy pushtoken zsh labber fzf nfs fail2ban network)
 SETUP_VIRT=""          # lxc | vm
 SETUP_USER=""          # who user-level steps are for: the admin user on a VM, else root
 SETUP_HOST_CMDS=()     # commands to run on the Proxmox host (printed at the end)
@@ -2009,6 +2235,9 @@ SETUP_NET_PENDING=0    # a static-IP change is waiting for confirmation
 SETUP_NET_NEW=""       # the address it changes to
 SETUP_DOCKER=1         # 0: not a Docker host — Docker steps are left out
 SETUP_PROM=""          # --prometheus URL: Alloy's Prometheus, without asking
+SETUP_PUSHTOKEN=""     # --push-token-file PATH: the token for monitoring's push-gate (its group's)
+PUSH_TOKEN_FILE=/etc/alloy/push-token
+SETUP_PKGCACHE=""      # --pkg-cache HOST: the package cache (services/pkg-cache), without asking
 SETUP_LOKI=""          # --loki URL: Alloy's Loki, without asking
 SETUP_YES=0            # --yes: never ask — flags, else the remembered/default answers
 declare -gA SETUP_ANS=()  # answers given as flags (setup_args), by question (-g: global even when sourced in a function)
@@ -2117,17 +2346,21 @@ step_title() {
         healthcheck) echo "reboot/update checks (login message + metric)" ;;
         gpu)        echo "NVIDIA GPU metrics (nvidia-smi → Alloy)" ;;
         alloy)      echo "Grafana Alloy: metrics + logs to monitoring" ;;
+        pushtoken)  echo "push token for monitoring (asked, hidden)" ;;
         zsh)        echo "zsh + powerlevel10k (admin user; root on an LXC)" ;;
         ssh)        echo "SSH: key-only logins" ;;
         unattended) echo "automatic security updates" ;;
         journal)    echo "limit systemd journal to 200 MB" ;;
+        generated)  echo "no-backup disk at /opt/generated" ;;
         docker)     echo "Docker (official repo) + compose/buildx" ;;
+        dockerstore) echo "Docker's images on /opt/generated" ;;
         dockerlogs) echo "Docker log rotation (10 MB x 3)" ;;
         guestagent) echo "qemu-guest-agent" ;;
         labber)     echo "install labber (for root in an LXC, the admin user in a VM)" ;;
         fzf)        echo "fzf (from repo tools/)" ;;
         nfs)        echo "NFS client (nfs-common)" ;;
         fail2ban)   echo "fail2ban for SSH" ;;
+        pkgcache)   echo "package cache: apt and Docker Hub through services/pkg-cache (asks its address)" ;;
         network)    echo "network: fixed IP" ;;
     esac
 }
@@ -2135,7 +2368,8 @@ step_title() {
 step_applies() {
     case "$1" in
         admin|guestagent|timesync|swap) [[ "$SETUP_VIRT" == vm ]] ;;
-        docker|dockerlogs) (( SETUP_DOCKER )) ;;
+        docker|dockerlogs|dockerstore) (( SETUP_DOCKER )) ;;
+        generated)        [[ "$SETUP_VIRT" == lxc || "$SETUP_VIRT" == vm ]] ;;
         gpu)              command -v nvidia-smi &>/dev/null ;;
         nfs)              [[ "$SETUP_VIRT" != lxc ]] ;;
         *)                true ;;
@@ -2145,15 +2379,42 @@ step_applies() {
 # optional steps start unticked
 step_optional() {
     case "$1" in
-        nfs|fail2ban|swap) return 0 ;;
+        nfs|fail2ban|swap|pkgcache) return 0 ;;
+        # the no-backup disk: ticked only with something to do (a mount there, a VM's unused disk)
+        generated) ! generated_mounted && [[ "$(st_generated_status)" != *"unused disk"* ]] ;;
+        dockerstore) ! generated_mounted ;;
+        # a new kernel needs the NVIDIA module rebuilt and a reboot: upgraded when you choose
+        update) nvidia_kernel ;;
         *) return 1 ;;
     esac
 }
 
+# an NVIDIA GPU that this machine's own kernel drives (VM or bare metal; an LXC uses the host's)
+nvidia_kernel() {
+    [[ "$SETUP_VIRT" == lxc ]] && return 1
+    command -v nvidia-smi &>/dev/null && return 0
+    local d
+    for d in "${PCI_DEVICES:-/sys/bus/pci/devices}"/*; do
+        [[ "$(cat "$d/vendor" 2>/dev/null)" == 0x10de && "$(cat "$d/class" 2>/dev/null)" == 0x03* ]] && return 0
+    done
+    return 1
+}
+
 # ── setup steps: st_<id>_status prints "done[: detail]" or "todo[: detail]" ───
 
-st_update_status() { echo "todo"; }
+st_update_status() {
+    if nvidia_kernel; then echo "todo: off by default (NVIDIA GPU: a new kernel needs a reboot, then nvidia-smi)"
+    else echo "todo"; fi
+}
 st_update_run() {
+    # DKMS builds the NVIDIA module only for kernels whose headers are in: keep the kernel's own headers package
+    if nvidia_kernel; then
+        local flavour; flavour=$(uname -r); flavour=${flavour##*-}
+        if ! dpkg -s "linux-headers-$flavour" &>/dev/null; then
+            apt_get -y -q install "linux-headers-$flavour" \
+                || { warn "can't install linux-headers-$flavour: a new kernel would come without the NVIDIA module"; return 1; }
+        fi
+    fi
     apt_get update -q || return 1
     apt_get -y -q \
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade || return 1
@@ -2327,6 +2588,16 @@ EOF
         return 1
     fi
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || systemctl restart ssh
+    # what sshd really uses: an earlier file (another drop-in) can win over this one
+    local eff; eff=$(/usr/sbin/sshd -T 2>/dev/null | grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin) ' || true)
+    local root_ok=0      # sshd -T spells prohibit-password as without-password
+    grep -qiE "^permitrootlogin (${root_policy}|${root_policy/prohibit-password/without-password})$" <<< "$eff" && root_ok=1
+    if ! grep -qix 'passwordauthentication no' <<< "$eff" || ! grep -qix 'kbdinteractiveauthentication no' <<< "$eff" \
+        || (( ! root_ok )); then
+        warn "sshd's effective settings differ from $SETUP_SSH_CONF (another file sets them first):"
+        printf '    %s\n' "$eff" >&2
+        SETUP_NOTES+=("SSH: check 'sshd -T | grep -iE \"password|kbdinter|permitroot\"' — another sshd_config file overrides labber's")
+    fi
     if [[ "$SETUP_VIRT" != lxc ]]; then
         echo
         info "keep this session open, and from a SECOND terminal on your Mac run:"
@@ -2361,6 +2632,318 @@ st_unattended_run() {
     ok "security updates install automatically (Debian's default: security only, no auto-reboot)"
 }
 
+# ── the no-backup disk: /opt/generated (setup steps generated and dockerstore, labber disks) ──
+
+GEN_FSTAB_MARK="# labber: the no-backup disk for generated files"
+GEN_SIGS_BLOCKED="swap LVM2_member linux_raid_member zfs_member crypto_LUKS isw_raid_member ddf_raid_member bcache"
+
+# a VM's disks that could become /opt/generated, from `lsblk -J` on stdin, one per line:
+#   empty<TAB>path<TAB>bytes<TAB><TAB>        a whole disk with nothing on it (to format)
+#   fs<TAB>path<TAB>bytes<TAB>fstype<TAB>label  an unmounted ext4/xfs/btrfs (to mount as it is)
+# Never: a read-only or removable device, a CD-ROM or loop device, a disk with a partition
+# table but no filesystem, anything mounted, swap, LVM/RAID/ZFS/LUKS members or their disks.
+# $1: the sources in /etc/fstab (UUID=…, LABEL=…, /dev/…), one per line: those are in use.
+disk_candidates() {
+    local used="${1:-}"
+    jq -r --arg used "$used" --arg blocked "$GEN_SIGS_BLOCKED" '
+        def mp: [(.mountpoints // [])[] | select(. != null)];
+        def all: ., ((.children // [])[] | all);
+        def busy: [all | select((mp | length) > 0 or ((.fstype // "") as $f | ($blocked | split(" ") | index($f)) != null))] | length > 0;
+        def yes: . == true or . == "1" or . == 1;
+        def inuse($u): ($u | split("\n")) as $l
+            | [("UUID=" + (.uuid // "-")), ("LABEL=" + (.label // "-")), ("PARTUUID=" + (.partuuid // "-")), .path]
+            | any(.[]; . as $x | any($l[]; . == $x));
+        def offer:
+            if (.children // []) | length > 0 then (.children[] | select(.type == "part") | offer)
+            elif (mp | length) > 0 or (.ro | yes) or (.rm | yes) then empty
+            elif ((.fstype // "") | test("^(ext4|xfs|btrfs)$")) and (inuse($used) | not) then
+                ["fs", .path, (.size | tostring), .fstype, (.label // "")]
+            elif .type == "disk" and .fstype == null and .pttype == null and (.size | tonumber) >= 1073741824 then
+                ["empty", .path, (.size | tostring), "", ""]
+            else empty end;
+        .blockdevices[] | select(.type == "disk") | select(.ro | yes | not) | select(.rm | yes | not)
+            | if busy then (if (.children // []) | length > 0 then (.children[] | select(.type == "part") | select(busy | not) | offer) else empty end)
+              else offer end
+            | @tsv'
+}
+
+# the disks on this machine (lsblk), with fstab's sources taken out
+disk_candidates_here() {
+    local used
+    used=$(awk '!/^[[:space:]]*#/ && NF >= 2 { gsub(/"/, "", $1); print $1 }' /etc/fstab 2>/dev/null)
+    lsblk -J -b -o NAME,PATH,TYPE,SIZE,FSTYPE,PTTYPE,LABEL,UUID,PARTUUID,MOUNTPOINTS,RO,RM 2>/dev/null | disk_candidates "$used" \
+        | while IFS=$'\t' read -r kind path size fs label; do
+            # lsblk can miss a signature: an "empty" disk must also look empty to wipefs
+            if [[ "$kind" == empty && -n "$(wipefs -n -- "$path" 2>/dev/null | tail -n +2)" ]]; then continue; fi
+            printf '%s\t%s\t%s\t%s\t%s\n' "$kind" "$path" "$size" "$fs" "$label"
+        done
+}
+
+human_bytes() { numfmt --to=iec-i --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
+
+# one candidate, for a person: /dev/vdb  256GiB  empty (formatted when chosen)
+disk_line() {
+    local kind="$1" path="$2" size="$3" fs="$4" label="$5" serial=""
+    serial=$(lsblk -dn -o SERIAL -- "$path" 2>/dev/null | tr -d ' ')
+    if [[ "$kind" == empty ]]; then printf '%-12s %8s  empty: formatted as ext4 when chosen%s' "$path" "$(human_bytes "$size")" "${serial:+  (serial $serial)}"
+    else printf '%-12s %8s  %s%s: mounted as it is, nothing erased' "$path" "$(human_bytes "$size")" "$fs" "${label:+ \"$label\"}"; fi
+}
+
+# labber disks: what setup's generated step would offer (read-only)
+do_disks() {
+    if generated_mounted; then
+        ok "$GEN_DIR is mounted: $(findmnt -n -o SOURCE,FSTYPE,SIZE -- "$GEN_DIR" | tr -s ' ')"
+    else
+        info "$GEN_DIR is not a mount point"
+    fi
+    [[ "$(detect_virt)" == lxc ]] && { info "an LXC: the disk comes from the Proxmox host (pct set <CTID> -mp0 <storage>:<GB>,mp=$GEN_DIR,backup=0)"; return 0; }
+    command -v jq &>/dev/null || die "needs jq (apt install jq)"
+    local c=() line
+    mapfile -t c < <(disk_candidates_here)
+    if (( ${#c[@]} == 0 )); then info "no unused disk here"; return 0; fi
+    echo "disks setup could use for $GEN_DIR:"
+    for line in "${c[@]}"; do IFS=$'\t' read -r k p s f l <<< "$line"; echo "  $(disk_line "$k" "$p" "$s" "$f" "$l")"; done
+}
+
+# format (empty) and/or mount a candidate at $GEN_DIR, with its fstab line; undone on a failure
+generated_use_disk() {
+    local kind="$1" dev="$2" fs="$3" uuid
+    mkdir -p -- "$GEN_DIR" || return 1
+    # checked before anything is formatted: a disk mounted over files would hide them
+    [[ -z "$(ls -A -- "$GEN_DIR" 2>/dev/null)" ]] || { warn "$GEN_DIR isn't empty (on the root disk: $(ls -A -- "$GEN_DIR" | head -3 | paste -sd' ' -)) — move or delete that first"; return 1; }
+    if [[ "$kind" == empty ]]; then
+        mkfs.ext4 -q -L generated -m 0 -- "$dev" < /dev/null || { warn "mkfs.ext4 $dev failed"; return 1; }
+        fs=ext4
+    fi
+    uuid=$(blkid -s UUID -o value -- "$dev") && [[ -n "$uuid" ]] || { warn "no UUID on $dev"; return 1; }
+    cp -p /etc/fstab /etc/fstab.labber-bak || return 1
+    printf '%s\nUUID=%s %s %s defaults,noatime,nofail,x-systemd.device-timeout=30s 0 2\n' "$GEN_FSTAB_MARK" "$uuid" "$GEN_DIR" "$fs" >> /etc/fstab
+    systemctl daemon-reload 2>/dev/null || true
+    if ! mount -- "$GEN_DIR" || ! generated_mounted; then
+        cp -p /etc/fstab.labber-bak /etc/fstab; systemctl daemon-reload 2>/dev/null || true
+        warn "mounting $dev at $GEN_DIR failed — /etc/fstab put back"; return 1
+    fi
+    ok "$dev mounted at $GEN_DIR ($fs, UUID $uuid; /etc/fstab: nofail)"
+}
+
+# the unused disks' paths, space-separated (a VM; empty without lsblk/jq)
+generated_seen_now() {
+    [[ "$SETUP_VIRT" == vm ]] || return 0
+    command -v jq &>/dev/null && command -v lsblk &>/dev/null || return 0
+    disk_candidates_here | cut -f2 | sort | paste -sd' ' -
+}
+# "no disk" (state generated=none), remembering which unused disks there were
+generated_none() { state_set generated none; state_set generated_seen "$(generated_seen_now)"; }
+# a VM mounts it from /etc/fstab (an LXC's mount point comes from the host)
+generated_in_fstab() { awk -v d="${GEN_DIR%/}" '!/^[[:space:]]*#/ { m = $2; sub(/\/+$/, "", m); if (m == d) f = 1 } END { exit !f }' /etc/fstab 2>/dev/null; }
+st_generated_status() {
+    local d new=""
+    if generated_mounted; then
+        # mounted for now (by hand, or from a stale mount unit) but not after a reboot
+        if [[ "$SETUP_VIRT" == vm ]] && ! generated_in_fstab; then echo "todo: mounted, but not in /etc/fstab"; return; fi
+        echo "done: $(findmnt -n -o SIZE -- "$GEN_DIR" | tr -d ' ') at $GEN_DIR"; return
+    fi
+    if [[ "$(state_get generated)" == none && "$SETUP_VIRT" == vm ]]; then
+        for d in $(generated_seen_now); do [[ " $(state_get generated_seen) " == *" $d "* ]] || new+=" $d"; done
+    fi
+    if [[ -n "$new" ]]; then echo "todo: unused disk${new}"
+    elif [[ "$(state_get generated)" == none ]]; then echo "done: none (answered: no disk)"
+    elif [[ "$SETUP_VIRT" == lxc ]]; then echo "todo: no mount point at $GEN_DIR"
+    else echo "todo"; fi
+}
+st_generated_run() {
+    if generated_mounted; then
+        if [[ "$SETUP_VIRT" == vm ]] && ! generated_in_fstab; then
+            local uuid fs; read -r uuid fs < <(findmnt -n -o UUID,FSTYPE -- "$GEN_DIR")
+            [[ -n "$uuid" && -n "$fs" ]] || { warn "$GEN_DIR is mounted from a device without a UUID — add it to /etc/fstab by hand"; return 1; }
+            cp -p /etc/fstab /etc/fstab.labber-bak || return 1
+            printf '%s\nUUID=%s %s %s defaults,noatime,nofail,x-systemd.device-timeout=30s 0 2\n' "$GEN_FSTAB_MARK" "$uuid" "$GEN_DIR" "$fs" >> /etc/fstab
+            systemctl daemon-reload 2>/dev/null || true
+            ok "$GEN_DIR added to /etc/fstab (UUID $uuid, nofail)"
+        fi
+        st_generated_owner; return
+    fi
+    local host_cmd
+    if [[ "$SETUP_VIRT" == lxc ]]; then
+        host_cmd="pct set <CTID> -mp0 <storage>:<GB>,mp=$GEN_DIR,backup=0   # then: labber setup again"
+        echo "  no disk at $GEN_DIR: images and generated files stay on the root disk (backed up)"
+        if (( SETUP_YES )) || yesno "go on without one? (remembered; a disk added later is picked up)" y; then
+            generated_none; SETUP_HOST_CMDS+=("$host_cmd"); return 0
+        fi
+        SETUP_HOST_CMDS+=("$host_cmd"); return 1
+    fi
+    command -v jq &>/dev/null || apt_install jq || return 1
+    local c=() line k p s f l i pick=""
+    mapfile -t c < <(disk_candidates_here)
+    host_cmd="qm set <VMID> --scsi1 <storage>:<GB>,backup=0,discard=on,iothread=1   # or --virtio1; then: labber setup again"
+    if [[ -n "${SETUP_ANS[generated_disk]:-}" ]]; then
+        # --generated-disk DEV: that disk, formatted if empty (giving it is the consent)
+        for line in "${c[@]}"; do [[ "$(cut -f2 <<< "$line")" == "${SETUP_ANS[generated_disk]}" ]] && pick="$line"; done
+        [[ -n "$pick" ]] || { warn "--generated-disk ${SETUP_ANS[generated_disk]}: not an unused disk here (labber disks lists them)"; return 1; }
+    elif (( SETUP_YES )); then
+        # never formats on a guess: only a filesystem already labelled "generated"
+        local found=0
+        for line in "${c[@]}"; do IFS=$'\t' read -r k p s f l <<< "$line"; [[ "$k" == fs && "$l" == generated ]] && { pick="$line"; found=$((found + 1)); }; done
+        if (( found > 1 )); then
+            warn "$found filesystems are labelled generated — pick one with --generated-disk DEV (labber disks lists them)"; return 1
+        fi
+        if [[ -z "$pick" ]]; then
+            generated_none
+            SETUP_NOTES+=("no disk for $GEN_DIR (--yes formats none: give --generated-disk DEV, or run setup interactively)")
+            (( ${#c[@]} )) || SETUP_HOST_CMDS+=("$host_cmd")
+            return 0
+        fi
+    else
+        if (( ${#c[@]} == 0 )); then
+            echo "  no unused disk: add one on the Proxmox host, or go on without (images stay on the root disk)"
+            if yesno "go on without one? (remembered; a disk added later is picked up)" y; then
+                generated_none; SETUP_HOST_CMDS+=("$host_cmd"); return 0
+            fi
+            SETUP_HOST_CMDS+=("$host_cmd"); return 1
+        fi
+        echo "  disks for $GEN_DIR (not backed up — on Proxmox give it backup=0):"
+        for i in "${!c[@]}"; do IFS=$'\t' read -r k p s f l <<< "${c[$i]}"; echo "   $((i + 1))) $(disk_line "$k" "$p" "$s" "$f" "$l")"; done
+        echo "   0) none: images and generated files stay on the root disk"
+        local n; n=$(ask "which one" 0)
+        if [[ "$n" == 0 ]]; then generated_none; return 0; fi
+        [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#c[@]} )) || { warn "no disk $n"; return 1; }
+        pick="${c[$((n - 1))]}"
+        IFS=$'\t' read -r k p s f l <<< "$pick"
+        if [[ "$k" == empty ]]; then
+            local typed; typed=$(ask "this erases $p — type its name ($p) to format it" "")
+            [[ "$typed" == "$p" ]] || { warn "not formatted"; return 1; }
+        fi
+    fi
+    IFS=$'\t' read -r k p s f l <<< "$pick"
+    generated_use_disk "$k" "$p" "$f" || return 1
+    state_set generated "$p"
+    st_generated_owner || return 1
+    generated_units_start
+}
+# Docker's images were on the disk (its drop-ins exist): start containerd and Docker again,
+# which refused to while it was missing (and may have hit systemd's start limit)
+generated_units_start() {
+    [[ -f "$CONTAINERD_DROPIN" ]] || return 0
+    systemctl reset-failed containerd.service docker.service docker.socket 2>/dev/null || true
+    systemctl start containerd.service docker.socket docker.service || { warn "containerd/Docker didn't start — systemctl status containerd docker"; return 1; }
+    ok "containerd and Docker started (their images are on $GEN_DIR)"
+}
+# the admin user owns the top folder (a VM's labber runs as them); root on an LXC
+st_generated_owner() {
+    if [[ "$SETUP_USER" != root ]]; then chown -- "$SETUP_USER:" "$GEN_DIR" || return 1; fi
+    chmod 755 -- "$GEN_DIR"
+}
+
+# ── Docker's images on /opt/generated: containerd's store (Docker 29's default image store) ──
+# Only containerd's root moves: Docker's own folder (/var/lib/docker: named volumes, container
+# settings) stays on the backed-up root disk. A drop-in replaces the unit's command (the
+# conffile config.toml isn't edited), and both units need the disk: without it they stay down
+# instead of pulling everything onto the root disk.
+CONTAINERD_DROPIN=/etc/systemd/system/containerd.service.d/labber-generated.conf
+DOCKER_DROPIN=/etc/systemd/system/docker.service.d/labber-generated.conf
+
+docker_uses_containerd_store() {
+    docker info -f '{{range .DriverStatus}}{{index . 1}} {{end}}' 2>/dev/null | grep -q 'io.containerd.snapshotter'
+}
+containerd_root_running() { ps -o args= -C containerd 2>/dev/null | grep -qF -- "--root $GEN_DIR/containerd"; }
+
+# the drop-in for a unit command line ($1): that command with --root
+containerd_dropin_text() {
+    printf '# managed by labber setup: Docker'"'"'s images on the no-backup disk\n[Unit]\nRequiresMountsFor=%s\n\n[Service]\n%s\nExecStart=\nExecStart=%s --root %s/containerd\n' \
+        "$GEN_DIR" "$(mount_guard)" "$1" "$GEN_DIR"
+}
+# a start refused unless the disk is mounted: RequiresMountsFor alone falls back to / when no
+# mount unit exists (the fstab line gone, an LXC's mount point removed), and containerd would
+# then pull every image again onto the root disk
+mount_guard() { printf 'ExecStartPre=/bin/sh -c '"'"'mountpoint -q %s || { echo "%s is not mounted: refusing to start (labber setup)" >&2; exit 1; }'"'"'' "$GEN_DIR" "$GEN_DIR"; }
+docker_dropin_text() {
+    printf '# managed by labber setup: Docker needs the disk with its images\n[Unit]\nRequiresMountsFor=%s\n\n[Service]\n%s\n' "$GEN_DIR" "$(mount_guard)"
+}
+# both drop-ins say what this labber writes (an older labber's lack the start guard)
+dropins_current() {
+    local base; base=$(containerd_base_cmd) || return 1
+    [[ "$(cat "$CONTAINERD_DROPIN" 2>/dev/null)" == "$(containerd_dropin_text "$base")" \
+        && "$(cat "$DOCKER_DROPIN" 2>/dev/null)" == "$(docker_dropin_text)" ]]
+}
+# the unit's own ExecStart (its file, not a drop-in)
+containerd_base_cmd() {
+    local frag; frag=$(systemctl show -p FragmentPath --value containerd.service 2>/dev/null)
+    [[ -f "$frag" ]] || return 1
+    sed -n 's/^ExecStart=//p' "$frag" | tail -1
+}
+
+st_dockerstore_status() {
+    if ! generated_mounted; then
+        # follows the generated step: a disk it is about to mount gets the images in the same run
+        if [[ "$(st_generated_status)" == done* ]]; then echo "done: no $GEN_DIR (images on the root disk)"; else echo "todo: after $GEN_DIR"; fi
+    elif ! command -v docker &>/dev/null; then echo "todo: after Docker"
+    elif ! docker info &>/dev/null; then echo "todo: Docker isn't running"
+    elif ! docker_uses_containerd_store; then echo "done: Docker's old image store, left alone"
+    elif [[ -f "$CONTAINERD_DROPIN" ]] && containerd_root_running; then
+        if dropins_current; then echo "done: on $GEN_DIR"; else echo "todo: on $GEN_DIR, its start guard to update"; fi
+    else echo "todo"; fi
+}
+st_dockerstore_run() {
+    generated_mounted || { info "no $GEN_DIR — images stay on the root disk"; return 0; }
+    command -v docker &>/dev/null && docker info &>/dev/null || { warn "Docker isn't running — run the docker step first"; return 1; }
+    if ! docker_uses_containerd_store; then
+        warn "Docker uses its old image store (/var/lib/docker): not moved"
+        SETUP_NOTES+=("Docker's images stay on the root disk: it uses the old image store")
+        return 0
+    fi
+    local base; base=$(containerd_base_cmd) && [[ -n "$base" ]] || { warn "couldn't read containerd's unit"; return 1; }
+    if [[ -f "$CONTAINERD_DROPIN" ]] && containerd_root_running; then
+        # moved already: only the drop-ins brought up to date (they apply at the next start)
+        dropins_current && return 0
+        containerd_dropin_text "$base" > "$CONTAINERD_DROPIN" && docker_dropin_text > "$DOCKER_DROPIN" && systemctl daemon-reload || return 1
+        ok "containerd's and Docker's drop-ins updated"; return 0
+    fi
+    [[ "$base" != *--root* ]] || { warn "containerd's unit already sets --root ($base) — left alone"; return 1; }
+    local old=/var/lib/containerd new="$GEN_DIR/containerd" images running before after
+    images=$(docker image ls -aq 2>/dev/null | wc -l)
+    running=$(docker ps -q 2>/dev/null)
+    if (( images > 0 )); then
+        echo "  $images image(s) ($(du -sh -- "$old" 2>/dev/null | cut -f1)) move to $new: Docker restarts, running containers stop for a moment"
+        if (( SETUP_YES )); then
+            [[ -z "$running" ]] || { warn "not moved: containers are running (--yes never stops them) — run labber setup interactively"; return 1; }
+        else
+            yesno "move them now?" y || { info "not moved"; return 0; }
+        fi
+    fi
+    if (( images > 0 )); then
+        local need avail
+        need=$(du -sxb -- "$old" 2>/dev/null | awk '{ print int($1 * 1.1) }')
+        avail=$(df -B1 --output=avail -- "$GEN_DIR" | tail -1 | tr -d ' ')
+        (( need <= avail )) || { warn "$old needs $(human_bytes "$need"), $GEN_DIR has $(human_bytes "$avail") free"; return 1; }
+    fi
+    before=$(docker image ls -a --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | sort)
+    systemctl stop docker.socket docker.service containerd.service || return 1
+    mkdir -p -- "$new" && chmod 711 -- "$new" || return 1
+    if (( images > 0 )); then
+        rsync -aHAX --numeric-ids --delete -- "$old/" "$new/" || { warn "copying $old failed"; rm -rf -- "$new"; systemctl start containerd docker; return 1; }
+    fi
+    mkdir -p "$(dirname "$CONTAINERD_DROPIN")" "$(dirname "$DOCKER_DROPIN")"
+    containerd_dropin_text "$base" > "$CONTAINERD_DROPIN"
+    docker_dropin_text > "$DOCKER_DROPIN"
+    systemctl daemon-reload
+    local ok_start=1
+    systemctl start containerd.service && systemctl start docker.service || ok_start=0
+    after=$(docker image ls -a --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null | sort)
+    if (( ! ok_start )) || ! containerd_root_running || [[ "$before" != "$after" ]]; then
+        warn "Docker didn't come back with the same images on $new — putting it back"
+        rm -f -- "$CONTAINERD_DROPIN" "$DOCKER_DROPIN"; systemctl daemon-reload
+        systemctl restart containerd.service docker.service
+        (( images > 0 )) && rm -rf -- "$new"      # the copy; the images are still in $old
+        return 1
+    fi
+    # the containers that ran before run again (unless-stopped ones restart by themselves)
+    local c; for c in $running; do docker start "$c" >/dev/null 2>&1 || warn "container $c didn't start again"; done
+    if (( images > 0 )); then
+        find "$old" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && ok "old copy in $old removed"
+    fi
+    ok "Docker's images are on $GEN_DIR ($new); named volumes stay in /var/lib/docker"
+}
+
 st_journal_status() { if [[ -f "$SETUP_JOURNAL_CONF" ]]; then echo "done"; else echo "todo"; fi; }
 st_journal_run() {
     mkdir -p "$(dirname "$SETUP_JOURNAL_CONF")"
@@ -2369,6 +2952,7 @@ st_journal_run() {
 }
 
 st_docker_status() {
+    if [[ -f "$CONTAINERD_DROPIN" ]] && ! generated_mounted; then echo "todo: its images are on $GEN_DIR, which isn't mounted"; return; fi
     if command -v docker &>/dev/null && docker compose version &>/dev/null; then
         if ! docker info &>/dev/null; then
             echo "todo: Docker daemon is not running"
@@ -2382,6 +2966,9 @@ st_docker_status() {
     fi
 }
 st_docker_run() {
+    if [[ -f "$CONTAINERD_DROPIN" ]] && ! generated_mounted; then
+        warn "Docker's images are on $GEN_DIR, which isn't mounted — the no-backup disk step first (labber disks)"; return 1
+    fi
     # read os-release in a subshell: it defines VERSION, which would clobber labber's
     local id codename like ubuntu_codename
     id=$(. /etc/os-release; echo "${ID:-}")
@@ -2406,6 +2993,8 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
     apt_get update -q || return 1
     apt_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || return 1
+    # a start that failed earlier (e.g. while the no-backup disk was missing) can hold the start limit
+    systemctl reset-failed containerd.service docker.service docker.socket 2>/dev/null || true
     systemctl enable --now docker || return 1
     if [[ "$SETUP_USER" != root ]]; then
         usermod -aG docker "$SETUP_USER" || return 1
@@ -2444,8 +3033,51 @@ st_dockerlogs_run() {
     else
         printf '{\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "10m", "max-file": "3" }\n}\n' > "$f"
     fi
+    [[ -n "$(state_get pkgcache_host)" && "$(state_get pkgcache_host)" != none ]] && { pkgcache_docker "$(state_get pkgcache_host)" || warn "Docker mirror not set"; }
     systemctl restart docker || return 1
     SETUP_NOTES+=("log rotation applies to newly created containers — existing ones pick it up on 'labber <svc> restart'")
+}
+
+# the package cache (services/pkg-cache): apt asks a 1-second check per run (the cache when it
+# answers, else direct), Docker gets it as its Docker Hub mirror (and falls back by itself)
+st_pkgcache_status() {
+    local h; h=$(state_get pkgcache_host)
+    if [[ -n "$SETUP_PKGCACHE" && "$SETUP_PKGCACHE" != "$h" ]]; then echo "todo: → $SETUP_PKGCACHE"
+    elif [[ "$h" == none ]]; then echo "done: none (answered: no cache)"
+    elif [[ -n "$h" && -f /etc/apt/apt.conf.d/01pkg-cache ]] \
+        && { ! command -v docker &>/dev/null || grep -qs "\"http://$h:5000\"" /etc/docker/daemon.json; }; then echo "done: $h"
+    else echo "todo"; fi
+}
+st_pkgcache_run() {
+    local h="$SETUP_PKGCACHE" old; old=$(state_get pkgcache_host); [[ "$old" == none ]] && old=""
+    [[ -n "$h" ]] || h=$(ask "Package cache host (IP or name, e.g. the pkg-cache LXC; empty: none)" "$old")
+    if [[ -z "$h" || "$h" == none ]]; then           # no cache: remembered as an answer, and undone if one was set
+        rm -f /etc/apt/apt.conf.d/01pkg-cache /usr/local/bin/pkg-cache-detect
+        [[ -n "$old" ]] && command -v docker &>/dev/null && pkgcache_docker "" "$old" && { systemctl reload docker || systemctl restart docker; }
+        state_set pkgcache_host none; echo "  no package cache"; return 0
+    fi
+    [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]] || { warn "not a host name or IP: $h"; return 1; }
+    printf '%s\n' '#!/bin/sh' \
+        '# apt asks this for a proxy on each run: the cache if it answers within a second, else direct' \
+        "if timeout 1 bash -c 'exec 3<>/dev/tcp/$h/3142' 2>/dev/null; then echo \"http://$h:3142\"; else echo DIRECT; fi" \
+        > /usr/local/bin/pkg-cache-detect
+    chmod 755 /usr/local/bin/pkg-cache-detect
+    printf 'Acquire::http::Proxy-Auto-Detect "/usr/local/bin/pkg-cache-detect";\n' > /etc/apt/apt.conf.d/01pkg-cache
+    state_set pkgcache_host "$h"
+    if command -v docker &>/dev/null; then pkgcache_docker "$h" "$old" && { systemctl reload docker || systemctl restart docker; }; fi
+    SETUP_NOTES+=("package cache $h: apt uses it while it answers (else direct); Docker Hub images through its mirror")
+}
+# the mirror in daemon.json, the rest of the file kept (an old cache host replaced)
+pkgcache_docker() {
+    local h="$1" old="${2:-}" f=/etc/docker/daemon.json
+    command -v jq &>/dev/null || apt_install jq || return 1
+    mkdir -p /etc/docker; [[ -s "$f" ]] || echo '{}' > "$f"
+    cp -p "$f" "$f.labber-bak"
+    jq --arg m "http://$h:5000" --arg r "$h:5000" --arg om "http://$old:5000" --arg or "$old:5000" --arg add "${h:+1}" '
+        ."registry-mirrors" = ((if $add == "1" then [$m] else [] end) + ((."registry-mirrors" // []) - [$m, $om])) |
+        ."insecure-registries" = ((if $add == "1" then [$r] else [] end) + ((."insecure-registries" // []) - [$r, $or]))
+        | with_entries(select(.value != []))' "$f.labber-bak" > "$f" \
+        || { cp -p "$f.labber-bak" "$f"; return 1; }
 }
 
 st_guestagent_status() { if pkg_installed qemu-guest-agent; then echo "done"; else echo "todo"; fi; }
@@ -2764,6 +3396,32 @@ EOF
 
 # ── Grafana Alloy: node metrics → Prometheus, journal → Loki (like the Proxmox hosts) ──
 
+# a URL in Alloy's config as it is now, by the path it ends with: alloy_cfg_url /api/v1/write
+alloy_cfg_url() {
+    grep -oE "url *= *\"[^\"]*$1\"" "${ALLOY_CFG:-/etc/alloy/config.alloy}" 2>/dev/null | head -n 1 | sed -E "s#.*\"(.*)$1\"#\\1#"
+}
+st_pushtoken_status() {
+    local prom; prom=$(alloy_cfg_url /api/v1/write)
+    if [[ -z "$prom" ]]; then echo "todo: after Alloy"
+    elif [[ -s "$PUSH_TOKEN_FILE" ]] && (( $(grep -c 'bearer_token_file' "${ALLOY_CFG:-/etc/alloy/config.alloy}") >= 2 )); then echo "done"
+    elif [[ -s "$PUSH_TOKEN_FILE" ]]; then echo "todo: not in Alloy's config yet"
+    else echo "todo: none yet (monitoring refuses this machine's data once its PUSH_AUTH=on)"; fi
+}
+st_pushtoken_run() {
+    local prom loki
+    prom=$(alloy_cfg_url /api/v1/write); loki=$(alloy_cfg_url /loki/api/v1/push)
+    [[ -n "$prom" && -n "$loki" ]] || { info "no Alloy sending anywhere yet: no push token needed"; return 0; }
+    ALLOY_PROM="$prom"; alloy_token
+    [[ -n "$SETUP_PUSHTOKEN" || -s "$PUSH_TOKEN_FILE" ]] || return 0      # none given: stays todo
+    # Alloy's config again with the token, to the same monitoring (no questions)
+    local sp="$SETUP_PROM" sl="$SETUP_LOKI"
+    SETUP_PROM="$prom"; SETUP_LOKI="$loki"
+    st_alloy_run; local rc=$?
+    SETUP_PROM="$sp"; SETUP_LOKI="$sl"
+    (( rc == 0 )) || return "$rc"
+    (( $(grep -c 'bearer_token_file' "${ALLOY_CFG:-/etc/alloy/config.alloy}") >= 2 )) || { warn "the token isn't in Alloy's config"; return 1; }
+    ok "push token in place (/etc/alloy/push-token, root and Alloy only)"
+}
 st_alloy_status() {
     local cfg=/etc/alloy/config.alloy
     if ! systemctl is-active --quiet alloy 2>/dev/null || ! grep -qs 'managed by labber setup' "$cfg"; then
@@ -2773,6 +3431,9 @@ st_alloy_status() {
         || ! grep -q 'loki.source.docker "containers"' "$cfg" \
         || ! grep -qx 'User=root' /etc/systemd/system/alloy.service.d/labber.conf 2>/dev/null; }; then
         echo "todo: Docker metrics and logs need configuration"
+    elif [[ -n "$SETUP_PUSHTOKEN" && "$SETUP_PUSHTOKEN" != "$(cat "$PUSH_TOKEN_FILE" 2>/dev/null)" ]] \
+        || { [[ -s "$PUSH_TOKEN_FILE" ]] && ! grep -q 'bearer_token_file' "$cfg"; }; then
+        echo "todo: the push token isn't in the config yet"
     elif [[ -n "$SETUP_PROM" && "$SETUP_PROM" != "$(state_get alloy_prometheus)" \
         || -n "$SETUP_LOKI" && "$SETUP_LOKI" != "$(state_get alloy_loki)" ]]; then
         echo "todo: monitoring URLs changed"
@@ -2796,6 +3457,25 @@ alloy_urls() {
     done
     ALLOY_PROM="${prom%/}"; ALLOY_LOKI="${loki%/}"
 }
+# the push token (monitoring's push-gate) → SETUP_PUSHTOKEN: --push-token-file, else asked
+# (hidden; Enter keeps the one there, or none). Not for a monitoring on this machine. Asked by
+# the pushtoken step, which puts it into Alloy's config.
+alloy_token() {
+    [[ -n "$SETUP_PUSHTOKEN" ]] && return 0
+    local have="" t
+    [[ -s "$PUSH_TOKEN_FILE" ]] && have=1
+    if (( SETUP_YES )); then
+        [[ -n "$have" ]] || warn "no push token: monitoring refuses this machine's metrics and logs once its PUSH_AUTH=on (labber setup --push-token-file FILE)"
+        return 0
+    fi
+    while :; do
+        read -rsp "  Push token for monitoring (its group's PUSH_TOKEN_… from monitoring's .env; hidden), Enter $([[ -n "$have" ]] && echo "keeps the one there" || echo "for none"): " t || true; echo
+        t=$(tr -d '[:space:]' <<<"$t")
+        [[ -z "$t" ]] && { [[ -n "$have" ]] || warn "no push token: monitoring refuses this machine's data once its PUSH_AUTH=on"; return 0; }
+        [[ "$t" =~ ^[A-Za-z0-9._~+/=-]{32,}$ ]] && { SETUP_PUSHTOKEN="$t"; return 0; }
+        warn "not a token (32+ characters)"
+    done
+}
 st_alloy_run() {
     local prom loki
     alloy_urls || return 0
@@ -2813,6 +3493,18 @@ st_alloy_run() {
     usermod -aG adm,systemd-journal alloy || return 1
     mkdir -p "$LABBER_METRICS_DIR"; chmod 755 "$LABBER_METRICS_DIR"
 
+    # the push token (monitoring's push-gate): readable by root and Alloy only, never in the config
+    local auth=""
+    if [[ -n "$SETUP_PUSHTOKEN" ]]; then
+        mkdir -p /etc/alloy
+        ( umask 077; printf '%s\n' "$SETUP_PUSHTOKEN" > "$PUSH_TOKEN_FILE.new" ) || return 1
+        chgrp alloy "$PUSH_TOKEN_FILE.new" 2>/dev/null && chmod 640 "$PUSH_TOKEN_FILE.new"
+        mv -f "$PUSH_TOKEN_FILE.new" "$PUSH_TOKEN_FILE" || return 1
+    fi
+    # fills "// push token: @AUTH@": none, or the file and, on the next line, the attribute
+    auth="none"
+    [[ -s "$PUSH_TOKEN_FILE" ]] && auth="$PUSH_TOKEN_FILE"$'\n'"    bearer_token_file = \"$PUSH_TOKEN_FILE\""
+
     # an LXC's CPU/memory/network/disk I/O mirror the host — Proxmox reports those per
     # container — so only health, failed services, the root filesystem and boot time
     local collectors fs_exclude
@@ -2828,7 +3520,7 @@ st_alloy_run() {
 
     local cfg new_cfg
     cfg=$(labber_file alloy/base.alloy COLLECTORS="$joined" METRICS_DIR="$LABBER_METRICS_DIR" \
-        FS_EXCLUDE="$fs_exclude" VIRT="$SETUP_VIRT" PROMETHEUS="$prom" LOKI="$loki") || return 1
+        FS_EXCLUDE="$fs_exclude" VIRT="$SETUP_VIRT" PROMETHEUS="$prom" LOKI="$loki" AUTH="$auth") || return 1
 
     # Docker hosts: per-container metrics (trimmed) and container logs too
     local dropin=/etc/systemd/system/alloy.service.d/labber.conf
@@ -3169,7 +3861,8 @@ setup_ask_docker() {
 # --yes nothing is asked at all: what no flag answers takes its remembered/default answer.
 SETUP_USAGE="setup [--dry-run] [--yes] [--docker yes|no] [--with STEP,…] [--without STEP,…] [--admin NAME]
       [--hostname NAME] [--timezone Region/City] [--locale LOCALE] [--ssh-key 'ssh-ed25519 …']
-      [--swap 1|2|3] [--network reservation|skip] [--virt lxc|vm] [--prometheus URL] [--loki URL]"
+      [--swap 1|2|3] [--network reservation|skip] [--virt lxc|vm] [--prometheus URL] [--loki URL] [--pkg-cache HOST]
+      [--generated-disk DEV] [--push-token-file PATH]"
 setup_args() {
     local v
     while (( $# )); do
@@ -3185,7 +3878,14 @@ setup_args() {
                 [[ "$v" =~ ^https?://[^[:space:]]+$ ]] || die "$1 needs an http:// or https:// URL"
                 if [[ "$1" == --prometheus ]]; then SETUP_PROM="${v%/}"; else SETUP_LOKI="${v%/}"; fi ;;
             --docker)   [[ "$v" =~ ^(yes|no)$ ]] || die "--docker yes|no"; SETUP_ANS[docker]="$v" ;;
+            --push-token-file) [[ -r "$v" ]] || die "--push-token-file: can't read $v"
+                        SETUP_PUSHTOKEN=$(tr -d '[:space:]' < "$v")
+                        [[ "$SETUP_PUSHTOKEN" =~ ^[A-Za-z0-9._~+/=-]{32,}$ ]] || die "--push-token-file: $v doesn't hold a token (32+ characters)" ;;
+            --pkg-cache) [[ "$v" =~ ^[A-Za-z0-9.-]+$ ]] || die "--pkg-cache: a host name or IP"; SETUP_PKGCACHE="$v"; SETUP_WITH+=" pkgcache" ;;
             --virt)     [[ "$v" =~ ^(lxc|vm)$ ]] || die "--virt lxc|vm"; SETUP_ANS[virt]="$v" ;;
+            # the disk for /opt/generated (a VM): formatted if empty — giving it is the consent
+            --generated-disk) [[ "$v" =~ ^/dev/[A-Za-z0-9/_.-]+$ ]] || die "--generated-disk: a device, e.g. /dev/vdb (labber disks lists them)"
+                        SETUP_ANS[generated_disk]="$v"; SETUP_WITH+=" generated" ;;
             # these two also check their step: giving the answer means you want it done
             --swap)     [[ "$v" =~ ^[123]$ ]] || die "--swap 1|2|3 (1 zram, 2 zram + disk, 3 disk)"; SETUP_ANS[swap]="$v"; SETUP_WITH+=" swap" ;;
             --network)  case "$v" in reservation) SETUP_ANS[network]=1 ;; skip) SETUP_ANS[network]=3 ;;
@@ -3232,6 +3932,9 @@ setup_plan() {
                       elif [[ -n "${SETUP_ANS[ssh_key]:-}" ]]; then echo "  SSH key         ${SETUP_ANS[ssh_key]:0:40}…  (--ssh-key) → key-only logins"
                       else echo "  SSH key         none → password logins stay on (give --ssh-key)"; fi ;;
             swap)     echo "  swap            $(src swap "$(state_get swap)" "1") (1 zram, 2 zram + disk, 3 disk)" ;;
+            generated) if generated_mounted; then echo "  $GEN_DIR  mounted already"
+                      elif [[ -n "${SETUP_ANS[generated_disk]:-}" ]]; then echo "  $GEN_DIR  ${SETUP_ANS[generated_disk]}  (--generated-disk; formatted if empty)"
+                      else echo "  $GEN_DIR  only a filesystem labelled generated (--yes formats nothing), else none"; fi ;;
             network)  local nc; nc=$(src network "$(state_get network_choice)" 1)
                       case "${nc%% *}" in 1) nc="reservation: no change here ${nc#* }" ;; 2) nc="static IP (asked: not with --yes) ${nc#* }" ;; 3) nc="skip ${nc#* }" ;; esac
                       echo "  network         $nc" ;;
@@ -3239,6 +3942,9 @@ setup_plan() {
                                                    echo "  Loki            ${SETUP_LOKI:-${SETUP_PROM%:*}:3100}  ($([[ -n "$SETUP_LOKI" ]] && echo --loki || echo "from --prometheus"))"
                       elif [[ -n "$(state_get alloy_prometheus)" ]]; then echo "  Prometheus      $(state_get alloy_prometheus)  (remembered)"
                       else echo "  Prometheus      none → the Alloy step is skipped (give --prometheus)"; fi ;;
+            pushtoken) if [[ -n "$SETUP_PUSHTOKEN" ]]; then echo "  push token      from --push-token-file"
+                       elif [[ -s "$PUSH_TOKEN_FILE" ]]; then echo "  push token      the one there"
+                       else echo "  push token      none (asked when run without --yes; give --push-token-file)"; fi ;;
         esac
     done
     echo -e "\n  remove --dry-run to do it (with --yes: without any question)"
@@ -3407,7 +4113,10 @@ ${W}Commands:${N}
                     --dry-run: show the steps and answers a run would use, change nothing
                     answers up front: --yes (ask nothing) --docker yes|no --with/--without STEP,…
                     --admin --hostname --timezone --locale --ssh-key --swap 1|2|3
-                    --network reservation|skip --virt lxc|vm --prometheus URL --loki URL
+                    --network reservation|skip --virt lxc|vm --prometheus URL --loki URL --pkg-cache HOST
+                    --generated-disk DEV (a VM's disk for /opt/generated; formatted if empty)
+                    --push-token-file PATH (monitoring's push token for this guest's group)
+  disks             the no-backup disk: is /opt/generated mounted, which unused disks a VM has
   ls                list services: containers up, health, ports, updates
   ls -r|--remote    list what the repo offers: services (● installed here) and tools
   check-updates     check images and repo config for updates (cron-able)
@@ -3417,7 +4126,9 @@ ${W}Commands:${N}
   source [show]     show the effective Git URL or local working tree and ref
   source set URL|PATH [REF]  save a host-wide source (sudo); no REF = remote HEAD
   source reset      restore the default GitHub main source (sudo)
-  update            system apt update + upgrade + labber self-update
+  source key KEY    fetched tips must be signed with this key (Forgejo's SSH signing key)
+  update            system apt update + upgrade + labber self-update (forward only;
+                    --force to go back, or to self-update from a non-release source when enrolled)
   install           install labber (/usr/local/lib/labber, linked from /usr/local/bin) + shell function
   <svc>             show a service's status and commands
   (no args)         interactive menu
@@ -3428,7 +4139,14 @@ ${W}.env templates${N} (in .env.example — filled in on install/update/start):
   {{ name | choice(lan,cf) }}       pick one of the listed values
   {{ name | generate(hex64) }}      secret; Enter generates it — also base64_32, uuid,
                                     [A-Za-z0-9],16 (16 chars from that set)
+  {{ name | generated_dir(models) }} a folder for files that can be pulled or rebuilt:
+                                    /opt/generated/services/<svc>/models with the disk,
+                                    else ./generated/models (never moved later)
   Placeholders can sit inside a value: http://{{ host }}:{{ port | default(80) }}
+
+${W}The no-backup disk${N} /opt/generated (setup's generated step: an LXC mount point, or a
+VM disk it finds and formats) holds Docker's images (containerd's store; named volumes stay
+on the root disk) and generated_dir() folders. Lost? Recreate it, then: labber <svc> rebuild
 
 ${W}Before every start${N} labber also checks for port conflicts and creates missing
 bind-mount folders owned by PUID/PGID (or UID/GID) from .env, else by you.
@@ -3441,6 +4159,8 @@ ${W}Note:${N}
   uncommitted and new unignored files; .env/ignored files stay out. --ref needs a Git URL.
   LABBER_SOURCE / LABBER_REF override /etc/labber/source.conf for one process.
   Per-command source overrides are not saved. Use 'labber source set' for timers.
+  Enrolled in labber sync: the default is sync's verified release, whatever source.conf says.
+  http:// sources are refused.
   'labber <svc> go' requires the shell function installed by 'labber install'.
   After install, open a new terminal (or source your ~/.bashrc / ~/.zshrc).
 
@@ -3453,6 +4173,182 @@ ${W}Fresh LXC/VM${N} (as root — only curl needed):
 ${W}Just install labber:${N}
   bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/heads/main/labber/labber) install
 EOF
+}
+
+
+# ── for labber sync and labber-host (labber-design.md) ────────────────────────
+
+SYNC_LOCK="${LABBER_SYNC_LOCK:-/run/lock/labber-sync}"
+SYNC_TREE="${LABBER_SYNC_STATE:-/var/lib/labber/sync}/repos/homelab"
+STATE_BAK_DIR="${LABBER_STATE_BAK:-/var/lib/labber/state-bak}"
+
+# one change at a time on a guest: a by-hand update waits for a running sync (sync's own
+# calls carry LABBER_SYNC_LOCKED). A lock held across the run of this process.
+sync_lock() {
+    [[ -z "${LABBER_SYNC_LOCKED:-}" ]] || return 0
+    # fails closed: no change without the lock (a sync could be halfway through)
+    command -v flock >/dev/null || die "flock is missing (apt install util-linux): nothing changed"
+    mkdir -p "$(dirname "$SYNC_LOCK")" 2>/dev/null || true
+    # the braces scope 2>/dev/null to this open: a bare `exec ... 2>/dev/null` would silence stderr for the rest of the run
+    { exec 9>>"$SYNC_LOCK"; } 2>/dev/null \
+        || die "can't open the guest's lock $SYNC_LOCK (as root: chmod 664 $SYNC_LOCK; chgrp docker $SYNC_LOCK): nothing changed"
+    # whoever creates it: root's sync and an admin in the docker group both open it
+    if [[ -O "$SYNC_LOCK" ]]; then chmod 664 "$SYNC_LOCK" 2>/dev/null || true; chgrp docker "$SYNC_LOCK" 2>/dev/null || true; fi
+    if ! flock -n 9; then
+        info "labber sync is running on this guest — waiting for it (up to 10 min)..."
+        flock -w 600 9 || die "the guest's lock is still held — try again later"
+    fi
+    export LABBER_SYNC_LOCKED=1
+}
+
+# labber.yml's state entries of the instance in $1, resolved to absolute paths that exist
+state_paths() {
+    local dir="$1" yml="$1/labber.yml" line list item v var def path proj cfg allowed=() a ok m
+    [[ -f "$yml" ]] || return 0
+    # a state path may only be the instance folder's, a named volume's, or a folder the
+    # service itself bind-mounts: a typo in labber.yml or .env must not copy (and on a
+    # rollback empty) somebody else's data
+    allowed=("$(readlink -m -- "$dir")")
+    cfg=$(compose_cfg "$dir")
+    while IFS= read -r a; do [[ -n "$a" ]] && allowed+=("$(readlink -m -- "$a")"); done < <(cfg_bind_sources "$cfg")
+    line=$(grep -m1 -E '^state:' "$yml" | sed -E 's/#.*$//') || return 0
+    list=$(sed -E 's/^state:[[:space:]]*\[(.*)\][[:space:]]*$/\1/' <<< "$line")
+    IFS=',' read -ra items <<< "$list"
+    for item in "${items[@]}"; do
+        item=$(sed -E 's/^[[:space:]"'"'"']+|[[:space:]"'"'"']+$//g' <<< "$item"); [[ -n "$item" ]] || continue
+        if [[ "$item" == volume:* ]]; then
+            proj=$(cd "$dir" && docker compose config --format json 2>/dev/null | jq -r '.name') || return 1
+            path=$(docker volume inspect -f '{{.Mountpoint}}' "${proj}_${item#volume:}" 2>/dev/null) || continue
+            allowed+=("$(readlink -m -- "$path")")
+        elif [[ "$item" =~ ^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}(.*)$ ]]; then
+            var="${BASH_REMATCH[1]}" def="${BASH_REMATCH[3]}"
+            v=$(env_get "$dir/.env" "$var" 2>/dev/null || true); [[ -n "$v" ]] || v="$def"
+            [[ -n "$v" ]] || continue
+            path="$v${BASH_REMATCH[4]}"
+        else
+            path="$item"
+        fi
+        [[ "$path" == /* ]] || path="$dir/${path#./}"
+        path=$(readlink -m -- "$path")
+        # never a top-level folder: a typo must not make a rollback empty /, /mnt or /opt
+        [[ $(tr -cd / <<< "$path" | wc -c) -ge 2 ]] || { echo "error: state path $path is too broad" >&2; return 1; }
+        ok=0; for a in "${allowed[@]}"; do [[ "$path" == "$a" || "$path" == "$a"/* ]] && ok=1; done
+        (( ok )) || { echo "error: state path $path is outside $dir, its volumes and its bind mounts" >&2; return 1; }
+        # nor a mount point or anything holding one (a whole data disk, e.g. /mnt/media)
+        while IFS= read -r m; do
+            [[ "$m" == "$path" || "$m" == "$path"/* ]] && { echo "error: state path $path is (or holds) the mount point $m" >&2; return 1; }
+        done < <(findmnt -rn -o TARGET 2>/dev/null | sed 's/\\x20/ /g')
+        [[ -e "$path" ]] && echo "$path"
+    done
+    return 0
+}
+
+# stop the service and copy its state into one tar; prints the tar ("" when it has none)
+state_save() {
+    local dir="$1" paths p rel=() out su=""
+    (( EUID == 0 )) || su="sudo -n"       # the state belongs to the containers' users, often root
+    paths=$(state_paths "$dir") || return 1
+    [[ -n "$paths" ]] || { echo ""; return 0; }
+    $su mkdir -p "$STATE_BAK_DIR" && $su chmod 700 "$STATE_BAK_DIR" || return 1
+    # room for the copy (plus a tenth), checked before the service stops
+    local need avail parr=()
+    mapfile -t parr <<< "$paths"
+    need=$($su du -sxb -- "${parr[@]}" 2>/dev/null | awk '{ s += $1 } END { print int(s * 1.1) + 0 }')
+    avail=$($su df -B1 --output=avail -- "$STATE_BAK_DIR" | tail -1 | tr -d ' ')
+    if (( need > avail )); then
+        echo "error: the state copy needs $(( need / 1048576 )) MB, $STATE_BAK_DIR has $(( avail / 1048576 )) MB free" >&2; return 1
+    fi
+    (cd "$dir" && docker compose stop) >/dev/null 2>&1 || return 1
+    out="$STATE_BAK_DIR/$(basename "$dir")-$(date -u +%Y%m%dT%H%M%SZ).tar"
+    while IFS= read -r p; do rel+=("${p#/}"); done <<< "$paths"
+    $su tar -C / --numeric-owner --xattrs -cpf "$out" "${rel[@]}" || { $su rm -f "$out"; return 1; }
+    printf '%s\n' "${rel[@]}" | $su tee "$out.paths" >/dev/null || return 1
+    echo "$out"
+}
+
+# put the copied state back exactly (files the failed version added are removed)
+state_restore() {
+    local tarf="$1" p su=""
+    (( EUID == 0 )) || su="sudo -n"
+    $su test -f "$tarf" && $su test -f "$tarf.paths" || return 1
+    while IFS= read -r p; do
+        [[ -n "$p" && $(tr -cd / <<< "/$p" | wc -c) -ge 2 ]] || return 1
+        $su rm -rf -- "/${p:?}" || return 1
+    done < <($su cat "$tarf.paths")
+    $su tar -C / --numeric-owner --xattrs -xpf "$tarf" || return 1
+    $su rm -f "$tarf.paths"
+}
+
+# read-only checks of a running instance: the template's tests/check --live, else health
+do_check() {
+    local svc; svc=$(resolve_svc "${1:-}")
+    local dir; dir=$(need_svc "$svc")
+    wait_healthy "$dir" || die "$svc is not healthy"
+    if [[ -x "$dir/tests/check" ]]; then
+        (cd "$dir" && tests/check --live) || die "$svc: its checks failed"
+    fi
+    ok "$svc: checks passed"
+}
+
+state_drop() { local su=""; (( EUID == 0 )) || su="sudo -n"; $su rm -f "$1" "$1.paths"; }
+
+do_healthy() {
+    local svc; svc=$(resolve_svc "${1:-}")
+    local dir; dir=$(need_svc "$svc")
+    if wait_healthy "$dir"; then ok "$svc is healthy"; else die "$svc is not healthy"; fi
+}
+
+# fetch the images of the release's template for a service ahead of its deployment (the
+# instance and its containers stay as they are)
+do_pull_ready() {
+    local svc; svc=$(resolve_svc "${1:-}")
+    local dir; dir=$(need_svc "$svc")
+    local tmpdir; tmpdir=$(clone_repo_dir services/) || die "could not fetch the release"
+    trap "rm -rf '$tmpdir'" EXIT
+    [[ -d "$tmpdir/services/$svc" ]] || die "$svc is not in the release"
+    cp "$dir/.env" "$tmpdir/services/$svc/.env" 2>/dev/null || true
+    (cd "$tmpdir/services/$svc" && docker compose pull --ignore-buildable -q) || die "could not pull the images of $svc"
+    ok "images of the next $svc pulled; deploy with: labber $svc update --ready"
+}
+
+# maintenance mode: the template's compose.maintenance.yml joins COMPOSE_FILE in .env (on
+# the instance's own disk, so a snapshot taken while closed stays closed)
+do_maintenance() {
+    local svc; svc=$(resolve_svc "${1:-}")
+    local dir; dir=$(need_svc "$svc")
+    local mode="${2:-}" cur new
+    [[ "$mode" == on || "$mode" == off ]] || die "usage: labber $svc maintenance on|off"
+    if [[ ! -f "$dir/compose.maintenance.yml" ]]; then ok "$svc has nothing to pause (no compose.maintenance.yml)"; return 0; fi
+    cur=$(env_get "$dir/.env" COMPOSE_FILE 2>/dev/null || true); [[ -n "$cur" ]] || cur="docker-compose.yml"
+    new=$(tr ':' '\n' <<< "$cur" | grep -vxF compose.maintenance.yml | paste -sd: -)
+    [[ "$mode" == off ]] || new="$new:compose.maintenance.yml"
+    if grep -q '^COMPOSE_FILE=' "$dir/.env"; then env_set "$dir/.env" COMPOSE_FILE "$new"   # env_set only replaces
+    elif [[ "$new" != docker-compose.yml ]]; then printf 'COMPOSE_FILE=%s\n' "$new" >> "$dir/.env"; fi
+    [[ "$mode" == on ]] && mkdir -p "$dir/.maintenance-consume" && chown --reference="$dir" "$dir/.maintenance-consume" 2>/dev/null
+    if [[ -n "$(cd "$dir" && docker compose ps -q 2>/dev/null)" ]]; then
+        (cd "$dir" && docker compose up -d) >/dev/null || die "could not apply maintenance $mode"
+    fi
+    ok "$svc: maintenance $mode"
+}
+
+# checks a new labber runs before it replaces the old one (labber sync's self-update)
+do_selftest() {
+    local fail=0 t
+    bash -n "$LABBER_HOME/labber" || { warn "labber: syntax"; fail=1; }
+    for t in git jq docker flock ssh-keygen python3 tar; do command -v "$t" >/dev/null || { warn "missing: $t"; fail=1; }; done
+    if [[ -f "$LABBER_HOME/sync.py" ]]; then
+        python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$LABBER_HOME/sync.py" || { warn "sync.py: syntax"; fail=1; }
+        python3 "$LABBER_HOME/sync.py" --help >/dev/null || { warn "sync.py: does not start"; fail=1; }
+    else warn "sync.py missing"; fail=1; fi
+    [[ -d "$LABBER_HOME/files" ]] || { warn "files/ missing"; fail=1; }
+    (( fail == 0 )) && ok "labber v$VERSION: self-test passed" || die "labber v$VERSION: self-test failed"
+}
+
+do_sync() {
+    [[ -n "$LABBER_HOME" && -f "$LABBER_HOME/sync.py" ]] || die "sync.py not found next to labber — reinstall labber"
+    command -v python3 >/dev/null || die "labber sync needs python3 (apt install python3)"
+    (( EUID == 0 )) || die "labber sync runs as root"
+    exec python3 "$LABBER_HOME/sync.py" "$@"
 }
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -3474,7 +4370,7 @@ labber_main() {
         [[ "$arg" != --source && "$arg" != --ref ]] || die "--source/--ref must go before the service or command"
     done
     # set/reset must be able to repair a stale/missing local source or bad config.
-    if [[ "${1:-}" == source && ( "${2:-}" == set || "${2:-}" == reset ) ]]; then
+    if [[ "${1:-}" == source && ( "${2:-}" == set || "${2:-}" == reset || "${2:-}" == key ) ]]; then
         [[ -z "$cli_source" && -z "$cli_ref" ]] || die "give source/ref as arguments to 'source set', without global source options"
         shift; do_source "$@"; return
     fi
@@ -3487,10 +4383,12 @@ labber_main() {
     CMD="${1:-}"; shift 2>/dev/null || true
 
     # Global commands have no service prefix — detect when SVC slot holds a global cmd
-    _GLOBAL_CMDS="install deploy setup ls check-updates clean update tool help -h --help"
+    _GLOBAL_CMDS="install deploy setup ls check-updates clean update tool sync selftest disks help -h --help"
     # shellcheck disable=SC2076  # a literal word match, on purpose
     if [[ " $_GLOBAL_CMDS " =~ " $SVC " ]]; then
         _tmp="$CMD"; CMD="$SVC"; SVC="$_tmp"
+        # an option right after a global command is the command's, not a service: update --labber-only
+        if [[ "$SVC" == -* ]]; then set -- "$SVC" "$@"; SVC=""; fi
     elif [[ -z "$CMD" ]]; then
         # `labber <svc>` alone → that service's status; otherwise treat it as a command
         if [[ -n "$SVC" && -f "$(svc_dir "$SVC")/docker-compose.yml" ]]; then
@@ -3503,11 +4401,16 @@ labber_main() {
     # commands that take no service: a word before them is a typo, not a service to ignore
     # (e.g. `labber tools ls` for `labber tool ls`)
     case "$CMD" in
-        ls|check-updates|clean)
+        ls|check-updates|clean|disks)
             if [[ -n "$SVC" && ! ( "$CMD" == ls && "$SVC" =~ ^(-r|--remote)$ ) ]]; then
                 local hint=""; [[ "$SVC" == tools ]] && hint=" — did you mean: labber tool ls ?"
                 die "'$CMD' takes no service name ('$SVC')$hint"
             fi ;;
+    esac
+
+    # one change at a time on a guest: every command that changes something takes the lock
+    case "$CMD" in
+        install|deploy|uninstall|start|stop|restart|rebuild|update|maintenance|clean|pull-ready) sync_lock ;;
     esac
 
     case "$CMD" in
@@ -3525,15 +4428,37 @@ labber_main() {
         shell)     do_shell     "$SVC" ;;
         logs)      do_logs      "$SVC" "$@" ;;
         status)    do_status    "$SVC" ;;
-        ls)        do_ls "$SVC" ;;
+        ls)        do_ls "${1:-}" ;;
         check-updates) do_check_updates ;;
-        setup)     do_setup     "$SVC" "$@" ;;
+        setup)     do_setup     ${SVC:+"$SVC"} "$@" ;;
         go)        do_go        "$SVC" ;;
         clean)     do_clean ;;
+        disks)     do_disks ;;
         tool)      do_tool      "$SVC" ;;
         update)
+            local a ready=0
+            for a in "$@"; do
+                case "$a" in
+                    --rollback-on-failure) AUTO_ROLLBACK=1 ;;
+                    --ready) ready=1 ;;
+                    --labber-only) LABBER_ONLY=1 ;;
+                    --force) FORCE=1 ;;
+                    *) die "unknown option for update: $a" ;;
+                esac
+            done
+            if (( ready )); then
+                # the version labber sync verified and marked ready
+                [[ -n "$SVC" && -d "$SYNC_TREE/.git" ]] || die "nothing ready here (not enrolled, or no service given)"
+                exec env LABBER_SOURCE="$SYNC_TREE" "$LABBER_BIN" "$SVC" update
+            fi
             if [[ -n "$SVC" ]]; then do_svc_upgrade "$SVC"; else do_update; fi
             ;;
+        sync)      do_sync ${SVC:+"$SVC"} "$@" ;;
+        selftest)  do_selftest ;;
+        healthy)   do_healthy   "$SVC" ;;
+        check)     do_check     "$SVC" ;;
+        pull-ready) do_pull_ready "$SVC" ;;
+        maintenance) do_maintenance "$SVC" "$@" ;;
         help|-h|--help) usage ;;
         "")        show_menu ;;
         *) die "unknown command '$CMD' — run: labber help" ;;

@@ -8,7 +8,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/hea
 
 First get a UUID and token from Forgejo: **Settings → Actions → Runners → Create new runner** (in a repository, your user settings or the site administration, depending on who should use the runner). The script asks for the Forgejo URL, the UUID and the token (typed hidden), registers the runner and starts it.
 
-**Why native, not in a container:** jobs with the `host` label run directly on the machine, so the checkout paths exist on the Docker host (tests that bind-mount files from the checkout work), and the machine's tools are used (`make`, `python3`, `git`, Docker). The runner has its own user, `forgejo-runner`, in the `docker` group. That is root-equivalent on the machine, not a sandbox: use it only for trusted repositories, on a machine that holds nothing else.
+**Why native, not in a container:** jobs with the `host` label run directly on the machine, so the checkout paths exist on the Docker host (tests that bind-mount files from the checkout work), and the machine's tools are used (`make`, `python3`, `git`, Docker). The runner has its own user, `forgejo-runner`, in the `docker` group. That is root-equivalent on the machine, not a sandbox: use it only for trusted repositories, on a machine that holds nothing else. Tests that install services (labber sets folder owners) need it to have passwordless `sudo` too, which adds nothing to what the `docker` group already gives: `echo 'forgejo-runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/forgejo-runner`.
 
 | Command | Does |
 |---|---|

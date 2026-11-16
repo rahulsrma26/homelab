@@ -1,0 +1,203 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Image versions in the templates: ${X_VERSION:-tag@sha256:\u2026}. The gatekeeper merges the low-risk ones (version lines only, checked again there); everything else waits for an approval. Quiet for 3 days: Renovate waits where a registry gives release dates; the gatekeeper also needs the PR's proposal unchanged for 3 days (most registries give no dates).",
+  "extends": [
+    "config:recommended",
+    ":disableDependencyDashboard"
+  ],
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "image: registry/name:${NAME_VERSION:-tag@sha256:digest} (exactly this shape: the lint keeps it so). The whole reference is rebuilt from the template: a plain replace of a short tag like 1 would also hit the digest",
+      "managerFilePatterns": [
+        "/(^|/)services/[^/]+/(docker-compose|compose\\.[^/]+)\\.yml$/"
+      ],
+      "matchStrings": [
+        "image: (?<depName>[^\\s\"'$]+):(?<depType>\\$\\{[A-Z0-9_]+:-)(?<currentValue>[^@}\\s]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "image: {{{depName}}}:{{{depType}}}{{{newValue}}}@{{{newDigest}}}"
+    },
+    {
+      "customType": "regex",
+      "description": "image: ${IMAGE_SETTING:-registry/name:tag@sha256:digest} (the whole image a setting, e.g. llama.cpp's)",
+      "managerFilePatterns": [
+        "/(^|/)services/[^/]+/(docker-compose|compose\\.[^/]+)\\.yml$/"
+      ],
+      "matchStrings": [
+        "image: (?<depType>\\$\\{[A-Z0-9_]+:-)(?<depName>[^\\s\"'$@{}]+):(?<currentValue>[^@}\\s:]+)@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "autoReplaceStringTemplate": "image: {{{depType}}}{{{depName}}}:{{{newValue}}}@{{{newDigest}}}"
+    }
+  ],
+  "schedule": [
+    "* 0-6 * * 1"
+  ],
+  "timezone": "Etc/UTC",
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "none",
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
+  "rebaseWhen": "conflicted",
+  "pinDigests": true,
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 20,
+  "labels": [
+    "renovate"
+  ],
+  "packageRules": [
+    {
+      "description": "your own, locally built and untagged images: by hand",
+      "matchDepNames": [
+        "welcometors/scrap_downloader",
+        "registry.librechat.ai/**",
+        "assistant-*",
+        "llama-cpp-turboquant"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "routine updates grouped in one PR; the gatekeeper decides by group (auto: patch/minor; prepared: any)",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "routine updates",
+      "addLabels": [
+        "routine"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/immich/**"
+      ],
+      "groupName": "immich",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/paperless-ngx/**"
+      ],
+      "groupName": "paperless-ngx",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/joplin/**"
+      ],
+      "groupName": "joplin",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/trilium/**"
+      ],
+      "groupName": "trilium",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/forgejo/**"
+      ],
+      "groupName": "forgejo",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/garage/**"
+      ],
+      "groupName": "garage",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/termix/**"
+      ],
+      "groupName": "termix",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/traefik/**"
+      ],
+      "groupName": "traefik",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "prepared (you deploy it): its own PR, one item in the maintenance queue",
+      "matchFileNames": [
+        "services/monitoring/**"
+      ],
+      "groupName": "monitoring",
+      "addLabels": [
+        "prepared"
+      ]
+    },
+    {
+      "description": "majors alone, never merged without you for auto services",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "addLabels": [
+        "major"
+      ]
+    },
+    {
+      "description": "fast releasers (policy/fast-releasers.yml): monthly, the newest version at least 3 days old",
+      "matchDepNames": [
+        "ghcr.io/lukegus/termix"
+      ],
+      "schedule": [
+        "* 0-6 1-7 * 1"
+      ],
+      "internalChecksFilter": "strict"
+    },
+    {
+      "description": "Postgres: no major versions. A new major can't open the old data folder (dump and restore by hand); Immich's own Postgres moves only when Immich's release notes say so",
+      "matchDepNames": [
+        "postgres",
+        "docker.io/library/postgres",
+        "ghcr.io/immich-app/postgres"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Forgejo stays on its LTS line (15, supported until July 2027); the next LTS is 19 (April 2027). Raise this then",
+      "matchDepNames": [
+        "codeberg.org/forgejo/forgejo"
+      ],
+      "allowedVersions": "<16"
+    }
+  ]
+}

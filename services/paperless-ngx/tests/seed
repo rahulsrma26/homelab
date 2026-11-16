@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+# Put known test data in through Paperless's API: two text PDFs (test data only, never real).
+import sys, time, uuid
+sys.path.insert(0, __file__.rsplit('/', 1)[0]); from _api import call, wait_ready, pdf
+
+def upload(title, text):
+    b = uuid.uuid4().hex
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\n{title}\r\n"
+            f"--{b}\r\nContent-Disposition: form-data; name=\"document\"; filename=\"{title}.pdf\"\r\nContent-Type: application/pdf\r\n\r\n").encode() \
+           + pdf(text) + f"\r\n--{b}--\r\n".encode()
+    task = call('/documents/post_document/', body, f'multipart/form-data; boundary={b}')
+    for _ in range(120):
+        t = call(f'/tasks/?task_id={task}')
+        t = t.get('results', []) if isinstance(t, dict) else t   # a list, or paged in newer versions
+        st = (t[0]['status'] if t else '').upper()   # SUCCESS, or success in newer versions
+        if st in ('SUCCESS', 'FAILURE'):
+            if st != 'SUCCESS': raise SystemExit(f'{title}: {t[0].get("result")}')
+            return
+        time.sleep(2)
+    raise SystemExit(f'{title}: still processing')
+
+wait_ready()
+upload('labseed-alpha', 'labseed alpha quokka')
+upload('labseed-beta', 'labseed beta pangolin')
+print('seed: 2 documents')

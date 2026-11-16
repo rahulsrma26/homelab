@@ -1,6 +1,6 @@
 services:
   grafana:
-    image: grafana/grafana:${GRAFANA_VERSION:-11.4.0}
+    image: grafana/grafana:${GRAFANA_VERSION:-13.3.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205}
     container_name: grafana
     restart: unless-stopped
     healthcheck:
@@ -14,6 +14,7 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_LOG_FILTERS=search-manifest-watcher:error   # its "zero manifests" warning, every minute
       - INFLUXDB_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
     volumes:
       - grafana-data:/var/lib/grafana
@@ -24,7 +25,7 @@ services:
       - influxdb
 
   prometheus:
-    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.1.0}
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06}
     container_name: prometheus
     restart: unless-stopped
     healthcheck:
@@ -33,16 +34,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    ports:
-      - "9090:9090"
+    # no published port: push-gate (below) answers on 9090
     environment:
       - PVE_HOSTS=${PVE_HOSTS:-}
-    # writes the Proxmox hosts from .env (PVE_HOSTS, comma-separated) as a file_sd target list,
-    # so prometheus.yml stays the same everywhere and updates never touch your hosts
+      - TRAEFIK_METRICS=${TRAEFIK_METRICS:-}
+    # writes the Proxmox hosts (PVE_HOSTS) and Traefik's metrics (TRAEFIK_METRICS) from .env,
+    # comma-separated, as file_sd target lists, so prometheus.yml stays the same everywhere and
+    # updates never touch your hosts
     entrypoint:
       - /bin/sh
       - -c
-      - 'mkdir -p /tmp/targets && hosts=$$(echo "$$PVE_HOSTS" | tr "," " ") && { if [ -n "$$hosts" ]; then echo "- targets:"; for h in $$hosts; do echo "    - \"$$h\""; done; else echo "[]"; fi; } > /tmp/targets/pve.yml && exec /bin/prometheus "$$@"'
+      - 'mkdir -p /tmp/targets && sd() { hs=$$(echo "$$1" | tr "," " "); if [ -n "$$hs" ]; then echo "- targets:"; for h in $$hs; do echo "    - \"$$h\""; done; else echo "[]"; fi; } && sd "$$PVE_HOSTS" > /tmp/targets/pve.yml && sd "$$TRAEFIK_METRICS" > /tmp/targets/traefik.yml && exec /bin/prometheus "$$@"'
       - prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -55,19 +57,44 @@ services:
       - ./config/prometheus:/etc/prometheus
 
   loki:
-    image: grafana/loki:${LOKI_VERSION:-3.7.0}
+    image: grafana/loki:${LOKI_VERSION:-3.7.9@sha256:0db216b630ae1f348a1584c67f3cead8b4c1fc839169a39501db664744158e28}
     container_name: loki
     restart: unless-stopped
-    ports:
-      - "3100:3100"
+    # no published port: push-gate (below) answers on 3100
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
       # a named volume, or a path: its own dataset with a quota, so a log flood can't fill Prometheus's disk
       - ${LOKI_DATA:-loki-data}:/loki
       - ./config/loki/loki-config.yml:/etc/loki/loki-config.yml
 
+  # in front of Prometheus and Loki on their usual ports: a push (remote write, Loki push)
+  # needs a token from PUSH_TOKENS when PUSH_AUTH=on (log: logged without one; off: open).
+  # Queries and the UIs pass as before. config/push-gate/start.sh
+  push-gate:
+    image: nginx:${PUSH_GATE_VERSION:-1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236}
+    container_name: push-gate
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    ports:
+      - "9090:9090"
+      - "3100:3100"
+    environment:
+      - PUSH_AUTH=${PUSH_AUTH:-log}
+      - PUSH_TOKENS=hosts=${PUSH_TOKEN_HOSTS:-},guests=${PUSH_TOKEN_GUESTS:-},ci=${PUSH_TOKEN_CI:-},dmz=${PUSH_TOKEN_DMZ:-}
+    entrypoint: ["/bin/sh", "/push-gate/start.sh"]
+    volumes:
+      - ./config/push-gate:/push-gate:ro
+
   influxdb:
-    image: influxdb:${INFLUXDB_VERSION:-2.7}
+    image: influxdb:${INFLUXDB_VERSION:-2.9@sha256:e4572d094ac3272f06528ea904ce6b4cb3bb19be2db3b3b1acbd27ba5c3a73e2}
     container_name: influxdb
     restart: unless-stopped
     healthcheck:
@@ -87,11 +114,13 @@ services:
       - DOCKER_INFLUXDB_INIT_RETENTION=365d
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_ADMIN_TOKEN}
     volumes:
-      - influxdb-data:/var/lib/influxdb2
+      # INFLUXDB_DATA: a folder (bind mount, e.g. on a backed-up dataset) or, unset, the
+      # named volume as before. Moving existing data: services/monitoring/README.txt
+      - ${INFLUXDB_DATA:-influxdb-data}:/var/lib/influxdb2
       - influxdb-config:/etc/influxdb2     # the CLI config (otherwise a new anonymous volume at each recreate)
 
   alertmanager:
-    image: prom/alertmanager:${ALERTMANAGER_VERSION:-v0.27.0}
+    image: prom/alertmanager:${ALERTMANAGER_VERSION:-v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b}
     container_name: alertmanager
     restart: unless-stopped
     healthcheck:
@@ -109,8 +138,10 @@ services:
       - NTFY_URL=${NTFY_URL:-}
       - NTFY_TOPIC=${NTFY_TOPIC:-alerts}
       - NTFY_TOKEN=${NTFY_TOKEN:-}
+      - WATCHDOG_URL=${WATCHDOG_URL:-}
     # fills the settings into the config: Telegram (the quiet chat falls back to the loud one),
-    # or with ALERT_TARGET=ntfy the receivers from receivers-ntfy.yml (the routes stay the same)
+    # or with ALERT_TARGET=ntfy the receivers from receivers-ntfy.yml (the routes stay the same);
+    # the Watchdog's receiver: WATCHDOG_URL, or none (the heartbeat goes nowhere, never to a chat)
     entrypoint:
       - /bin/sh
       - -c
@@ -124,6 +155,10 @@ services:
         fi
         mt="$${TELEGRAM_MANAGER_BOT_TOKEN:-$$TELEGRAM_BOT_TOKEN}"; mc="$${TELEGRAM_MANAGER_CHAT_ID:-$$TELEGRAM_CHAT_ID}"
         sed "s|\$${TELEGRAM_MANAGER_BOT_TOKEN}|$$mt|g; s|\$${TELEGRAM_MANAGER_CHAT_ID}|$$mc|g; s|\$${TELEGRAM_BOT_TOKEN}|$$TELEGRAM_BOT_TOKEN|g; s|\$${TELEGRAM_CHAT_ID}|$$TELEGRAM_CHAT_ID|g; s|\$${NTFY_URL}|$$NTFY_URL|g; s|\$${NTFY_TOPIC}|$$NTFY_TOPIC|g; s|\$${NTFY_TOKEN}|$$NTFY_TOKEN|g" "$$src" > /tmp/alertmanager.yml
+        echo "  - name: 'watchdog'" >> /tmp/alertmanager.yml
+        if [ -n "$$WATCHDOG_URL" ]; then
+          printf "    webhook_configs:\n      - url: '%s'\n        send_resolved: false\n" "$$WATCHDOG_URL" >> /tmp/alertmanager.yml
+        fi
         exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager
     user: root
     volumes:
@@ -131,7 +166,7 @@ services:
       - alertmanager-data:/alertmanager
 
   pve-exporter:
-    image: prompve/prometheus-pve-exporter:${PVE_EXPORTER_VERSION:-3.5.1}
+    image: prompve/prometheus-pve-exporter:${PVE_EXPORTER_VERSION:-3.11.0@sha256:290756c34fd13e1d9972b8e64344d49a15ab99dd0053b29d9716f1ca4ae4c069}
     container_name: pve-exporter
     restart: unless-stopped
     healthcheck:

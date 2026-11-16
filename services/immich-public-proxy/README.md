@@ -4,46 +4,36 @@ Read-only public proxy for Immich shared albums and photos. Sits between the int
 
 Source: https://github.com/alangrainger/immich-public-proxy
 
-## Services
+## How it's reached
 
-| Service | Local Port | Notes |
-|---|---|---|
-| immich-public-proxy | 3000 | Exposed via Cloudflare tunnel only |
+On the public VM, behind Traefik in `cf` mode ([traefik](../traefik/README.md)):
+
+```
+visitor → Cloudflare → cloudflared (on the VM) → localhost:80 → Traefik → immich-public-proxy:3000 → Immich
+```
+
+The container publishes no port: Traefik finds it on the `proxy` network by its labels (`homelab.exposure=public`, host `PUBLIC_HOSTNAME`), with security headers and a per-visitor rate limit (`CF-Connecting-IP`).
 
 ## Setup
 
-```bash
-cp .env.example .env
-# edit .env with your Immich internal URL and public domain
-docker compose up -d
-```
+1. Traefik in `cf` mode on the same VM (it creates the `proxy` network).
+2. `labber immich-public-proxy install`.
+3. Cloudflare: the tunnel's public hostname for `PUBLIC_HOSTNAME` → `http://localhost:80` (Traefik, not the container).
+4. Firewall: this VM → Immich's API port only ([guides/public-tunnel-vm.md](../../guides/public-tunnel-vm.md)).
 
 ## Configuration
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `3000` | Host port (bound to 127.0.0.1 only) |
-| `IMMICH_URL` | — | Internal URL of your Immich instance |
-| `PUBLIC_BASE_URL` | — | Public-facing URL (no trailing slash) |
+| Variable | Description |
+|---|---|
+| `IMMICH_URL` | Internal URL of your Immich instance, e.g. `http://<immich-host>:2283` (by IP: its resolver is picky) |
+| `PUBLIC_BASE_URL` | Public URL of the share links, no trailing slash |
+| `PUBLIC_HOSTNAME` | The host name Traefik routes to it (the same name, without `https://`) |
 
-## Cloudflare Tunnel
-
-Add to `~/.cloudflared/config.yml` on the cloudflare VM:
-
-```yaml
-ingress:
-  - hostname: photos.yourdomain.com
-    service: http://localhost:3000
-```
-
-Then route DNS:
-```bash
-cloudflared tunnel route dns <tunnel-name> photos.yourdomain.com
-```
+Downloads and full-size zoom are on (`CONFIG` in `docker-compose.yml`).
 
 ## Security
 
-- Binds to `127.0.0.1` only — not reachable from the network directly
-- Stateless and read-only — no credentials stored in the container
-- Immich instance URL should be internal only, never exposed publicly
-- All public access goes through Cloudflare (WAF, DDoS protection, rate limiting)
+- No published port; only Traefik on the `proxy` network reaches it
+- Stateless and read-only (read-only root, no capabilities): no credentials stored
+- Immich itself stays internal: the proxy asks it only for shared links
+- All public access goes through Cloudflare (WAF, DDoS protection, rate limiting) and Traefik's rate limit

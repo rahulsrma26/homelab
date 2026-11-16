@@ -1,0 +1,4 @@
+# CI only: the CI host has no iGPU (/dev/dri)
+services:
+  immich-server:
+    devices: !reset []

@@ -8,6 +8,7 @@ Creating a guest on a Proxmox host and getting it ready for services. Inside the
 - **Bridge and VLAN:** `vmbr0` with the guest's VLAN as a tag: the server VLAN for services, management for admin tools, the DMZ for the public VM; two NICs (one per tag) when it needs two VLANs.
 - **Storage:** the encrypted storage (`enc-nvme`); only the Tailscale LXC goes on unencrypted `local-zfs`.
 - **Data:** bind mounts from the host's datasets, with `backup=0` so PBS backs up only the guest's own disk ([architecture/storage.md](../architecture/storage.md)).
+- **Generated files** (Docker's images, models, caches): a second disk at `/opt/generated` with `backup=0`, for a guest whose images or models are big. `labber setup` puts Docker's images there, and templates' `generated_dir()` folders ([architecture/storage.md](../architecture/storage.md#generated-files)). Optional: without it they stay on the guest's own disk.
 - **Start order:** Tailscale `order=1`, the reverse proxy `order=2`, the rest default.
 - **LXCs run as root** (key-only SSH): the unprivileged mapping is the isolation. **VMs get an admin user with sudo**, and root login off.
 
@@ -27,6 +28,7 @@ pct create <ID> local:vztmpl/debian-13-standard_<ver>_amd64.tar.zst \
 # a second NIC, for a guest in two VLANs:    --net1 name=eth1,bridge=vmbr0,tag=<mgmt-vid>,firewall=1,ip=dhcp
 # Docker inside:                              pct set <ID> --features nesting=1
 # a data mount:                               pct set <ID> -mp0 /<pool>/<dataset>,mp=/mnt/<name>,backup=0
+# the no-backup disk (images, models):        pct set <ID> -mp1 enc-nvme:<gb>,mp=/opt/generated,backup=0
 # the iGPU (e.g. Immich, Jellyfin):           pct set <ID> -dev0 /dev/dri/renderD128,gid=<render-gid-in-guest>
 
 pct start <ID>
@@ -51,6 +53,7 @@ Only where an LXC won't do ([architecture/principles.md](../architecture/princip
 
 - **Machine q35, BIOS OVMF**, disk on `enc-nvme` with discard, VirtIO SCSI single, CPU type `host`, the **QEMU guest agent** enabled (clean shutdowns, and the host sees its address).
 - Install Debian 13 (minimal), then from the console as root: `apt install -y curl` and the same `labber setup` line. In a VM it also creates the admin user, turns root login off, installs `qemu-guest-agent`, and can set a static address with an automatic rollback if the connection is lost.
+- **The no-backup disk:** add a second disk before setup, `qm set <ID> --scsi1 enc-nvme:<gb>,backup=0,discard=on,iothread=1`. Setup lists the unused disks (`labber disks` shows them too), formats the one you pick as ext4 after you type its name, and mounts it at `/opt/generated` by UUID with `nofail`. Unattended (`--yes`) it formats nothing unless you name the disk: `--generated-disk /dev/sdb`.
 - GPU passthrough: [gpu-passthrough.md](gpu-passthrough.md).
 
 ## After

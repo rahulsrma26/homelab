@@ -1,18 +1,20 @@
-# defaultPermissions: what a new user gets on each source
+# defaultPermissions: what a new user gets on each source — nothing: grant each user what they
+# need (Settings → Users). The admin keeps full access (its own permissions, set explicitly).
+# Changing these never touches existing users.
 server:
   cacheDir: /cache
   sources:
     - path: /srv/common
       config:
         defaultEnabled: true
-        defaultPermissions: {view: true, download: true, create: true, modify: true, delete: true, configured: true}
+        defaultPermissions: {view: false, download: false, create: false, modify: false, delete: false, configured: true}
     - path: /srv/media
       config:
         defaultEnabled: true
-        defaultPermissions: {view: true, download: true, create: true, modify: true, delete: true, configured: true}
+        defaultPermissions: {view: false, download: false, create: false, modify: false, delete: false, configured: true}
     # read-only: Immich and Paperless own these files (the mount is read-only too)
     - path: /srv/vault
       config:
         defaultEnabled: true
         readOnly: true
-        defaultPermissions: {view: true, download: true, create: false, modify: false, delete: false, configured: true}
+        defaultPermissions: {view: false, download: false, create: false, modify: false, delete: false, configured: true}

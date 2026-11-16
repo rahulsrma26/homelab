@@ -17,14 +17,47 @@ Check the stack (on its host, in this folder): ./tester
 Proxmox hosts to scrape: PVE_HOSTS in .env, comma-separated (their management addresses or
 names). Prometheus turns it into a target list when it starts, so prometheus.yml is the same
 everywhere and `labber monitoring update` never touches your hosts. A change in .env needs
-docker compose up -d prometheus (a recreate).
+docker compose up -d prometheus (a recreate). TRAEFIK_METRICS works the same way: Traefik's
+metrics port (host:8082), for the certificate-expiry alerts (warning under 20 days, critical
+under 5: Let's Encrypt renews 30 days ahead).
+
+InfluxDB's data: INFLUXDB_DATA in .env, a folder (a bind mount: e.g. on a dataset that is
+snapshotted and replicated), or empty for the named volume influxdb-data. Moving existing data
+(the history stays; tested with a real write before and a read after):
+  docker compose stop influxdb
+  sudo mkdir -p <folder>
+  sudo cp -a "$(docker volume inspect -f '{{.Mountpoint}}' monitoring_influxdb-data)/." <folder>/
+  set INFLUXDB_DATA=<folder> in .env, then: docker compose up -d influxdb
+  check Home Assistant's history in Grafana, then: docker volume rm monitoring_influxdb-data
+(the volume's name: docker volume ls | grep influxdb-data)
+
+Who may push (push-gate): Prometheus and Loki publish no port of their own; push-gate (nginx)
+answers on 9090 and 3100. Their push paths (remote write, Loki push, OTLP) need a token from a
+group in .env (PUSH_TOKEN_HOSTS, _GUESTS, _CI, _DMZ) when PUSH_AUTH=on; queries, the UIs and
+Grafana pass as before. Each sender keeps its group's token in /etc/alloy/push-token (root and
+Alloy only) and sends it as a bearer token. Rolling it out without losing a sample:
+  1. PUSH_AUTH=log (the default) and a token per group: openssl rand -hex 32, into .env;
+     docker compose up -d push-gate
+  2. each sender gets its group's token (a file, then deleted):
+       guests:  labber setup --push-token-file <file>   (untick all but Alloy; --yes would also run
+                every other ticked step, the system update among them)
+       hosts:   install-exporters.sh <prometheus> <loki> [--igpu] --push-token-file <file>
+     or, on each Proxmox host, both at once: utils/push-tokens.sh asks for the hosts' and the
+     guests' token (hidden) and does the host and every LXC sending here; VMs by hand
+  3. docker logs push-gate: it logs only pushes without a token (group=-) and failed ones;
+     who still pushes without one (their address)
+  4. none left for a day: PUSH_AUTH=on, docker compose up -d push-gate
+A leaked token: a new one for that group, step 2 for its senders. A token proves the group,
+not the labels a sender writes.
 
 Before deployment:
   .env
   config/prometheus/prometheus.yml
 
 After deployment:
-  Run utils/install-exporters.sh on each Proxmox host to install Alloy + smartctl_exporter.
+  Run utils/install-exporters.sh on each Proxmox host to install Alloy + smartctl_exporter,
+  and an hourly backup-age-metrics timer: each dataset's newest sanoid snapshot and each
+  guest's newest backup on a PBS storage (for SnapshotsStale / BackupStale).
   LXCs/VMs: `labber setup` installs Alloy with the same layout (job "guest-node-exporters",
   label kind=lxc|vm) plus a health check that exports labber_reboot_required,
   labber_restart_required_services and labber_security_updates_pending.
@@ -49,13 +82,18 @@ Alerts to Telegram (config/alertmanager/alertmanager.yml), two chats, three leve
   that the host is forgotten: automatic expiry does not establish recovery.
 
 Alerts (config/prometheus/alert.rules.yml, tested by tests/monitoring/run.sh):
-  HostDown             a target Prometheus scrapes is down
+  HostDown             a target Prometheus scrapes is down (not Traefik's metrics: see below)
   HostNotReporting     a host/guest that pushes via Alloy stopped sending metrics; when a Proxmox
                        host goes silent, only the host alerts, not each of its guests (matched by
                        name: a guest's Proxmox name must equal its hostname)
   SystemdUnitFailed    a systemd service is failed for 15 min
   RebootRequired       newer kernel or NVIDIA driver installed for over a day
   ServicesNeedRestart  services on outdated libraries for over a day
+  SnapshotsStale       a dataset's newest sanoid snapshot is over 26 h old
+  BackupStale          an existing guest's newest PBS backup is over 26 h old (deleted guests: never)
+  CertificateExpiresSoon  Traefik's certificate under 20 days (VerySoon, critical: under 5)
+  CertMetricsUnreachable  Traefik's metrics port can't be read for 15 min (warning: expiry unchecked)
+  ReleaseFeedBehind    a guest stays on an older release record than the gatekeeper's for 2 h
   SecurityUpdatesStuck security updates pending for a week
   HighMemory           over 90% of its memory for 30 min (warning): hosts and VMs from their own
                        MemAvailable, LXCs from the host's view (pve-exporter); a spike is fine

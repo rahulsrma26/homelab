@@ -32,3 +32,4 @@ http:
     # for backends with self-signed certificates (Proxmox, PBS, TrueNAS)
     skip-verify:
       insecureSkipVerify: true
+

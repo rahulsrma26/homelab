@@ -1,0 +1,3 @@
+# CI's test install (tests/ci/smoke.sh): a test domain (the portal has to be https:// in it)
+AUTHELIA_SESSION_DOMAIN=home.example.test
+AUTHELIA_URL=https://auth.home.example.test

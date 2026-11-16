@@ -34,11 +34,12 @@ jobs:
       - run: tests/repo/shellcheck.sh
 
   labber-unit:
-    name: labber unit tests + Alloy configs
+    name: labber unit tests + Alloy configs + labber sync's checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: tests/labber/run-unit.sh
+      - run: python3 -W error tests/labber/sync_test.py
 
   labber-setup:
     name: labber setup in a fresh container (${{ matrix.mode }} path)
@@ -54,13 +55,14 @@ jobs:
           LABBER_TEST_LIFECYCLE: '1'
 
   monitoring:
-    name: Prometheus rules + Alertmanager config + log caps
+    name: Prometheus rules + Alertmanager config + log caps + push-gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: tests/monitoring/run.sh
       - run: tests/monitoring/run-log-limits.sh
       - run: tests/monitoring/run-pve-targets.sh
+      - run: tests/monitoring/run-push-gate.sh
 
   services:
     name: Compose variants and Authelia configuration

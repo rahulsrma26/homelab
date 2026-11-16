@@ -185,7 +185,10 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     tty_run $'\nq\n' sudo -n bash "$LABBER" setup
     num() { grep -E "^ +[0-9]+ \[.\] $1" <<< "$output" | awk '{print $1}'; }
     update=$(num 'system update'); nfs=$(num 'NFS client'); f2b=$(num 'fail2ban'); net=$(num 'network:')
-    [ -n "$update" ] && [ -n "$nfs" ] && [ -n "$f2b" ] && [ -n "$net" ]
+    [ -n "$update" ]
+    [ -n "$nfs" ]
+    [ -n "$f2b" ]
+    [ -n "$net" ]
     # answers: Docker? Enter · untick update, tick NFS + fail2ban + network · run · network: 3 = skip
     tty_run $'\n'"$update $nfs $f2b $net"$'\n\n3\n' sudo -n bash "$LABBER" setup
     echo "$output"

@@ -1,0 +1,40 @@
+# n8n — workflow automation (events, digests, the agent's wake-ups). One container with SQLite in
+# N8N_DATA: workflows, credentials (encrypted with N8N_ENCRYPTION_KEY), execution history.
+services:
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.46.6@sha256:8602f5dfacbe2c931eeafd010de0e68182310e9f309921e780ab69182e92b3ae}
+    container_name: n8n
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:5678/healthz/readiness"]   # ready: its database migrated
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    ports:
+      - "${PORT:-5678}:5678"
+    environment:
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-https}
+      - WEBHOOK_URL=${N8N_PROTOCOL:-https}://${N8N_HOST}/
+      - N8N_EDITOR_BASE_URL=${N8N_PROTOCOL:-https}://${N8N_HOST}/
+      - N8N_PROXY_HOPS=${N8N_PROXY_HOPS:-1}          # behind Traefik: the client's address from X-Forwarded-For
+      - N8N_SECURE_COOKIE=${N8N_SECURE_COOKIE:-true}
+      - GENERIC_TIMEZONE=${TZ:-Etc/UTC}
+      - TZ=${TZ:-Etc/UTC}
+      # execution history is pruned: 14 days, at most 10000 (an unbounded store otherwise)
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=${N8N_EXECUTIONS_MAX_AGE_HOURS:-336}
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=10000
+      - N8N_DIAGNOSTICS_ENABLED=false               # no telemetry
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false     # updates come through labber
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true           # workflows can't read the container's environment
+    volumes:
+      - type: bind                                  # a missing folder stops the start instead of an empty n8n
+        source: ${N8N_DATA}
+        target: /home/node/.n8n
+        bind:
+          create_host_path: false

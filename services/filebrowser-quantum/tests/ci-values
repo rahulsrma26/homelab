@@ -1,0 +1,3 @@
+# CI's test install (tests/ci/smoke.sh): the od01 variant (runs as root, its cache in ./cache;
+# the w680 one needs that host's pool). The /mnt folders are created empty
+COMPOSE_FILE=docker-compose.yml:compose.od01.yml

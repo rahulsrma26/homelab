@@ -1,0 +1,5 @@
+# CI's test install (tests/ci/smoke.sh): its own proxy network, an Immich that isn't there
+COMPOSE_FILE=docker-compose.yml:tests/compose.ci.yml
+IMMICH_URL=http://127.0.0.1:2283
+PUBLIC_BASE_URL=https://photos.example.test
+PUBLIC_HOSTNAME=photos.example.test

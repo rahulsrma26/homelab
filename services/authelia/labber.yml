@@ -1,0 +1,4 @@
+# What labber needs to know about this service (labber-design: labber.yml).
+#   state: copied, with the service stopped, before an automatic update; put back on a rollback
+#          (both migrate their databases on update)
+state: ["${AUTHELIA_DATA:-./data/authelia}", "${LLDAP_DATA:-./data/lldap}"]

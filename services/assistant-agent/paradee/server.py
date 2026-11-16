@@ -1,5 +1,5 @@
 """Minimal OpenAI-compatible text-to-speech for Paradee: POST /v1/audio/speech -> WAV."""
-import io, os
+import io, logging, os
 
 import soundfile as sf
 from fastapi import FastAPI
@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 tts = Paradee(threads=int(os.environ.get("TTS_THREADS", "1")))
 app = FastAPI()
+# Docker's passing health checks (every 30 s) aren't worth a log line; failing ones and real requests still are
+logging.getLogger("uvicorn.access").addFilter(lambda r: not ('"GET /health ' in r.getMessage() and r.getMessage().endswith(" 200")))
 
 
 class Speech(BaseModel):

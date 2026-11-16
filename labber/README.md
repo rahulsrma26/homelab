@@ -84,6 +84,23 @@ ref unless you specify a new one at the same priority. Overrides are not saved b
 `install` or `setup`; run `source set` explicitly for subsequent commands/timers.
 `source set` and `source reset` can repair a stale checkout path or invalid config.
 
+**What labber installs is checked:**
+
+- **Signed tips:** `labber source key '<Forgejo's SSH signing key>'` saves the key in
+  `/etc/labber/allowed_signers`; from then on every fetched Git tip (services, tools,
+  labber itself) must carry that key's signature, or nothing is installed. Forgejo
+  signs the merges it makes, so its `main` and `dev` pass; a commit pushed without
+  Forgejo's signature doesn't. With a key set, labber fetches itself through Git too
+  (not GitHub's tarball). Without a key nothing is checked.
+- **Enrolled guests** (`labber sync enroll`): the default source is labber sync's
+  verified release tree (every commit checked, forward only), whatever `source.conf`
+  says, so a by-hand `labber <svc> update` installs what sync would. `--source` still
+  works for one command; labber's own self-update from it needs `--force`.
+- **Forward only:** `labber update` won't install an older labber than the one
+  installed (`--force` to go back).
+- **No `http://`:** anyone on the path could change what's installed; use `https://`
+  or `ssh://`.
+
 Use an SSH deploy key or a Git credential helper for private repos, **as the user
 running labber** (also the daily timer's `User=`). Keep URL credentials out of this
 file and command lines; password-bearing URLs are rejected. Verify SSH host keys
@@ -115,14 +132,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/rahulsrma26/homelab/refs/hea
 | Flag | Answers | Without it, under `--yes` |
 |---|---|---|
 | `--docker yes\|no` | Docker host? | last answer, else yes |
-| `--with` / `--without STEP,…` | the checklist (`update packages locale admin hostname timesync ssh unattended journal swap docker dockerlogs guestagent healthcheck gpu alloy zsh labber fzf nfs fail2ban network`) | the pre-selected steps (optional ones — nfs, fail2ban, swap — off) |
+| `--with` / `--without STEP,…` | the checklist (`update packages locale admin hostname timesync ssh unattended journal swap generated docker dockerstore dockerlogs guestagent healthcheck gpu alloy zsh labber fzf nfs fail2ban network`) | the pre-selected steps (optional ones — nfs, fail2ban, swap — off) |
 | `--admin NAME` | admin user (VM) | last answer; a new user gets no password (SSH is by key; set one with `passwd` for sudo) |
 | `--hostname` / `--timezone` / `--locale` | | unchanged / last answer, else what the machine has (a fresh LXC/VM: `Etc/UTC`) / `en_US.UTF-8` |
 | `--ssh-key 'ssh-ed25519 …'` | key, if none is installed | none: password logins stay on |
 | `--swap 1\|2\|3` | swap (VM); also checks the swap step | 1 (zram) |
 | `--network reservation\|skip` | fixed IP; also checks the network step | last answer, else reservation (changes nothing). A static IP is interactive only |
 | `--prometheus URL` / `--loki URL` | Alloy | `--loki` defaults to the Prometheus host, port 3100; neither → the Alloy step is skipped |
+| `--push-token-file PATH` | Alloy | the monitoring push-gate's token for this guest's group: kept in `/etc/alloy/push-token` (root and Alloy only), sent with every push; a later run without it keeps the one there ([`services/monitoring`](../services/monitoring/README.txt)) |
 | `--virt lxc\|vm` | only if detection fails | last answer |
+| `--generated-disk DEV` | the VM disk for `/opt/generated`, formatted if empty (giving it is the consent); also ticks the step | only a filesystem already labelled `generated` is mounted; nothing is formatted |
+| `--pkg-cache HOST` | the package cache (`services/pkg-cache`): apt through it while it answers, else direct; Docker Hub images through its mirror; also ticks the step | last answer; none → the step stays off |
 
 **`--dry-run`** shows what a run would do — the machine type, Docker yes/no, the checklist, and each answer with where it comes from (your flag, the remembered answer, or the default) — and changes nothing, not even the remembered answers. Check a command line with it, then run it without `--dry-run`.
 
@@ -142,7 +162,9 @@ It detects whether it's in an LXC or a VM and asks whether the machine will run 
 | Automatic security updates | ✓ | ✓ | `unattended-upgrades`, Debian security updates only, no auto-reboot |
 | Journal limit | ✓ | ✓ | systemd journal capped at 200 MB |
 | Swap | — | optional | asks: **1** zram only — turns off disk swap, so no swap writes to the SSD (also sets `RESUME=none` so boot doesn't wait for the old partition) · **2** zram first, disk swap as overflow · **3** disk swap only. LXC swap is set in Proxmox (`pct set <ID> --swap 0` saves host SSD writes) |
+| No-backup disk | ✓ | ✓ | `/opt/generated`, for files that can be pulled or rebuilt. **LXC:** a mount point from the host; without one it prints the `pct set` command and asks to go on without. **VM:** lists the unused disks (empty ones, and unmounted ext4/xfs/btrfs; never anything mounted, swap, LVM/RAID/ZFS/LUKS, a CD-ROM), formats the one you pick as ext4 after you type its name, adds it to `/etc/fstab` by UUID with `nofail`. "No disk" is remembered; a disk added later makes the step todo again. `labber disks` shows the same list |
 | Docker *(Docker hosts)* | ✓ | ✓ | official Docker repo + compose/buildx; on an LXC, prints the nesting command if Docker can't start |
+| Docker's images on the disk *(Docker hosts)* | ✓ | ✓ | with `/opt/generated`: containerd's store (Docker 29's image store) moves to `/opt/generated/containerd` through a systemd drop-in (images already there are copied after asking, and checked). Docker's own folder, with the named volumes, stays on the guest's disk. containerd and Docker refuse to start while the disk is missing, rather than pulling every image again onto the guest's disk |
 | Docker log rotation *(Docker hosts)* | ✓ | ✓ | container logs capped at 10 MB × 3 |
 | qemu-guest-agent | — | ✓ | plus the `qm set` command to enable it in Proxmox |
 | Reboot/update checks | ✓ | ✓ | hourly and after every `apt` run: newer kernel installed (VMs), services on outdated libraries (`needrestart`, list-only), pending security updates. Shown at login, and exported as metrics for alerts |
@@ -189,6 +211,7 @@ labber [--source URL|PATH] [--ref BRANCH|TAG|SHA] [svc] <command>
   ls -r|--remote    list what the repo offers: services (● installed here) and tools
   check-updates     check images and repo config for updates
   clean             remove all unused containers, images, networks, volumes
+  disks             the no-backup disk: is /opt/generated mounted, which unused disks a VM has
   tool <name>       run tools/<name>/install.sh from the repo   (tool ls: list them)
   source [show]     show the effective source and ref
   source set URL|PATH [REF]  save a host source for commands and timers (sudo)
@@ -218,7 +241,11 @@ Updates currently merge repository files into the live directory before image pr
 Files deleted in the repo are removed only when `.labber-base` records them and they are unchanged locally. Edited retired files stay with a warning and continue to appear in update checks until removed manually. Unrelated files and service data are preserved.
 
 **Health check and rollback.** After `install`, `rebuild` and `update`, labber waits for applications to run for 10 s since their last start (a restart or two while a database starts is fine) and pass any healthcheck. Only dependencies declared with `condition: service_completed_successfully` are one-shot jobs: they must finish with exit code 0, and a running job remains pending. All other services must keep running, including those with `restart: "no"`. Standalone batch jobs need a completion dependency to qualify. The overview uses the same rule when counting stopped containers. A crash loop (3+ restarts), a non-zero exit, a dead container, a failed healthcheck or 3 minutes without getting there counts as a failed update, and labber offers to **roll back**: the images the service ran before (kept as `labber-rollback:<id>` until the update is known to be good) and, for `update`, the files it replaced. It asks rather than rolling back by itself, because the new version may already have migrated the app's data, which the old one can't read. Without a terminal it reports the failure, leaves things as they are and exits 1.
-Every active Compose service must have a container; an empty list, missing service or Docker query error is a failure. Inactive profiles are excluded. File rollback includes upstream deletions. Failed updates retain their file snapshot and print its path for inspection or recovery; `.env` answers stay in place.
+Every active Compose service must have a container; an empty list, missing service or Docker query error is a failure. Inactive profiles are excluded. File rollback includes upstream deletions and `.env` (an update may add keys). Failed updates retain their file snapshot and print its path for inspection or recovery; the snapshots live in `/var/lib/labber/backups` (mode 700; `~/.local/state/labber/backups` when that isn't writable), not `/tmp`.
+
+**One change at a time:** every command that changes something (install, update, start, stop, restart, rebuild, uninstall, maintenance, clean) takes the guest's lock (`/run/lock/labber-sync`, shared with `labber sync`; group `docker`, mode 664) and waits up to 10 minutes for a running sync. It fails closed: if the lock can't be taken, nothing changes.
+
+**State copies** (`--rollback-on-failure`, the `state:` list in `labber.yml`) only cover folders inside the instance, its named volumes, or folders its compose file bind-mounts; never a mount point or a folder holding one, and only when there's room for the copy. A typo in `labber.yml` or `.env` can't make a rollback copy and empty a whole data disk.
 Service commands require Docker Compose, Git and jq; `labber setup` installs these dependencies.
 
 Without a terminal (cron, scripts), labber never prompts: it reports what's wrong and doesn't start the service.
@@ -236,12 +263,13 @@ Values in a service's `.env.example` (in [`services/`](../services/)) that labbe
 | `{{ name \| generate(uuid) }}` | a UUID | generates |
 | `{{ name \| choice(lan,cf) }}` | one of the listed values (e.g. a service's mode); a wrong answer is asked again | — (skip leaves it unset) |
 | `{{ name \| generate([A-Za-z0-9],16) }}` | N random characters from a set (passwords, secrets with a minimum length); typed: at least N | generates |
+| `{{ name \| generated_dir(models) }}` | a folder for files that can be pulled or rebuilt (models, caches, queues): `/opt/generated/services/<svc>/models` on a guest with the no-backup disk, else `./generated/models`. Filled in without a terminal too; never changed later (a disk added afterwards doesn't move the files: stop the service, move them, edit `.env`, start). `labber <svc> uninstall` deletes it with the service folder | keeps that folder |
 
 A typed value that doesn't meet its generator's rule (too short, not hex, …) gets a warning and **use it anyway? [y/N]**: **y** keeps it — for an existing password a restored database or another system expects — and **n** asks again.
 
 Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{ paperless_host }}:{{ paperless_port | default(8000) }}`. A name used several times in one `.env` is asked once and filled in everywhere (e.g. `{{ domain }}`).
 
-labber first asks once whether to generate all the secrets (it lists them); answer no to go through them one by one. Values only you can provide are asked one by one; secrets are typed hidden and checked against their rule. Anything left unset is listed before starting, and labber asks before starting anyway.
+labber first asks once whether to generate all the secrets (it lists them); answer no to go through them one by one. Values only you can provide are asked one by one (hidden when the name looks secret: password, token, secret, API key, private key, credential); secrets are typed hidden and checked against their rule. A value with both `'` and `$` is written in double quotes with `\`, `"` and `$` escaped, as Compose reads it. Anything left unset is listed before starting, and labber asks before starting anyway.
 
 ## Updates
 

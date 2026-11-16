@@ -1,0 +1,5 @@
+# CI only: no Traefik in cf mode here to create the proxy network, so this creates it
+networks:
+  proxy:
+    name: proxy
+    external: false

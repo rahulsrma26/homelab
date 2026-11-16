@@ -10,7 +10,7 @@ services:
   immich-server:
     container_name: immich_server
     # v3: the newest 3.x on every update, never a jump to the next major version
-    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-v3}
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-v3@sha256:e1981983b1c13f6024b57d72e7ecae3342eed1581201ab09fb248932d86c593a}
     devices:
       - /dev/dri:/dev/dri          # Intel iGPU: hardware transcoding (enable in Admin → Video transcoding)
     volumes:
@@ -27,7 +27,7 @@ services:
     depends_on:
       - redis
       - database
-    restart: always
+    restart: unless-stopped
     healthcheck:
       disable: false
 
@@ -40,23 +40,23 @@ services:
   immich-machine-learning:
     container_name: immich_machine_learning
     profiles: [ml-yes]
-    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_ML_VERSION:-v3-openvino}
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_ML_VERSION:-v3-openvino@sha256:035c30de002da9d4d4ae3872107bb9d8e195ead1c1f9fd470a2b0149ed37aec1}
     devices:
       - /dev/dri:/dev/dri
     volumes:
       - model-cache:/cache
     env_file:
       - .env
-    restart: always
+    restart: unless-stopped
     healthcheck:
       disable: false
 
   redis:
     container_name: immich_redis
-    image: docker.io/valkey/valkey:${VALKEY_VERSION:-9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d}
+    image: docker.io/valkey/valkey:${VALKEY_VERSION:-9@sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7}
     healthcheck:
       test: redis-cli ping | grep -q PONG || exit 1
-    restart: always
+    restart: unless-stopped
 
   database:
     container_name: immich_postgres
@@ -69,14 +69,14 @@ services:
     volumes:
       - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
     shm_size: 128mb
-    restart: always
+    restart: unless-stopped
     healthcheck:
       disable: false
 
   # Immich Kiosk: a slideshow web page (:3502)
   immich-kiosk:
     profiles: [kiosk-yes]
-    image: ghcr.io/damongolding/immich-kiosk:${IMMICH_KIOSK_VERSION:-0.45.2}
+    image: ghcr.io/damongolding/immich-kiosk:${IMMICH_KIOSK_VERSION:-0.47.0@sha256:bc6a7c629fdf709467bdfac84b8077e0e3d08d4781166546d929e5c9cf2290ad}
     container_name: immich_kiosk
     tty: true
     environment:
@@ -111,7 +111,7 @@ services:
   # (connect it to Immich there); settings are stored in IMMICHFRAME_CONFIG_LOCATION.
   immichframe:
     profiles: [frame-yes]
-    image: ghcr.io/immichframe/immichframe:${IMMICHFRAME_VERSION:-v1.0.39.0}
+    image: ghcr.io/immichframe/immichframe:${IMMICHFRAME_VERSION:-v1.0.39.0@sha256:b4bd2ac6ec75c0117a24bd627dc0b449d485ac87ec3a410c73d5db05a4bbfcaf}
     container_name: immichframe
     environment:
       TZ: ${TZ}
@@ -132,7 +132,7 @@ services:
   # Reads Immich's database directly, with the same DB_* values as the server.
   immich-power-tools:
     profiles: [powertools-yes]
-    image: ghcr.io/immich-power-tools/immich-power-tools:${IMMICH_POWER_TOOLS_VERSION:-0.25.0}
+    image: ghcr.io/immich-power-tools/immich-power-tools:${IMMICH_POWER_TOOLS_VERSION:-0.25.0@sha256:85af8a9f116cfb626dcda491a49616baf90108fe428a885df5ab68bd7cddb291}
     container_name: immich_power_tools
     environment:
       IMMICH_URL: http://immich-server:2283

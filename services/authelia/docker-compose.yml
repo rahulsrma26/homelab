@@ -1,11 +1,18 @@
+# Authelia (single sign-on, 2FA) with LLDAP (its user directory). Traefik's forwardAuth
+# middleware asks Authelia before a protected route answers (README). Both keep their data
+# (users, password hashes, TOTP secrets, sessions) in folders: on a backed-up dataset.
 services:
   authelia:
-    image: authelia/authelia:${AUTHELIA_VERSION:-4.39.28}
+    image: authelia/authelia:${AUTHELIA_VERSION:-4.39.28@sha256:bd97cff4fcbf715b5ff1f9ae286afbe6033afce385302520b0368122d43a6f54}
     container_name: authelia
     restart: unless-stopped
     ports:
       - "9091:9091"
     environment:
+      # its entrypoint hands /config to PUID:PGID and drops root: without them it gives the
+      # config to root (labber can't update it any more) and keeps running as root
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
       - X_AUTHELIA_CONFIG_FILTERS=template
       - AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET=${AUTHELIA_JWT_SECRET}
       - AUTHELIA_SESSION_SECRET=${AUTHELIA_SESSION_SECRET}
@@ -14,15 +21,25 @@ services:
       - LLDAP_BASE_DN=${LLDAP_BASE_DN}
       - SESSION_DOMAIN=${AUTHELIA_SESSION_DOMAIN}
       - AUTH_URL=${AUTHELIA_URL}
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:9091/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - ./config/authelia:/config
-      - authelia-data:/data
+      - type: bind                       # a missing folder stops the start instead of an empty user store
+        source: ${AUTHELIA_DATA}
+        target: /data
+        bind:
+          create_host_path: false
     depends_on:
       lldap:
         condition: service_healthy
 
   lldap:
-    image: lldap/lldap:${LLDAP_VERSION:-v0.6.3}
+    image: lldap/lldap:${LLDAP_VERSION:-v0.6.3@sha256:2a8454b668c1aba7157e832eab0e242e1e7eb5fb7591d7e7774ba05286511ca8}
     container_name: lldap
     restart: unless-stopped
     ports:
@@ -35,8 +52,8 @@ services:
       - LLDAP_LDAP_BASE_DN=${LLDAP_BASE_DN}
       - LLDAP_SMTP_OPTIONS__ENABLE_PASSWORD_RESET=false
     volumes:
-      - lldap-data:/data
-
-volumes:
-  authelia-data:
-  lldap-data:
+      - type: bind
+        source: ${LLDAP_DATA}
+        target: /data
+        bind:
+          create_host_path: false

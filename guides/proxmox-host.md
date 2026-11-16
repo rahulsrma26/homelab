@@ -200,7 +200,7 @@ fail2ban-client status sshd | grep -E "Journal matches|File list" # Debian's def
 ```
 
 - **Journal backend required:** there is no `/var/log/auth.log` or `daemon.log` on Proxmox 9 (no rsyslog), so jails must use `backend = systemd`. Debian's sshd jail already does.
-- **Bans are per IP:** keep the web UI direct (`ip:8006`), never behind NPM. Otherwise one ban blocks the proxy, and everything behind it.
+- **Bans are per IP:** keep the web UI direct (`ip:8006`), never behind a reverse proxy. Otherwise one ban blocks the proxy, and everything behind it.
 - **Tools get their own users:** give each tool its own user and API token (e.g. `monitoring@pve`). A tool with stale credentials then bans only its own IP. To unban: `fail2ban-client set proxmox unbanip <ip>`.
 
 ---

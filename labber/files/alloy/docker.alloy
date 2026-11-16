@@ -20,7 +20,7 @@ prometheus.relabel "containers" {
   // per container: CPU, memory, network, start time (restarts), last seen (gone), OOM kills
   rule {
     source_labels = ["__name__"]
-    regex         = "container_(cpu_usage_seconds_total|memory_working_set_bytes|network_(receive|transmit)_bytes_total|start_time_seconds|last_seen|oom_events_total)"
+    regex         = "container_(cpu_usage_seconds_total|memory_working_set_bytes|network_(receive|transmit)_bytes_total|fs_writes_bytes_total|start_time_seconds|last_seen|oom_events_total)"
     action        = "keep"
   }
   // the cgroup root isn't a container

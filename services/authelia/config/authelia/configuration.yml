@@ -37,7 +37,7 @@ storage:
 notifier:
   disable_startup_check: false
   filesystem:
-    filename: /config/notification.txt
+    filename: /data/notification.txt          # until an SMTP notifier: password resets, device registrations
 
 access_control:
   default_policy: two_factor

@@ -1,0 +1,2 @@
+# CI's test install (tests/ci/smoke.sh): on the CPU (no iGPU on the CI host or the canary)
+COMPOSE_FILE=docker-compose.yml:tests/compose.ci.yml

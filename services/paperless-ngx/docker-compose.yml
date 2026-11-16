@@ -1,6 +1,6 @@
 services:
   broker:
-    image: docker.io/library/redis:${REDIS_VERSION:-8}
+    image: docker.io/library/redis:${REDIS_VERSION:-8@sha256:1f88291b4c57bdf249f02eb085a8669889b2d2954e91d4de5118a5da6b78dd53}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -12,7 +12,7 @@ services:
       - redisdata:/data
 
   webserver:
-    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION:-3.3.4}
+    image: ghcr.io/paperless-ngx/paperless-ngx:${PAPERLESS_VERSION:-3.4.2@sha256:d704e84f88300eb6ab001ab15720a2330ff99169cf9f94d6b8fcc44b63a84c84}
     restart: unless-stopped
     depends_on:
       - broker
@@ -33,7 +33,7 @@ services:
       PAPERLESS_TIKA_ENDPOINT: http://tika:9998
 
   gotenberg:
-    image: docker.io/gotenberg/gotenberg:${GOTENBERG_VERSION:-8.25}
+    image: docker.io/gotenberg/gotenberg:${GOTENBERG_VERSION:-8.40@sha256:53073e798c8ef39ea2187e44cb67bab77894ea2509100b94c4fe3b461f7b2996}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
@@ -47,7 +47,7 @@ services:
       - "--chromium-allow-list=file:///tmp/.*"
 
   tika:
-    image: docker.io/apache/tika:${TIKA_VERSION:-4.1.0}
+    image: docker.io/apache/tika:${TIKA_VERSION:-4.2.0@sha256:b99f19c4fd76237dafe7d22f719b9bddfa9a449da687c597a41e2f6d9a595418}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9998"]
@@ -63,7 +63,7 @@ services:
   # same OpenAI-compatible server and model as the built-in AI.
   paperless-gpt:
     profiles: [gpt-yes]
-    image: icereed/paperless-gpt:${PAPERLESS_GPT_VERSION:-v0.31.0}
+    image: icereed/paperless-gpt:${PAPERLESS_GPT_VERSION:-v0.31.0@sha256:d668941a829552cc0eddbc7c22506b3480dfbf61bd0d6eae881ad9fcfe2de70c}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8080/"]
@@ -85,6 +85,8 @@ services:
       OCR_PROVIDER: llm
       OCR_LIMIT_PAGES: "0"
       OCR_SKIP_DIGITAL_PAGES: "true"
+      # tag OCRed documents with paperless-gpt-ocr-complete (unset counts as off)
+      PDF_OCR_TAGGING: "true"
       LLM_LANGUAGE: ${PAPERLESS_GPT_LANGUAGE:-English}
     volumes:
       - ./paperless-gpt/prompts:/app/prompts

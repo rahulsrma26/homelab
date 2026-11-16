@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+# A fresh test instance: create the document, set a random password, get an ETAPI token,
+# and add two known notes (test data only, never a real instance).
+import os, secrets, sys, time, urllib.parse
+sys.path.insert(0, __file__.rsplit('/', 1)[0]); from _api import req, etapi, wait_ready, TOKEN_FILE
+wait_ready()
+st = req('/api/setup/status')
+if st.get('isInitialized'): raise SystemExit('seed: this instance is already set up (seed is for a fresh test instance)')
+req('/api/setup/new-document', b'{}', {'Content-Type': 'application/json'}, 'POST')
+for _ in range(60):
+    if req('/api/setup/status').get('isInitialized'): break
+    time.sleep(2)
+pw = secrets.token_urlsafe(18)
+form = urllib.parse.urlencode({'password1': pw, 'password2': pw}).encode()
+try: req('/set-password', form, {'Content-Type': 'application/x-www-form-urlencoded'}, 'POST')
+except Exception as e:
+    if getattr(e, 'code', 0) not in (302, 303): raise
+tok = req('/etapi/auth/login', ('{"password": "%s"}' % pw).encode(), {'Content-Type': 'application/json'}, 'POST')['authToken']
+fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); os.write(fd, tok.encode()); os.close(fd)
+for title, word in (('labseed-alpha', 'quokka'), ('labseed-beta', 'pangolin')):
+    etapi('/create-note', {'parentNoteId': 'root', 'title': title, 'type': 'text', 'content': f'<p>labseed {word}</p>'})
+print('seed: 2 notes')

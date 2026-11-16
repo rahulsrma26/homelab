@@ -1,0 +1,6 @@
+# While closed for a deployment: an empty consume folder, so nothing is ingested from the
+# shared inbox until the service reopens (labber adds this file while maintenance is on).
+services:
+  webserver:
+    volumes:
+      - ./.maintenance-consume:/usr/src/paperless/consume

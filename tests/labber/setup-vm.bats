@@ -54,6 +54,8 @@ tty_run() {
     curl -fs localhost:12345/-/ready
     c=/etc/alloy/config.alloy
     grep -q 'replacement  = "vm"' "$c"
+    [ "$(grep -c bearer_token_file "$c")" -eq 2 ]          # its push token, to a local monitoring too
+    [ -s /etc/alloy/push-token ]
     grep -q 'set_collectors = \["cpu", ' "$c"
     grep -q 'prometheus.exporter.cadvisor "docker"' "$c"
     grep -q 'loki.source.docker "containers"' "$c"
@@ -76,7 +78,8 @@ tty_run() {
     [ "$(getent passwd admin | cut -d: -f7)" = "$(command -v zsh)" ]
     head -1 /home/admin/.zshrc | grep -qx '# labber zsh'
     [ "$(stat -c %U /home/admin/.zshrc)" = admin ]
-    [ -f /home/admin/.p10k.zsh ] && [ "$(stat -c %U /home/admin/.p10k.zsh)" = admin ]
+    [ -f /home/admin/.p10k.zsh ]
+    [ "$(stat -c %U /home/admin/.p10k.zsh)" = admin ]
     [ -x /home/admin/.fzf/bin/fzf ]
     grep -q 'fzf' /home/admin/.zshrc
     # root's shell is left alone on a VM
@@ -97,8 +100,8 @@ tty_run() {
     echo "$output"
     [[ "$output" == *"(last answer: vm)"* ]]
     [[ "$output" == *", VM, user: admin"* ]]
-    # time sync can't work in a container; swap and NFS are optional
-    todo=$(grep -E '^ +[0-9]+ \[' <<< "$output" | grep -v -E 'system update|time sync|swap|NFS' | grep -c ' todo' || true)
+    # time sync can't work in a container; swap, NFS and the package cache are optional
+    todo=$(grep -E '^ +[0-9]+ \[x\] ' <<< "$output" | grep -v -E 'system update|time sync|swap|NFS|package cache' | grep -c ' todo' || true)   # still ticked (optional steps start unticked)
     [ "$todo" -eq 0 ]
 }
 

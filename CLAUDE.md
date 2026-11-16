@@ -39,6 +39,7 @@ In config files and examples, use:
 | `{{ name \| generate(uuid) }}` | a UUID | generates |
 | `{{ name \| choice(lan,cf) }}` | one of the listed values (e.g. a service's mode); a wrong answer is asked again | — (skip leaves it unset) |
 | `{{ name \| generate([A-Za-z0-9],16) }}` | N random characters from a set (passwords, secrets with a minimum length); typed: at least N | generates |
+| `{{ name \| generated_dir(models) }}` | a folder for files that can be pulled or rebuilt (models, caches, queues): `/opt/generated/services/<svc>/models` on a guest with the no-backup disk, else `./generated/models`; never a literal `/opt/generated` path | keeps that folder |
 
 Placeholders can sit anywhere inside a value, e.g. `PAPERLESS_BASE_URL=http://{{ paperless_host }}:{{ paperless_port | default(8000) }}`. A name used several times in one `.env` is asked once and filled in everywhere (e.g. `{{ domain }}`).
 

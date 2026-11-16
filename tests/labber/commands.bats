@@ -63,16 +63,20 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     env_before=$(cat "$SVC_DIR/.env")
     lbr --source "$checkout" "$SVC" update
     echo "$output"
-    [ "$status" -eq 0 ] && web_running
+    [ "$status" -eq 0 ]
+    web_running
     [ "$(docker exec "$SVC-web-1" printenv SOURCE_MARKER)" = local-checkout ]
     [ "$(cat "$SVC_DIR/untracked.txt")" = local-file ]
     [ "$(cat "$SVC_DIR/.env")" = "$env_before" ]
     before=$(web_id)
     run env CLONE_RETRY_DELAY=0 bash "$LABBER" --source "file://$checkout" --ref missing "$SVC" update </dev/null
-    [ "$status" -ne 0 ] && [ "$(web_id)" = "$before" ] && web_running
+    [ "$status" -ne 0 ]
+    [ "$(web_id)" = "$before" ]
+    web_running
     # Switch back to the default committed source and exercise deletion tracking.
     lbr "$SVC" update
-    [ "$status" -eq 0 ] && [ ! -e "$SVC_DIR/untracked.txt" ]
+    [ "$status" -eq 0 ]
+    [ ! -e "$SVC_DIR/untracked.txt" ]
     [ -z "$(docker exec "$SVC-web-1" printenv SOURCE_MARKER || true)" ]
 }
 
@@ -87,7 +91,8 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     lbr "$SVC" restart
     [ "$status" -eq 0 ]
     after=$(web_id)
-    [ -n "$after" ] && [ "$after" != "$before" ]
+    [ -n "$after" ]
+    [ "$after" != "$before" ]
 }
 
 @test "health rejects a stopped application after its one-shot dependency completed" {
@@ -189,25 +194,61 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     [ -z "$(docker images -q labber-rollback)" ]
 }
 
+@test "update --rollback-on-failure: a digest-pinned image that breaks comes back by itself, its state too" {
+    repo="${LABBER_REPO#file://}"
+    export LABBER_STATE_BAK="$BATS_TEST_TMPDIR/state-bak"
+    dig=$(docker image inspect -f '{{index .RepoDigests 0}}' busybox:1.37); dig=${dig#*@}
+    # pinned by digest like every template, with its data folder as labber.yml state
+    sed -i "s|image: busybox:1.37$|image: busybox:1.37@$dig|" "$repo/services/$SVC/docker-compose.yml"
+    printf 'state: [./data]\n' > "$repo/services/$SVC/labber.yml"
+    git -C "$repo" add -A; git -C "$repo" -c user.name=labber-test -c user.email=labber-test@localhost commit -qm "fixture: pin by digest"
+    lbr "$SVC" update
+    [ "$status" -eq 0 ]
+    echo before | sudo -n tee "$SVC_DIR/data/www/marker" >/dev/null     # the container's folder: root's
+    # the broken version writes to its state before it fails
+    sed -i 's|command: \["httpd".*|command: ["sh", "-c", "echo broken > /www/marker; exit 3"]|' "$repo/services/$SVC/docker-compose.yml"
+    git -C "$repo" -c user.name=labber-test -c user.email=labber-test@localhost commit -qam "fixture: break web"
+    lbr "$SVC" update --rollback-on-failure
+    git -C "$repo" reset -q --hard HEAD~2
+    echo "$output"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"rolling back by itself"* ]]
+    [[ "$output" == *"rolled back — running the previous version"* ]]
+    [ "$(sudo -n cat "$SVC_DIR/data/www/marker")" = before ]     # what the failed version wrote is gone
+    grep -q "busybox:1.37@$dig" "$SVC_DIR/docker-compose.yml"
+    web_running
+    [ -z "$(sudo -n ls -A "$LABBER_STATE_BAK")" ]        # no copy left behind
+    lbr "$SVC" update                                     # back to the plain fixture
+    [ "$status" -eq 0 ]
+    sudo -n rm -f "$SVC_DIR/data/www/marker"
+}
+
 @test "logs follows the service's logs" {
     run timeout 5 bash "$LABBER" "$SVC" logs < /dev/null
     [ "$status" -eq 124 ]    # still following when the timeout stopped it
 }
 
 @test "logs <container>: only that container (by service or container name), options passed on" {
+    # httpd logs nothing by itself: a line on web's own stdout, so its logs have something to show
+    (cd "$SVC_DIR" && docker compose exec -T web sh -c 'echo labber-logs-test > /proc/1/fd/1')
     run timeout 5 bash "$LABBER" "$SVC" logs web --tail 1 < /dev/null
     echo "$output"
     [ "$status" -eq 124 ]
-    [[ "$output" == *"web-1"* ]] && [[ "$output" != *"job-1"* ]]
+    [[ "$output" == *"web-1"*labber-logs-test* ]]
+    [[ "$output" != *"job-1"* ]]
     ctr=$(cd "$SVC_DIR" && docker compose ps -a --format '{{.Name}}' web)
     run timeout 5 bash "$LABBER" "$SVC" logs "$ctr" --tail=1 < /dev/null
-    [ "$status" -eq 124 ] && [[ "$output" != *"job-1"* ]]
+    [ "$status" -eq 124 ]
+    [[ "$output" != *"job-1"* ]]
     run timeout 5 bash "$LABBER" "$SVC" logs nosuch < /dev/null
-    [ "$status" -eq 1 ] && [[ "$output" == *"no container 'nosuch' in $SVC — it has:"*web* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no container 'nosuch' in $SVC — it has:"*web* ]]
     run timeout 5 bash "$LABBER" "$SVC" logs web job < /dev/null
-    [ "$status" -eq 1 ] && [[ "$output" == *usage* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *usage* ]]
     run timeout 5 bash "$LABBER" "$SVC" logs --tail < /dev/null
-    [ "$status" -eq 1 ] && [[ "$output" == *"--tail needs a value"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"--tail needs a value"* ]]
 }
 
 @test "shell opens sh when the container has no bash" {
@@ -261,7 +302,9 @@ web_running() { [ "$(docker inspect -f '{{.State.Running}}' "$SVC-web-1" 2>/dev/
     cmp -s "$LABBER" /usr/local/bin/labber
     diff -r "$(dirname "$LABBER")/files" /usr/local/lib/labber/files
     [ "$(stat -c '%U %a' /usr/local/lib/labber/labber)" = "root 755" ]
-    [ ! -e /usr/local/bin/labber.new ] && [ ! -e /usr/local/lib/labber.new ] && [ ! -e /usr/local/lib/labber.old ]
+    [ ! -e /usr/local/bin/labber.new ]
+    [ ! -e /usr/local/lib/labber.new ]
+    [ ! -e /usr/local/lib/labber.old ]
     [ "$(grep -cx '# labber shell function' ~/.bashrc)" -eq 1 ]
     [ "$(grep -cx '# labber completion' ~/.bashrc)" -eq 1 ]
 }

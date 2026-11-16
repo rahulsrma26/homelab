@@ -43,15 +43,19 @@ policy_out: DROP
 IN  ACCEPT -source <admin-network> -p tcp -dport 22 -log nolog          # SSH from the admin network only
 OUT ACCEPT -dest <gateway> -p udp -dport 53 -log nolog                  # DNS
 OUT ACCEPT -dest <gateway> -p tcp -dport 53 -log nolog                  # DNS, large answers
+OUT ACCEPT -dest <immich> -p tcp -dport 2283 -log nolog                 # the one internal app it proxies
+OUT ACCEPT -dest <monitoring> -p tcp -dport 9090,3100 -log nolog        # Alloy → Prometheus, Loki
+OUT DROP   -dest 192.168.0.0/16 -log nolog                              # nothing else internal ...
+OUT DROP   -dest 10.0.0.0/8 -log nolog                                  # ... in any private range
+OUT DROP   -dest 172.16.0.0/12 -log nolog
+OUT DROP   -dest 100.64.0.0/10 -log nolog                               # Tailscale addresses
 OUT ACCEPT -p tcp -dport 443 -log nolog                                 # HTTPS: apt, image pulls, cloudflared's API
 OUT ACCEPT -p tcp -dport 7844 -log nolog                                # the tunnel (HTTP/2)
 OUT ACCEPT -p udp -dport 7844 -log nolog                                # the tunnel (QUIC)
 OUT ACCEPT -p udp -dport 123 -log nolog                                 # NTP
-OUT ACCEPT -dest <immich> -p tcp -dport 2283 -log nolog                 # the one internal app it proxies
-OUT ACCEPT -dest <monitoring> -p tcp -dport 9090,3100 -log nolog        # Alloy → Prometheus, Loki
-OUT DROP   -dest 192.168.0.0/16 -log nolog                              # nothing else internal
 ```
 
+- **Order matters: the first matching rule wins.** The internal ACCEPTs come first, then the DROPs of the private ranges, then the general internet ACCEPTs. With the general `443` ACCEPT above the DROPs, the VM reaches every internal HTTPS service (the reverse proxy included).
 - Inbound: SSH only. cloudflared connects **out**, so the tunnel needs no inbound rule.
 - Outbound: default drop; a compromised VM can't reach other internal hosts or exfiltrate on arbitrary ports.
 - Forgetting 7844 takes the tunnel down the moment the firewall applies; forgetting TCP 53 breaks large DNS answers.
@@ -64,6 +68,8 @@ OUT DROP   -dest 192.168.0.0/16 -log nolog                              # nothin
 curl -s -m 5 -o /dev/null -w '%{http_code}\n' http://example.com   # 000: port 80 out is blocked
 dig +time=2 +tries=1 @192.0.2.53 example.com                      # times out: DNS only to the gateway
 nc -zvw3 <another-internal-host> 22                                 # times out
+nc -zvw3 <reverse-proxy> 443                                       # times out: no internal HTTPS
+nc -zvw3 <immich> 2283                                              # open: the one app it proxies
 sudo apt update                                                     # works
 ```
 

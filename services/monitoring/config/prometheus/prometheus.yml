@@ -49,5 +49,16 @@ scrape_configs:
         regex: 'pve_ha_state'
         action: drop
 
+  # Traefik's metrics (TRAEFIK_METRICS in .env, host:port, comma-separated): only the
+  # certificates' expiry is kept, for CertificateExpiresSoon
+  - job_name: 'traefik'
+    scrape_interval: 5m
+    file_sd_configs:
+      - files: ['/tmp/targets/traefik.yml']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'traefik_tls_certs_not_after'
+        action: keep
+
   # proxmox-node-exporters and proxmox-smartctl-exporters are pushed via
   # Alloy remote_write from each host — no scrape jobs needed here

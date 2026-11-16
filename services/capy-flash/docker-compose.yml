@@ -1,0 +1,67 @@
+services:
+  # one-shot: downloads the model artifact (pinned revision) and checks its SHA-256; skipped once it's there
+  capy-flash-model:
+    build: .
+    image: capy-flash:local
+    container_name: capy-flash-model
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -eu
+        f=/models/${MODEL_FILE}
+        if [ -s "$$f" ] && echo "${MODEL_SHA256}  $$f" | sha256sum -c --quiet -; then echo "model present"; exit 0; fi
+        echo "downloading $$f (resumable)"
+        curl -fL --retry 5 -C - -o "$$f" "https://huggingface.co/${MODEL_REPO}/resolve/${MODEL_REVISION}/${MODEL_FILE}"
+        echo "${MODEL_SHA256}  $$f" | sha256sum -c -
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}/capy-flash:/models
+
+  capy-flash:
+    build: .
+    image: capy-flash:local
+    container_name: capy-flash
+    restart: unless-stopped
+    depends_on:
+      capy-flash-model:
+        condition: service_completed_successfully
+    command: >-
+      /models/${MODEL_FILE} --profile 27b
+      --host 0.0.0.0 --port 8080 --model-id ${MODEL_ID:-qwen3.8-27b}
+      --chat-template /opt/capy-flash/chat_templates/qwen3_8.jinja
+      --max-context ${MAX_CONTEXT:-262144} --kv-capacity ${KV_CAPACITY:-262144}
+      --max-concurrency ${MAX_CONCURRENCY:-3}
+      --device-state-slots ${DEVICE_STATE_SLOTS:-16} --host-kv-mib ${HOST_KV_MIB:-16384}
+      --spec mtp --draft-tokens ${DRAFT_TOKENS:-4} --lm-head-draft --embedding-host
+      --default-thinking-budget ${THINKING_BUDGET:-16384}
+      --disk-cache-dir /cache --disk-cache-gib ${DISK_CACHE_GIB:-64}
+      ${EXTRA_ARGS:-}
+    environment:
+      NINFER_API_KEY: ${API_KEY}
+    ports:
+      - "${PORT:-8123}:8080"
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}/capy-flash:/models:ro
+      - ${CACHE_DIR:-/opt/generated/capy-flash-cache}:/cache
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      memlock: -1
+    stop_grace_period: 90s
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 180s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

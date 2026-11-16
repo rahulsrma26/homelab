@@ -26,7 +26,7 @@ tty_run() {
     echo "$output"
     [[ "$output" == *"(last answer: lxc)"* ]]
     [[ "$output" == *", LXC, user: root"* ]]
-    todo=$(grep -E '^ +[0-9]+ \[' <<< "$output" | grep -v -E 'system update' | grep -c ' todo' || true)
+    todo=$(grep -E '^ +[0-9]+ \[x\] ' <<< "$output" | grep -v -E 'system update' | grep -c ' todo' || true)   # still ticked (optional steps start unticked)
     [ "$todo" -eq 0 ]
 }
 
@@ -68,6 +68,8 @@ tty_run() {
     grep -q 'set_collectors = \["stat", "filesystem", "systemd", "textfile"\]' "$c"
     grep -q 'replacement  = "lxc"' "$c"
     grep -q 'url = "http://127.0.0.1:9090/api/v1/write"' "$c"
+    [ "$(grep -c bearer_token_file "$c")" -eq 2 ]          # its push token, to a local monitoring too
+    [ -s /etc/alloy/push-token ]
     ! grep -q '@[A-Z_]*@' "$c" || false
     ! grep -q 'cadvisor' "$c" || false                 # not a Docker host
 }

@@ -1,8 +1,11 @@
 services:
   frigate:
-    image: ghcr.io/blakeblackshear/frigate:${FRIGATE_VERSION:-0.18.2}
+    image: ghcr.io/blakeblackshear/frigate:${FRIGATE_VERSION:-0.18.2@sha256:fd60f99ffd4eb6c42360ed4e14953e270586f239309ab3983e55b2e97ffac09a}
     container_name: frigate
-    privileged: true
+    # not privileged: the iGPU is its render device (below; Frigate runs as root in its
+    # container, so it can open it); CAP_PERFMON lets intel_gpu_top read the GPU's load
+    cap_add:
+      - PERFMON
     restart: unless-stopped
     stop_grace_period: 30s
     shm_size: "${SHM_SIZE:-512mb}"

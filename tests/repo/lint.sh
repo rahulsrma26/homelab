@@ -68,13 +68,16 @@ while IFS= read -r f; do
         # every {{ must belong to a well-formed template
         rest="$val"
         while [[ "$rest" =~ $TPL_RE ]]; do rest="${rest/"${BASH_REMATCH[0]}"/}"; done
-        if [[ "$rest" == *"{{"* || "$rest" == *"}}"* ]]; then err "$f:$n" "malformed template (names are lowercase; functions: default(...), generate(...), choice(...))"; fi
+        if [[ "$rest" == *"{{"* || "$rest" == *"}}"* ]]; then err "$f:$n" "malformed template (names are lowercase; functions: default(...), generate(...), choice(...), generated_dir(...))"; fi
         while IFS=$'\t' read -r name fn arg; do
             case "$fn" in
                 generate) gen_known "$arg" || err "$f:$n" "{{ $name }}: unknown generator '$arg'" ;;
                 choice)   choice_known "$arg" || err "$f:$n" "{{ $name }}: choice(...) needs at least two different values" ;;
+                generated_dir) generated_sub_ok "$arg" || err "$f:$n" "{{ $name }}: generated_dir(...) needs a relative folder name, e.g. generated_dir(models)" ;;
             esac
         done < <(tpl_list "$val")
+        # the no-backup disk's path comes from labber (generated_dir), never written out
+        if [[ "$val" == *"$GEN_DIR"* ]]; then err "$f:$n" "a literal $GEN_DIR path — use {{ name | generated_dir(sub) }}"; fi
     done < "$f"
 done < <(git ls-files --cached --others --exclude-standard -- '*.env.example')
 
@@ -95,7 +98,10 @@ echo ":: image versions"
 # (latest, stable, release, nightly, …), or a digest; images a service builds itself are exempt
 while IFS= read -r compose; do
     while IFS=$'\t' read -r line img; do
-        [[ "$img" == *@sha256:* ]] && continue
+        if [[ "$img" == *@* ]]; then
+            [[ "$img" =~ @sha256:[0-9a-f]{64}$ ]] || err "$compose:$line" "image $img: a digest must be @sha256: and 64 hex characters"
+            continue
+        fi
         name=${img##*/}
         if [[ "$name" != *:* ]]; then err "$compose:$line" "image $img has no version — pin a tag (\${NAME_VERSION:-x.y.z})"
         elif [[ "${name##*:}" =~ ^(latest|stable|release|nightly|edge|main|master|dev|develop|beta|rolling)$ || ! "${name##*:}" =~ [0-9] ]]; then
@@ -111,11 +117,41 @@ while IFS= read -r compose; do
             img = v; iline = NR
         }
         END { flush() }' "$compose")
+    # a pinned image line has exactly one shape (Renovate rebuilds it from a template): image: name:${VAR:-tag@digest}
+    while IFS=: read -r line rest; do
+        err "$compose:$line" "write a pinned image as  image: name:\${NAME_VERSION:-tag@sha256:…}  or  image: \${IMAGE:-name:tag@sha256:…}  (one space, no quotes): Renovate rewrites exactly those"
+    done < <(grep -nE '^[[:space:]]+image:.*@sha256:' "$compose" | grep -vE '^[0-9]+:[[:space:]]+image: ([^[:space:]"'"'"'$]+:\$\{[A-Z0-9_]+:-[^}@[:space:]]+|\$\{[A-Z0-9_]+:-[^[:space:]"'"'"'$@{}]+:[^}@[:space:]:]+)@sha256:[0-9a-f]{64}\}[[:space:]]*(#.*)?$')
     # a version variable must be the whole tag: ${X_VERSION:-v3}-openvino can't carry a digest
     while IFS=: read -r line rest; do
         err "$compose:$line" "a version variable with text after it can't be pinned to a digest — give that image its own variable"
     done < <(grep -nE '^[[:space:]]+image:.*\$\{[A-Za-z0-9_]+:-[^}]*\}[^[:space:]"'"'"']' "$compose")
 done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml')
+
+echo ":: labber.yml"
+# only the keys labber reads: a typo would silently switch a protection off
+while IFS= read -r f; do
+    # state is what a rollback puts back: a generated_dir() folder (pulled or rebuilt) never is
+    ex="$(dirname "$f")/.env.example"
+    if [[ -f "$ex" ]]; then
+        while IFS= read -r k; do
+            while IFS=: read -r line _; do
+                err "$f:$line" "state names \${$k}, a generated_dir() folder — generated files aren't state"
+            done < <(grep -nE '^state:.*\$\{'"$k"'(:-[^}]*)?\}' "$f")
+        done < <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*\|[[:space:]]*generated_dir\(' "$ex" | sed -E 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/')
+    fi
+    while IFS=: read -r line key; do
+        err "$f:$line" "unknown key '$key' (known: health, state, owns, validate)"
+    done < <(grep -nE '^[A-Za-z_-]+:' "$f" | sed -E 's/^([0-9]+):([A-Za-z_-]+):.*/\1:\2/' | grep -vE ':(health|state|owns|validate)$')
+done < <(git ls-files --cached --others --exclude-standard -- 'services/*/labber.yml')
+
+echo ":: restart policies"
+# a stopped service must stay stopped through a reboot or a snapshot rollback (labber stops
+# services before a recovery point): unless-stopped, or no for a one-off tool; never always
+while IFS=: read -r f line rest; do
+    v=${rest##*restart:}; v=${v//[\"\' ]/}
+    err "$f:$line" "restart: $v — use unless-stopped (always restarts a stopped service at boot)"
+done < <(git ls-files --cached --others --exclude-standard -- '*docker-compose.yml' 'services/*/compose.*.yml' \
+    | xargs -r grep -nHE '^[[:space:]]+restart:[[:space:]]*["'"'"']?(always|on-failure)')
 
 fi   # tree-only checks
 

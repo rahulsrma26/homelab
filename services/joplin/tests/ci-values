@@ -1,0 +1,2 @@
+# CI's test install (tests/ci/smoke.sh): a real URL (the health check parses it)
+JOPLIN_BASE_URL=http://localhost:22300

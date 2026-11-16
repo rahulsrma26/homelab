@@ -3,9 +3,11 @@
 # Alloy replaces node_exporter + promtail: it pushes metrics to Prometheus
 # via remote_write and ships journal logs to Loki.
 # --igpu also installs Intel iGPU metrics (intel_gpu_top every 15 s, through Alloy).
+# --push-token-file PATH: the token of the hosts' group for monitoring's push-gate (kept in
+# /etc/alloy/push-token, root and Alloy only; a re-run without it keeps the one there).
 #
 # Usage:
-#   ./install-exporters.sh <prometheus-url> <loki-url> [--igpu]
+#   ./install-exporters.sh <prometheus-url> <loki-url> [--igpu] [--push-token-file PATH]
 #
 # Example:
 #   ./install-exporters.sh http://192.168.management.monitoring:9090 http://192.168.management.monitoring:3100 --igpu
@@ -18,16 +20,25 @@ ARCH="amd64"
 PROMETHEUS_URL="${1}"
 LOKI_URL="${2}"
 IGPU=0
-case "${3:-}" in
-  "") ;;
-  --igpu) IGPU=1 ;;
-  *) echo "Unknown option: ${3} (only --igpu)"; exit 1 ;;
-esac
+PUSH_TOKEN=""
+PUSH_TOKEN_FILE=/etc/alloy/push-token
+shift 2 2>/dev/null || true
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --igpu) IGPU=1; shift ;;
+    --push-token-file)
+      [ -r "${2:-}" ] || { echo "--push-token-file: can't read '${2:-}'"; exit 1; }
+      PUSH_TOKEN=$(tr -d '[:space:]' < "$2")
+      [[ "$PUSH_TOKEN" =~ ^[A-Za-z0-9._~+/=-]{32,}$ ]] || { echo "--push-token-file: $2 doesn't hold a token (32+ characters)"; exit 1; }
+      shift 2 ;;
+    *) echo "Unknown option: $1 (--igpu, --push-token-file PATH)"; exit 1 ;;
+  esac
+done
 # metrics written by local scripts (iGPU), read by Alloy's textfile collector
 TEXTFILE_DIR=/var/lib/node-textfile
 
 if [ -z "${PROMETHEUS_URL}" ] || [ -z "${LOKI_URL}" ]; then
-  echo "Usage: $0 <prometheus-url> <loki-url> [--igpu]"
+  echo "Usage: $0 <prometheus-url> <loki-url> [--igpu] [--push-token-file PATH]"
   exit 1
 fi
 
@@ -222,9 +233,80 @@ EOF
 fi
 
 echo ""
+echo "=== Backup and snapshot age (hourly) ==="
+# the newest sanoid snapshot per dataset and the newest Proxmox backup per guest (on each
+# PBS storage), as timestamps: the alerts SnapshotsStale and BackupStale compare them with now
+cat > /usr/local/sbin/backup-age-metrics << 'EOF'
+#!/usr/bin/env bash
+# Writes backup-age.prom for Alloy's textfile collector (installed by install-exporters.sh)
+set -uo pipefail
+out=/var/lib/node-textfile/backup-age.prom
+tmp=$(mktemp "$out.XXXXXX") || exit 1
+{
+  # sanoid's own (autosnap_…): a one-off snapshot (before a deployment, a restore) isn't a schedule
+  echo "# HELP zfs_snapshot_newest_timestamp Creation time of the dataset's newest sanoid snapshot"
+  echo "# TYPE zfs_snapshot_newest_timestamp gauge"
+  if command -v zfs >/dev/null; then
+    zfs list -Hp -t snapshot -o name,creation 2>/dev/null \
+      | awk -F'\t' '$1 ~ /@autosnap_/ { split($1, a, "@"); if ($2 > n[a[1]]) n[a[1]] = $2 } END { for (d in n) printf "zfs_snapshot_newest_timestamp{dataset=\"%s\"} %d\n", d, n[d] }'
+  fi
+  echo "# HELP pve_backup_newest_timestamp Time of the guest's newest backup on a PBS storage"
+  echo "# TYPE pve_backup_newest_timestamp gauge"
+  if command -v pvesh >/dev/null; then
+    node=$(hostname)
+    for st in $(pvesm status --enabled 1 2>/dev/null | awk 'NR > 1 && $2 == "pbs" && $3 == "active" { print $1 }'); do
+      timeout 120 pvesh get "/nodes/$node/storage/$st/content" --content backup --output-format json 2>/dev/null \
+        | python3 -c '
+import json, sys
+st = sys.argv[1]; newest = {}
+for b in json.load(sys.stdin):
+    v = str(b.get("vmid", "")); t = int(b.get("ctime", 0))
+    if v and t > newest.get(v, 0): newest[v] = t
+for v, t in sorted(newest.items()): print(f"pve_backup_newest_timestamp{{storage=\"{st}\",vmid=\"{v}\"}} {t}")
+' "$st"
+    done
+  fi
+  echo "backup_age_metrics_last_run_timestamp $(date +%s)"
+} > "$tmp" && chmod 644 "$tmp" && mv "$tmp" "$out" || rm -f "$tmp"
+EOF
+chmod 755 /usr/local/sbin/backup-age-metrics
+cat > /etc/systemd/system/backup-age-metrics.service << 'EOF'
+[Unit]
+Description=Backup and snapshot age for Alloy (backup-age.prom)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/backup-age-metrics
+Nice=10
+EOF
+cat > /etc/systemd/system/backup-age-metrics.timer << 'EOF'
+[Unit]
+Description=Backup and snapshot age, hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now backup-age-metrics.timer
+systemctl start backup-age-metrics.service || true
+echo "backup and snapshot age written hourly to ${TEXTFILE_DIR}/backup-age.prom"
+
+echo ""
 echo "=== Writing Alloy config ==="
 
 mkdir -p /etc/alloy
+# the push token: root and Alloy only, never in the config itself
+if [ -n "${PUSH_TOKEN}" ]; then
+  ( umask 077; printf '%s\n' "${PUSH_TOKEN}" > "${PUSH_TOKEN_FILE}.new" )
+  chgrp alloy "${PUSH_TOKEN_FILE}.new" 2>/dev/null && chmod 640 "${PUSH_TOKEN_FILE}.new"
+  mv -f "${PUSH_TOKEN_FILE}.new" "${PUSH_TOKEN_FILE}"
+fi
+AUTH=""
+[ -s "${PUSH_TOKEN_FILE}" ] && AUTH="bearer_token_file = \"${PUSH_TOKEN_FILE}\""
 
 cat > /etc/alloy/config.alloy << EOF
 logging {
@@ -313,6 +395,7 @@ prometheus.relabel "smartctl" {
 prometheus.remote_write "central" {
   endpoint {
     url = "${PROMETHEUS_URL}/api/v1/write"
+    ${AUTH}
   }
 }
 
@@ -385,6 +468,7 @@ loki.source.journal "local" {
 loki.write "central" {
   endpoint {
     url = "${LOKI_URL}/loki/api/v1/push"
+    ${AUTH}
   }
 }
 EOF

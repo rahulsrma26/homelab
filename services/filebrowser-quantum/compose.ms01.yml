@@ -1,0 +1,9 @@
+# ms01 variant: the scratch share (extra, never backed up). Sources: config.ms01.yaml.
+services:
+  filebrowser:
+    # runs as root, the owner of the shared folder (the image defaults to uid 1000)
+    user: "0:0"
+    volumes:
+      - ./cache:/cache
+      - /mnt/extra:/srv/extra
+      - ./config.ms01.yaml:/home/filebrowser/data/config.yaml:ro

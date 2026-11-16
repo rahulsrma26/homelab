@@ -1,0 +1,121 @@
+#!/bin/bash
+# gpulimits: NVIDIA power limits and clock caps, kept across reboots.
+#   gpulimits status                                  the cards, their limits, temperature, power, clock
+#   gpulimits set <gpu|all> [--power W] [--clock MHz|off]   save and apply
+#   gpulimits apply                                   apply /etc/gpulimits.conf (run at boot by gpulimits.service)
+#   gpulimits reset [<gpu|all>]                       back to the driver's defaults, and forget the setting
+# <gpu> is a UUID (GPU-…, stable: recommended), a PCI bus id (00000000:02:00.0) or an index (0).
+set -euo pipefail
+
+CONF=${GPULIMITS_CONF:-/etc/gpulimits.conf}
+SMI=${GPULIMITS_SMI:-nvidia-smi}
+
+die() { echo "gpulimits: $*" >&2; exit 1; }
+need_root() { [[ $EUID -eq 0 ]] || die "run as root (sudo gpulimits $*)"; }
+usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+# -i argument for a selector: none for "all"
+sel_args() { [[ "$1" == all ]] && return 0; printf -- '-i\n%s\n' "$1"; }
+
+check_sel() {
+    [[ "$1" == all ]] && return 0
+    "$SMI" -i "$1" --query-gpu=index --format=csv,noheader >/dev/null 2>&1 || die "no GPU '$1' (see gpulimits status)"
+}
+
+apply_one() {  # selector power clock
+    local sel=$1 power=$2 clock=$3 args=()
+    mapfile -t args < <(sel_args "$sel")
+    if [[ -n "$power" ]]; then "$SMI" "${args[@]}" -pl "$power" >/dev/null || die "power $power W refused for '$sel' (limits: gpulimits status)"; fi
+    case "$clock" in
+        "") ;;
+        off) "$SMI" "${args[@]}" -rgc >/dev/null ;;
+        *) "$SMI" "${args[@]}" -lgc "0,$clock" >/dev/null || die "clock cap $clock MHz refused for '$sel'" ;;
+    esac
+}
+
+# the config: one line per selector, "<selector> power=<W> clock=<MHz>", later lines win per key
+conf_get() {  # selector key
+    [[ -f "$CONF" ]] || return 0
+    awk -v s="$1" -v k="$2" '$1 == s { for (i = 2; i <= NF; i++) { split($i, a, "="); if (a[1] == k) v = a[2] } } END { print v }' "$CONF"
+}
+
+conf_put() {  # selector power clock (empty = unchanged, "-" = remove)
+    local sel=$1 power=$2 clock=$3 p c tmp
+    p=$(conf_get "$sel" power); c=$(conf_get "$sel" clock)
+    [[ -n "$power" ]] && p=$power; [[ -n "$clock" ]] && c=$clock
+    [[ "$p" == - ]] && p=""; [[ "$c" == - || "$c" == off ]] && c=""
+    tmp=$(mktemp)
+    [[ -f "$CONF" ]] && awk -v s="$sel" '$1 != s' "$CONF" > "$tmp"
+    if [[ -n "$p$c" ]]; then
+        { printf '%s' "$sel"; [[ -n "$p" ]] && printf ' power=%s' "$p"; [[ -n "$c" ]] && printf ' clock=%s' "$c"; echo; } >> "$tmp"
+    fi
+    install -m 644 "$tmp" "$CONF"; rm -f "$tmp"
+}
+
+cmd_status() {
+    "$SMI" --query-gpu=index,uuid,pci.bus_id,name,power.limit,power.min_limit,power.max_limit,power.draw,temperature.gpu,clocks.sm,clocks.max.sm \
+        --format=csv,noheader,nounits | while IFS= read -r line; do
+        local f=() cap="" s
+        IFS=',' read -ra f <<<"$line"
+        f=("${f[@]# }")  # csv puts a space after each comma
+        # 0 index 1 uuid 2 bus 3 name 4 limit 5 min 6 max 7 draw 8 temp 9 clock 10 max clock
+        for s in "${f[1]}" "${f[2]}" "${f[0]}" all; do [[ -z "$cap" ]] && cap=$(conf_get "$s" clock); done
+        printf '%s  %s  %s  %s\n' "${f[0]}" "${f[1]}" "${f[2]}" "${f[3]}"
+        printf '   power %s W (allowed %s-%s, draws %s W)   clock %s MHz (max %s, cap %s)   %s C\n' \
+            "${f[4]}" "${f[5]}" "${f[6]}" "${f[7]}" "${f[9]}" "${f[10]}" "${cap:-none}" "${f[8]}"
+    done
+    [[ -s "$CONF" ]] && { echo; echo "$CONF:"; sed 's/^/   /' "$CONF"; }
+    if systemctl is-enabled gpulimits.service >/dev/null 2>&1; then echo "applied at boot: gpulimits.service"; else echo "not applied at boot (gpulimits.service not enabled)"; fi
+}
+
+cmd_set() {
+    [[ $# -ge 1 ]] || usage 1
+    local sel=$1 power="" clock=""; shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --power) power=${2:?--power W}; [[ "$power" =~ ^[0-9]+$ ]] || die "--power: watts as a number"; shift 2 ;;
+            --clock) clock=${2:?--clock MHz|off}; [[ "$clock" =~ ^([0-9]+|off)$ ]] || die "--clock: MHz or off"; shift 2 ;;
+            *) usage 1 ;;
+        esac
+    done
+    [[ -n "$power$clock" ]] || die "nothing to set (--power and/or --clock)"
+    need_root set; check_sel "$sel"
+    "$SMI" -pm 1 >/dev/null
+    apply_one "$sel" "$power" "$clock"
+    conf_put "$sel" "$power" "$clock"
+    echo "set and saved: $sel${power:+ power=$power W}${clock:+ clock=$clock}"
+}
+
+cmd_apply() {
+    need_root apply
+    [[ -s "$CONF" ]] || { echo "gpulimits: nothing in $CONF"; return 0; }
+    "$SMI" -pm 1 >/dev/null
+    # "all" first, so that a line for one card overrides it
+    { grep -E '^all[[:space:]]' "$CONF" || true; grep -vE '^(all[[:space:]]|#|$)' "$CONF" || true; } | while read -r sel rest; do
+        apply_one "$sel" "$(conf_get "$sel" power)" "$(conf_get "$sel" clock)"
+        echo "applied: $sel $rest"
+    done
+}
+
+cmd_reset() {
+    need_root reset
+    local sel=${1:-all} args=() def
+    [[ "$sel" == all ]] || check_sel "$sel"
+    mapfile -t args < <(sel_args "$sel")
+    "$SMI" "${args[@]}" -rgc >/dev/null
+    "$SMI" "${args[@]}" --query-gpu=index,power.default_limit --format=csv,noheader,nounits | while IFS=', ' read -r i def; do
+        "$SMI" -i "$i" -pl "${def%.*}" >/dev/null
+    done
+    if [[ "$sel" == all ]]; then rm -f "$CONF"; else conf_put "$sel" - -; fi
+    echo "reset: $sel (driver defaults; removed from $CONF)"
+}
+
+command -v "$SMI" >/dev/null || die "nvidia-smi not found (is the NVIDIA driver installed?)"
+case "${1:-status}" in
+    status) cmd_status ;;
+    set) shift; cmd_set "$@" ;;
+    apply) cmd_apply ;;
+    reset) shift; cmd_reset "$@" ;;
+    -h|--help|help) usage 0 ;;
+    *) usage 1 ;;
+esac

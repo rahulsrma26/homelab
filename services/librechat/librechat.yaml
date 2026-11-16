@@ -4,11 +4,14 @@ cache: true
 endpoints:
   custom:
     - name: "llama.cpp"
-      apiKey: "sk-dummy"
+      apiKey: "${LLAMA_API_KEY}"
       baseURL: "${LLAMA_BASE_URL}/v1/"
+      # thinking models: a moderate effort (servers without reasoning ignore it)
+      addParams:
+        reasoning_effort: "medium"
       models:
         default:
-          - "${LLAMA_MODEL:-gemma-4-12b-it}"
+          - "local-model"   # shown only while the server's list can't be fetched
         fetch: true
       titleConvo: true
       titleModel: "current_model"
@@ -16,9 +19,21 @@ endpoints:
       summaryModel: "current_model"
       modelDisplayLabel: "llama.cpp"
 
+# web search: SearXNG finds pages, Firecrawl reads them, a Jina-compatible reranker picks the best parts
+# (the names come from extra_hosts in docker-compose.yml; allowedAddresses lets them reach private addresses)
 webSearch:
   searchProvider: "searxng"
   searxngInstanceUrl: "${SEARXNG_INSTANCE_URL}"
+  scraperProvider: "firecrawl"
+  firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  rerankerType: "jina"
+  jinaApiUrl: "${JINA_API_URL}"
+  jinaApiKey: "${JINA_API_KEY}"
+  allowedAddresses:
+    - "librechat-searxng:5080"
+    - "librechat-firecrawl:3002"
+    - "librechat-reranker:5052"
 
 mcpServers:
   searxng:

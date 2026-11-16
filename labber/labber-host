@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+# labber-host — the snapshot helper for deploying a critical service by hand, on a Proxmox host
+# (homelab-private: plans/labber-design.md → Prepared updates). Run by you, never by a timer.
+#
+#   labber-host snap <guest>      stop the CT's services, close it, ZFS-snapshot its disks and owned datasets
+#   labber-host rollback <guest>  back to those snapshots; it comes back still closed
+#   labber-host open <guest>      start what was running, reopen, let labber sync continue
+#   labber-host status [<guest>]  open or closed, its snapshots, what a rollback would discard
+#   labber-host firewall diff [<id>…]        guests' firewall files: this host against homelab-config
+#   labber-host firewall sync <id>…|--all    put them in place: shows each diff, asks, writes
+#   labber-host update            itself, from homelab's main signed by Forgejo: shows the change, asks
+#
+# Only the guests in /etc/labber-host.conf (yours: "<guest> <ct-id> <owned dataset>…"), only
+# its own @labber-* snapshots, never zfs destroy of anything else, never rollback -r.
+# Firewall: only guests' /etc/pve/firewall/<id>.fw (never cluster.fw or the host's), only from
+# homelab-config's main signed by Forgejo (/etc/labber-host-firewall.conf), never a closed guest.
+# snap first checks the CT can be closed (its .fw enabled with [RULES], firewall=1 on every NIC,
+# the host's firewall running), waits for a running labber sync and holds it, closes and reads
+# the closing rule back, then stops; sanoid.timer is paused while any guest is closed (its hourly
+# snapshot would block a rollback). Fetches only move forward: each tip must descend from the
+# last one applied here, every first-parent commit since then signed by Forgejo.
+# Every command shows what it will do and asks (--yes skips the question).
+set -euo pipefail
+VERSION="1.2.1"
+CONF="${LABBER_HOST_CONF:-/etc/labber-host.conf}"
+STATE="${LABBER_HOST_STATE:-/var/lib/labber-host}"
+PVEDIR="${LABBER_HOST_PVE:-/etc/pve}"
+FWDIR="${LABBER_HOST_FWDIR:-$PVEDIR/firewall}"
+FW_WAIT="${LABBER_HOST_FW_WAIT:-12}"     # Proxmox applies firewall changes within ~10 s
+SYNC_LOCK=/run/lock/labber-sync          # inside the CT: labber sync's (and labber's) guest lock
+FWCONF="${LABBER_HOST_FWCONF:-/etc/labber-host-firewall.conf}"
+MARK="# labber-host: closed for a deployment"
+KEEP_DAYS=7
+YES=0
+
+die()  { echo "error: $*" >&2; exit 1; }
+info() { echo ":: $*"; }
+ask()  { (( YES )) && return 0; local a; read -rp "$1 [y/N] " a; [[ "$a" =~ ^[Yy]$ ]]; }
+
+# guest → CT id and owned datasets, from your config only
+lookup() {
+    local line; line=$(awk -v g="$1" '$1 == g && $1 !~ /^#/' "$CONF" 2>/dev/null) || true
+    [[ -n "$line" ]] || die "$1 is not in $CONF — labber-host only touches the guests listed there"
+    local owned; read -r _ CT owned <<< "$line"
+    read -ra OWNED <<< "$owned"
+    [[ "$CT" =~ ^[0-9]+$ ]] || die "$CONF: $1 has no CT id"
+}
+
+# the CT's own disks (rootfs and volume mount points) as ZFS datasets; bind mounts excluded
+ct_disks() {
+    local key val vol path
+    while IFS=': ' read -r key val; do
+        [[ "$key" == rootfs || "$key" =~ ^mp[0-9]+$ ]] || continue
+        vol="${val%%,*}"
+        [[ "$vol" == /* ]] && continue                      # a bind mount: a dataset you list, not a CT disk
+        path=$(pvesm path "$vol") || die "cannot resolve $vol"
+        zfs list -H -o name "$path" 2>/dev/null || die "$vol is not on ZFS (labber-host snapshots ZFS only)"
+    done < <(pct config "$CT")
+}
+
+# every owned dataset must be bind-mounted into this CT (a typo can't reach another guest's data)
+check_owned() {
+    local ds mp mounted
+    mounted=$(pct config "$CT" | awk -F'[ ,]' '/^mp[0-9]+: \// {print $2}')
+    for ds in "${OWNED[@]}"; do
+        mp=$(zfs get -H -o value mountpoint "$ds" 2>/dev/null) || die "no dataset $ds"
+        grep -qxF "$mp" <<< "$mounted" || die "$ds ($mp) is not mounted into CT $CT — fix $CONF"
+    done
+}
+
+in_ct() { pct exec "$CT" -- bash -lc "$1"; }
+# "; true": a last folder without a service, or with nothing running, isn't a failure (under set -e
+# it ended snap right after closing the guest: nothing stopped or snapshotted, no message)
+# shellcheck disable=SC2016  # these run inside the CT: its own $d
+services() { in_ct 'for d in /opt/homelab/services/*/; do [ -f "$d/docker-compose.yml" ] && basename "$d"; done; true' ; }
+# shellcheck disable=SC2016  # runs inside the CT
+running()  { in_ct 'for d in /opt/homelab/services/*/; do [ -f "$d/docker-compose.yml" ] && [ -n "$(cd "$d" && docker compose ps -q 2>/dev/null)" ] && basename "$d"; done; true' ; }
+
+# can this CT be closed? Its firewall file is enabled and has rules, every NIC routes through the
+# firewall, and the host's firewall runs. Checked before anything is stopped
+fw_check() {
+    local f="$FWDIR/$CT.fw" bad=() nic nics
+    [[ -f "$f" ]] || die "$f missing: the CT needs its firewall file (and firewall=1 on its NIC)"
+    grep -qE '^enable:[[:space:]]*1[[:space:]]*$' "$f" || bad+=("$f: no 'enable: 1' (the CT's firewall is off)")
+    grep -qE '^\[RULES\][[:space:]]*$' "$f" || bad+=("$f: no [RULES] section")
+    nics=$(pct config "$CT" | grep -E '^net[0-9]+:' || true)
+    [[ -n "$nics" ]] || bad+=("CT $CT has no network interface")
+    while IFS= read -r nic; do
+        [[ -z "$nic" || "$nic" =~ (^|,)firewall=1(,|$) ]] || bad+=("${nic%%:*}: no firewall=1 (its traffic bypasses the firewall)")
+    done <<< "$nics"
+    pve-firewall status 2>/dev/null | grep -q 'enabled/running' || bad+=("the host's firewall isn't enabled and running (pve-firewall status)")
+    (( ${#bad[@]} == 0 )) && return 0
+    printf '  %s\n' "${bad[@]}" >&2
+    die "CT $CT can't be closed: nothing done"
+}
+
+# the marked DROP as the first rule; proven by reading it back, else the file goes back as it was.
+# Existing connections stay (conntrack; tested on pve-test): snap closes before it stops the
+# services, so theirs end with the containers and anything new is dropped
+fw_close() {
+    local f="$FWDIR/$CT.fw" first
+    fw_check
+    grep -qF "$MARK" "$f" && return 0
+    cp -p "$f" "$f.labber-host-bak"
+    awk -v m="IN DROP -log nolog $MARK" '{print} /^\[RULES\]/ {print m}' "$f" > "$f.new" && mv "$f.new" "$f"
+    first=$(awk '/^\[RULES\]/ {r = 1; next} /^\[/ {r = 0} r && NF && $0 !~ /^#/ {print; exit}' "$f")
+    if [[ "$first" != "IN DROP -log nolog $MARK" ]]; then
+        mv "$f.labber-host-bak" "$f"
+        die "$f: the closing rule isn't the first rule after writing (got: ${first:-nothing}); the file is back as it was"
+    fi
+    rm -f "$f.labber-host-bak"
+    sleep "$FW_WAIT"
+}
+fw_open() { local f="$FWDIR/$CT.fw"; [[ -f "$f" ]] && sed -i "\|$MARK|d" "$f"; return 0; }
+is_closed() { grep -qF "$MARK" "$FWDIR/$CT.fw" 2>/dev/null; }
+
+# sanoid paused while a guest is closed: an hourly autosnap newer than @labber-… would make
+# rollback refuse (it never uses -r). Paused per guest; started again when none holds it
+has_sanoid() { systemctl cat sanoid.timer >/dev/null 2>&1; }
+sanoid_pause() {
+    has_sanoid || return 0
+    systemctl stop sanoid.timer
+    touch "$STATE/$1.sanoid-paused"
+    # a run already going finishes first: it could snapshot after ours
+    for _ in $(seq 60); do systemctl is-active -q sanoid.service || return 0; sleep 2; done
+    die "sanoid.service is still running after 2 minutes: try again later (sanoid.timer stays stopped; labber-host open $1 starts it)"
+}
+sanoid_resume() {
+    rm -f "$STATE/$1.sanoid-paused"
+    has_sanoid || return 0
+    local others="" f
+    for f in "$STATE"/*.sanoid-paused; do if [[ -e "$f" ]]; then others+="${others:+ }$(basename "$f" .sanoid-paused)"; fi; done
+    if [[ -n "$others" ]]; then info "sanoid stays paused: $others still closed"; return 0; fi
+    systemctl start sanoid.timer && info "sanoid.timer started again"
+}
+
+# labber sync leaves the guest alone (hold), and a sync already running finishes first
+sync_quiet() {
+    in_ct 'labber sync hold >/dev/null 2>&1 || true'
+    in_ct "[ ! -e $SYNC_LOCK ] || ! command -v flock >/dev/null || flock -w 900 $SYNC_LOCK true" \
+        || die "labber sync is still running in CT $CT after 15 minutes: nothing stopped (it's on hold: labber-host open $1 releases it)"
+}
+
+do_snap() {
+    lookup "$1"; check_owned; fw_check
+    local name ds pool snaps disks all
+    mapfile -t disks < <(ct_disks); all=("${disks[@]}" "${OWNED[@]}")
+    name="labber-$(date -u +%Y%m%dT%H%M%SZ)"
+    echo "snap $1 (CT $CT):"
+    echo "  wait for a running labber sync, then hold it"
+    echo "  close it: the firewall drops everything from outside (checked: the rule is first)"
+    echo "  stop every service in it: $(services | paste -sd' '); ingestion off (maintenance on)"
+    has_sanoid && echo "  pause sanoid (its hourly snapshot would block a rollback) until open"
+    echo "  snapshot @$name: ${all[*]}"
+    ask "go ahead?" || die "nothing done"
+    mkdir -p "$STATE"
+    sync_quiet "$1"
+    fw_close                                              # proven closed before anything stops
+    running > "$STATE/$1.running"
+    for s in $(services); do in_ct "labber $s stop </dev/null >/dev/null 2>&1"; done
+    for s in $(services); do in_ct "labber $s maintenance on </dev/null >/dev/null 2>&1"; done
+    sanoid_pause "$1"
+    # one zfs snapshot per pool (atomic within a pool; the services are stopped across pools)
+    while read -r pool; do
+        snaps=(); for ds in "${all[@]}"; do [[ "${ds%%/*}" == "$pool" ]] && snaps+=("$ds@$name"); done
+        zfs snapshot "${snaps[@]}"
+    done < <(for ds in "${all[@]}"; do echo "${ds%%/*}"; done | sort -u)
+    printf 'snap=%s\ndatasets=%s\n' "$name" "${all[*]}" > "$STATE/$1.snap"
+    # snapshots of earlier deployments: older than a week go
+    for ds in "${all[@]}"; do
+        zfs list -H -t snapshot -o name,creation -p -s creation "$ds" | while read -r s c; do
+            [[ "$s" == "$ds@labber-"* && "$s" != *"@$name" ]] || continue
+            (( $(date +%s) - c > KEEP_DAYS * 86400 )) && zfs destroy "$s"
+        done
+    done
+    echo "✓ $1 stopped, closed and snapshotted (@$name). Next:"
+    for s in $(services); do echo "    pct exec $CT -- labber $s update --ready      # what's ready (labber sync status)"; done
+    echo "    pct exec $CT -- labber <svc> check                 # read-only checks, still closed"
+    echo "    labber-host open $1            ✗ before that: labber-host rollback $1"
+}
+
+do_rollback() {
+    lookup "$1"
+    [[ -f "$STATE/$1.snap" ]] || die "no labber-host snapshot of $1"
+    local snap ds last w datasets
+    snap=$(awk -F= '/^snap=/ {print $2}' "$STATE/$1.snap")
+    read -ra datasets <<< "$(awk -F= '/^datasets=/ {print $2}' "$STATE/$1.snap")"
+    echo "rollback $1 (CT $CT) to @$snap — written since then, and lost:"
+    for ds in "${datasets[@]}"; do
+        zfs list -H -o name "$ds@$snap" >/dev/null 2>&1 || die "$ds@$snap is gone"
+        last=$(zfs list -H -t snapshot -o name -s creation "$ds" | tail -1)
+        if [[ "$last" != "$ds@$snap" ]]; then
+            echo "  $ds has a newer snapshot ($last): a rollback would need -r, which destroys it."
+            echo "  labber-host stops here. If you're sure: zfs rollback -r $ds@$snap (by hand), then labber-host open."
+            exit 1
+        fi
+        w=$(zfs get -H -o value written@"$snap" "$ds"); echo "  $ds: $w"
+    done
+    is_closed || echo "  ! $1 is OPEN: anything written by its users since reopening is lost too"
+    ask "roll back?" || die "nothing done"
+    fw_close
+    pct stop "$CT"
+    for ds in "${datasets[@]}"; do zfs rollback "$ds@$snap"; done
+    pct start "$CT"; sleep "${LABBER_HOST_START_WAIT:-5}"
+    sanoid_resume "$1"
+    echo "✓ $1 is back at @$snap, still closed (its services as they were then: stopped)."
+    echo "  start and check: labber-host open $1   (or look first: pct exec $CT -- labber <svc> start)"
+}
+
+do_open() {
+    lookup "$1"
+    local s
+    for s in $(services); do in_ct "labber $s maintenance off </dev/null >/dev/null 2>&1"; done
+    if [[ -f "$STATE/$1.running" ]]; then
+        while read -r s; do [[ -n "$s" ]] && in_ct "labber $s start </dev/null >/dev/null 2>&1"; done < "$STATE/$1.running"
+    fi
+    fw_open
+    in_ct 'labber sync release >/dev/null 2>&1 || true'
+    sanoid_resume "$1"
+    echo "✓ $1 is open; labber sync continues. Running: $(running | paste -sd' ')"
+}
+
+do_status() {
+    local g closed=0
+    for g in $(awk '$1 !~ /^#/ && NF {print $1}' "$CONF"); do lookup "$g"; is_closed && closed=1; done
+    if has_sanoid && ! systemctl is-active -q sanoid.timer && (( ! closed )); then
+        echo "! sanoid.timer is stopped and no guest is closed: no snapshots are taken (systemctl start sanoid.timer)"
+    fi
+    for g in ${1:-$(awk '$1 !~ /^#/ && NF {print $1}' "$CONF")}; do
+        lookup "$g"
+        echo "$g (CT $CT): $(is_closed && echo CLOSED || echo open)"
+        if [[ -f "$STATE/$g.snap" ]]; then
+            local snap ds datasets; snap=$(awk -F= '/^snap=/ {print $2}' "$STATE/$g.snap")
+            read -ra datasets <<< "$(awk -F= '/^datasets=/ {print $2}' "$STATE/$g.snap")"
+            for ds in "${datasets[@]}"; do
+                echo "  $ds@$snap: written since $(zfs get -H -o value written@"$snap" "$ds" 2>/dev/null || echo '(gone)')"
+            done
+        fi
+    done
+}
+
+# ── firewall: the guests' files from homelab-config ────────────────────────────
+
+# key=value from the firewall config (read, never sourced)
+fwconf() { sed -n "s/^$1=//p" "$FWCONF" 2>/dev/null | tail -1; }
+
+# <url> <branch> → $FWTMP/r, its tip checked against Forgejo's signing key (an approved merge)
+fetch_signed() {
+    [[ -f "$FWCONF" ]] || die "no $FWCONF: repo=<homelab-config URL>, forgejo_key=<Forgejo's signing key>, host=<folder>"
+    command -v git >/dev/null || die "needs git: apt install git"
+    local url=$1 branch=$2 key; key=$(fwconf forgejo_key)
+    [[ -n "$url" && "$key" == ssh-* ]] || die "$FWCONF needs repo= and forgejo_key=ssh-…"
+    FWTMP=$(mktemp -d); trap 'rm -rf "$FWTMP"' EXIT
+    # the whole history (no file contents beyond the tip): enough to prove it only moved forward
+    GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone -q --filter=blob:none --branch "$branch" "$url" "$FWTMP/r" 2>/dev/null \
+        || die "can't fetch $branch of $url"
+    printf 'forgejo namespaces="git" %s\n' "$(cut -d' ' -f1,2 <<< "$key")" > "$FWTMP/signers"
+    signed() { git -C "$FWTMP/r" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$FWTMP/signers" verify-commit "$1" >/dev/null 2>&1; }
+    local tip last c; tip=$(git -C "$FWTMP/r" rev-parse HEAD)
+    signed "$tip" || die "$branch of $url (${tip:0:12}) isn't signed by Forgejo: nothing applied"
+    # forward only: the tip descends from the last one applied here, every first-parent step signed
+    FETCHED="$STATE/fetched-$(printf '%s %s' "$url" "$branch" | sha256sum | cut -c1-16)"
+    last=$(cat "$FETCHED" 2>/dev/null || true)
+    if [[ -n "$last" && "$last" != "$tip" ]]; then
+        git -C "$FWTMP/r" merge-base --is-ancestor "$last" "$tip" 2>/dev/null \
+            || die "$branch of $url (${tip:0:12}) doesn't descend from ${last:0:12}, the last one applied here (rewound or replaced): nothing applied"
+        for c in $(git -C "$FWTMP/r" rev-list --first-parent "$last..$tip"); do
+            signed "$c" || die "$branch of $url: ${c:0:12} (after ${last:0:12}) isn't signed by Forgejo: nothing applied"
+        done
+    fi
+    FETCHED_TIP=$tip
+}
+# remember what was applied: the next fetch must move forward from it
+fetched_ok() { mkdir -p "$STATE"; echo "$FETCHED_TIP" > "$FETCHED"; }
+
+# homelab-config's main into $FWSRC (firewall/<host>/)
+fw_fetch() {
+    local branch; branch=$(fwconf branch)
+    FWHOST=$(fwconf host); FWHOST=${FWHOST:-$(hostname -s)}
+    fetch_signed "$(fwconf repo)" "${branch:-main}"
+    FWSRC="$FWTMP/r/firewall/$FWHOST"
+    [[ -d "$FWSRC" ]] || die "no firewall/$FWHOST/ in $(fwconf repo) (host= in $FWCONF?)"
+    info "homelab-config $(git -C "$FWTMP/r" rev-parse --short HEAD) (signed by Forgejo), firewall/$FWHOST/"
+}
+
+# is <id> a guest on this host? (its config is in this node's folder of /etc/pve)
+fw_guest() { [[ -e "$PVEDIR/lxc/$1.conf" || -e "$PVEDIR/qemu-server/$1.conf" ]]; }
+
+# the ids to look at: the ones given, else every file in the repo or on the host
+fw_ids() {
+    if (( $# )); then printf '%s\n' "$@"; return; fi
+    { ls "$FWSRC"; ls "$FWDIR" 2>/dev/null; } | sed -n 's/^\([0-9][0-9]*\)\.fw$/\1/p' | sort -un
+}
+
+# one line per guest (and the diff with -v): in step, differs, new, only here, closed, not here
+fw_state() {
+    local id=$1 src="$FWSRC/$1.fw" dst="$FWDIR/$1.fw"
+    [[ "$id" =~ ^[0-9]+$ ]] || die "not a guest id: $id"
+    if [[ ! -f "$src" ]]; then
+        [[ -f "$dst" ]] && echo "only here: $id.fw is on this host, not in the repo (left alone)" || echo "unknown: $id (no file here or in the repo)"
+        return 1
+    fi
+    fw_guest "$id" || { echo "not here: no guest $id on this host (skipped)"; return 1; }
+    if grep -qF "$MARK" "$dst" 2>/dev/null; then echo "closed: $id is closed for a deployment (labber-host open first)"; return 1; fi
+    if [[ ! -f "$dst" ]]; then echo "new: $id.fw (no file on this host yet)"; return 0; fi
+    if cmp -s "$src" "$dst"; then echo "in step: $id"; return 1; fi
+    echo "differs: $id"; return 0
+}
+
+fw_show() { diff -u --label "host $1.fw" --label "repo $1.fw" "$FWDIR/$1.fw" "$FWSRC/$1.fw" 2>/dev/null | sed 's/^/    /' || true; }
+
+do_fw_diff() {
+    fw_fetch
+    local id
+    for id in $(fw_ids "$@"); do
+        if fw_state "$id"; then fw_show "$id"; fi
+    done
+}
+
+do_fw_sync() {
+    [[ $# -gt 0 ]] || die "firewall sync <id>… or --all"
+    local every=0 id ids=() changed=0; [[ "$1" == --all ]] && { every=1; shift; }
+    fw_fetch
+    if (( every )); then mapfile -t ids < <(fw_ids); else ids=("$@"); fi
+    for id in "${ids[@]}"; do
+        if ! fw_state "$id"; then continue; fi
+        fw_show "$id"
+        ask "write /etc/pve/firewall/$id.fw?" || { echo "  $id left as it is"; continue; }
+        cp "$FWSRC/$id.fw" "$FWDIR/$id.fw.new" && mv "$FWDIR/$id.fw.new" "$FWDIR/$id.fw"
+        echo "  ✓ $id written"; changed=1
+    done
+    fetched_ok                                            # this commit was looked at and applied
+    (( changed )) || return 0
+    # Proxmox applies the files within ~10 s; its parser names any line it can't read
+    local warn; warn=$(pve-firewall compile 2>&1 | grep -E '/firewall/[0-9]+\.fw' | head -5 || true)
+    [[ -z "$warn" ]] || { echo "! Proxmox's firewall reports:"; printf '    %s\n' "${warn//$'\n'/$'\n'    }"; }
+}
+
+# ── update: labber-host itself ───────────────────────────────────────────────
+
+# homelab's main (homelab_repo=, else next to repo=), signed by Forgejo; only forward; shows the change
+do_update() {
+    local url self new nv
+    url=$(fwconf homelab_repo); [[ -n "$url" ]] || url="$(fwconf repo | sed 's#/homelab-config\.git$#/homelab.git#')"
+    fetch_signed "$url" main
+    new="$FWTMP/r/labber/labber-host"
+    [[ -f "$new" ]] || die "no labber/labber-host in $url"
+    bash -n "$new" || die "the new labber-host doesn't parse: nothing changed"
+    nv=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$new")
+    self=$(readlink -f "$0")
+    info "homelab $(git -C "$FWTMP/r" rev-parse --short HEAD) (signed by Forgejo): labber-host $nv; this one: $VERSION ($self)"
+    if cmp -s "$new" "$self"; then fetched_ok; echo "up to date"; return 0; fi
+    [[ "$nv" == "$VERSION" ]] && die "same version $nv, different file: not replaced (a local edit? reinstall by hand)"
+    [[ "$(printf '%s\n%s\n' "$VERSION" "$nv" | sort -V | tail -1)" == "$nv" ]] \
+        || die "$nv is older than $VERSION: only forward (reinstall by hand to go back)"
+    echo "changes to labber/labber-host (newest first):"
+    git -C "$FWTMP/r" log --format='  %h %as %s' -- labber/labber-host | head -10 | cut -c1-110
+    echo "  ($(diff "$self" "$new" | grep -c '^[<>]') lines differ)"
+    ask "replace $self with $nv?" || die "nothing changed"
+    install -m 755 "$new" "$self.new" && mv "$self.new" "$self"
+    fetched_ok
+    echo "✓ labber-host $("$self" version | awk '{print $2}')"
+}
+
+[[ "${1:-}" == --yes ]] && { YES=1; shift; }
+case "${1:-}" in
+    version) echo "labber-host $VERSION"; exit 0 ;;
+    ""|-h|--help|help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+(( EUID == 0 )) || die "labber-host runs as root on the Proxmox host"
+if [[ "${1:-}" == update ]]; then do_update; exit 0; fi
+if [[ "${1:-}" == firewall ]]; then
+    for a in "${@:3}"; do [[ "$a" =~ ^[0-9]+$ || "$a" == --all ]] || die "not a guest id: $a"; done
+    case "${2:-}" in
+        diff) do_fw_diff "${@:3}" ;;
+        sync) do_fw_sync "${@:3}" ;;
+        *) die "firewall diff [<id>…] | firewall sync <id>…|--all" ;;
+    esac
+    exit 0
+fi
+[[ -f "$CONF" ]] || die "no $CONF: one line per guest, \"<guest> <ct-id> <owned dataset>…\""
+case "${1:-}" in
+    snap)     do_snap "${2:?guest}" ;;
+    rollback) do_rollback "${2:?guest}" ;;
+    open)     do_open "${2:?guest}" ;;
+    status)   do_status "${2:-}" ;;
+    *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

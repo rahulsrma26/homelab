@@ -49,7 +49,16 @@ checks hardware-dependent setup and optional live network moves separately.
 | **lxc** — like a Proxmox LXC (also a container on the host's kernel) | not a VM, no Docker, every step ticked | `setup-lxc.bats`: everything for root, SSH root by key, lean LXC Alloy config, second run finds nothing to do |
 | **vm** — treated as a VM | VM, Docker; an `admin` user exists beforehand, as the Debian installer creates one | `setup-vm.bats`: admin in sudo + docker groups and owning the services folder, root SSH off, nested Docker with log rotation, Alloy with container metrics (as root), labber/zsh/p10k/fzf for the admin, guest agent, and a second run **as the admin through `sudo labber setup`** finds nothing to do |
 
-A container can't cover time sync, swap/zram, the guest agent talking to Proxmox, or static IPs; the VM tests below do.
+| **auto** — the LXC as one unattended command | every answer a flag, `--yes`, no terminal | `--dry-run` shows the plan and changes nothing; `setup-lxc.bats` |
+| **upgrade** (with `LABBER_TEST_LIFECYCLE=1`) | set up by `main`'s labber, then this one installed over it | nothing is todo after the upgrade that was done before it, except steps this version adds; setup with this labber then runs. Skipped when the checkout has no `main` |
+
+The VM path gives its answers as flags (`--admin`, `--ssh-key`, `--prometheus`, …) and types only what tests the terminal path: answers typed in order break whenever a question comes or goes.
+
+After the LXC lifecycle, **`setup-after.bats`** checks what a later setup may change on a set-up machine: every step's status reads `done…` or `todo…`; `--dry-run` changes no file; **only the steps asked for run** (`--yes --without <every other step>`, as `push-tokens.sh` runs it: setup's summary names Alloy alone, apt history and a running container's start time unchanged, no file changed outside Alloy's); the push token step finds Alloy's URLs in its config when labber forgot them, is done and never asks for a guest with its own monitoring; `--yes` with stdin closed never waits.
+
+CI runs the unit tests and `LABBER_TEST_LIFECYCLE=1 run-setup.sh` (all of the above) on every change to `labber/`, `tests/labber/` or `tools/`, and again on `dev` after each merge.
+
+A container can't cover time sync, swap/zram, the guest agent talking to Proxmox, or static IPs; the VM tests below do. labber-host and `push-tokens.sh` against a real Proxmox: `tests/pve/` (a throwaway nested Proxmox).
 
 ## Integration tests
 

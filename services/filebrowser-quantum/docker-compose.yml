@@ -2,10 +2,11 @@
 # chosen at install (COMPOSE_FILE in .env):
 #   w680  TrueNAS NFS mounts + the local ZFS pool          → compose.w680.yml
 #   od01  vault (read-only), media, common                 → compose.od01.yml
+#   ms01  the scratch share extra (never backed up)          → compose.ms01.yml
 # This file holds what both share.
 services:
   filebrowser:
-    image: gtstef/filebrowser:${FILEBROWSER_VERSION:-2.0.2-stable}
+    image: gtstef/filebrowser:${FILEBROWSER_VERSION:-2.0.2-stable@sha256:de2b4c4d18485ea202ab2cdada5bd25d8f0b8ed071712c8216a67194c31285ae}
     container_name: filebrowser-quantum
     restart: unless-stopped
     volumes:

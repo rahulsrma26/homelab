@@ -123,10 +123,13 @@ git -c "http.extraHeader=Authorization: Basic $1" push -q http://forgejo:3000/au
         # Use Git's usual authentication configuration, never credentials in the
         # source URL. Both labber's CLI and its self-update/assets fetch must use
         # this private Forgejo source rather than the default GitHub archive.
-        print(client("env", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
-                     f"GIT_CONFIG_VALUE_0=Authorization: Basic {auth}", "bash", "-euc", '''
+        # labber refuses http:// sources: it's given https://, which Git maps to this test Forgejo
+        print(client("env", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=http.extraHeader",
+                     f"GIT_CONFIG_VALUE_0=Authorization: Basic {auth}",
+                     "GIT_CONFIG_KEY_1=url.http://forgejo:3000/.insteadOf", "GIT_CONFIG_VALUE_1=https://forgejo.test/",
+                     "bash", "-euc", '''
 script=/work/fixture/labber/labber
-url=http://forgejo:3000/audit/checks.git
+url=https://forgejo.test/audit/checks.git
 bash "$script" --source "$url" --ref main tool source-probe | grep -q forgejo-source-ok
 source "$script"
 source_resolve "$url" main

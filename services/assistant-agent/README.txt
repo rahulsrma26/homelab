@@ -6,6 +6,8 @@ Services:
   wyoming-openai  :10300  Wyoming for Home Assistant: STT by the LLM, and TTS
   parakeet                Parakeet TDT speech-to-text (stt_engine=parakeet*, internal)
   wyoming-parakeet :10301 Wyoming STT by Parakeet (stt_engine=parakeet*)
+  embeddings      :5051   OpenAI-compatible /v1/embeddings, EmbeddingGemma 2 (embeddings=embeddinggemma-2)
+  reranker        :5052   /v1/rerank (Jina-style), Qwen3-Reranker 0.6B (reranker=qwen3-reranker)
 
 Text-to-speech engine (COMPOSE_FILE, asked at install): paradee runs Paradee 1.1 on
 two CPU cores (~74x real time, ~40 ms per short reply, one English voice, no VRAM);
@@ -43,3 +45,23 @@ Home Assistant: Wyoming integration → host:10300 (STT by the LLM, TTS), and wi
 parakeet engine another one → host:10301 (STT); an OpenAI-compatible
 conversation integration → http://host:5050/v1, model = gemma-4-12b-it or
 gemma-4-e4b-it (the server answers with its one model whatever the name).
+
+Embeddings (COMPOSE_FILE, asked at install; optional): embeddinggemma-2 runs EmbeddingGemma 2
+(Q8_0, 310 MB, with its Q8_0 projector, 555 MB: text, images, video and audio in one 768d space)
+on its own llama.cpp server on port 5051, ~1 GB VRAM. For semantic search: Frigate 0.18
+(genai provider llamacpp, role embeddings, semantic_search.model set to it), Paperless and n8n
+(OpenAI-compatible). Text works best with the model's prefixes (task: search result | query: ...
+for questions, title: ... | text: ... for documents); images need none. none adds nothing.
+Images over llama.cpp's own /embeddings: the prompt is the server's media marker (GET /props:
+media_marker) with the image in multimodal_data. Tested: a query matches its document at 0.81
+(unrelated ones ~0.5), an image matches its description at ~0.78 (others ~0.59).
+
+Reranker (COMPOSE_FILE, asked at install; optional): qwen3-reranker runs Qwen3-Reranker 0.6B
+(Q8_0, ~640 MB) on its own llama.cpp server on port 5052, ~1.4 GB VRAM (4096 tokens per
+query + document, KV cache q8_0: the context is most of the memory; 16384 at f16 takes ~3 GB). POST /v1/rerank with
+{"query": ..., "documents": [...], "top_n": N} returns each document's index and relevance_score
+(0..1), best first. That is Jina's format: LibreChat's web search uses it as rerankerType jina
+with jinaApiUrl http://host:5052/v1/rerank and any non-empty jinaApiKey (the server checks none;
+without a key LibreChat skips reranking); n8n and others call it the same way. Compared with
+bge-reranker-v2-m3 (CPU, same build): both rank the relevant documents first; Qwen3's scores
+separate them more clearly (0.99 and 0.91 vs 0.0001 for an unrelated one). none adds nothing.

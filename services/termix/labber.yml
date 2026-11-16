@@ -1,0 +1,6 @@
+# What labber needs to know about this service (labber-design: labber.yml).
+#   state: what it writes on its own guest disk: copied, with the service stopped, before an
+#          automatic update and put back if the update rolls back. Paths relative to this
+#          folder, ${VAR} from .env, or volume:<name> for a named Docker volume.
+#   owns:  data on mounted storage that only this service writes (a recovery point covers it).
+state: ["${DATA_DIR:-./data}"]

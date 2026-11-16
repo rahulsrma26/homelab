@@ -67,7 +67,7 @@ mock_docker() {
         : > "$TRACE"
         run compose_refresh "$T/svc" "$bak"
         [ "$status" -eq 1 ]
-        ! grep -q 'compose down\|compose up' "$TRACE"
+        ! grep -q 'compose down\|compose up' "$TRACE" || false
         cmp old/docker-compose.yml svc/docker-compose.yml
         rm -rf "$bak"
     done
@@ -83,7 +83,7 @@ mock_docker() {
         FAIL_STAGE="$stage"; : > "$TRACE"
         run compose_refresh "$T/svc" "$bak"
         [ "$status" -eq 1 ]
-        ! grep -q 'compose pull\|compose down\|compose up' "$TRACE"
+        ! grep -q 'compose pull\|compose down\|compose up' "$TRACE" || false
         cmp original/docker-compose.yml svc/docker-compose.yml
         rm -rf "$bak"
     done
@@ -95,8 +95,8 @@ mock_docker() {
         FAIL_STAGE="$stage"; : > "$TRACE"
         run compose_refresh "$T/svc"
         [ "$status" -eq 1 ]
-        ! grep -q 'image prune' "$TRACE"
-        if [[ "$stage" == down ]]; then ! grep -q 'compose up' "$TRACE"; fi
+        ! grep -q 'image prune' "$TRACE" || false
+        if [[ "$stage" == down ]]; then ! grep -q 'compose up' "$TRACE" || false; fi
     done
 }
 

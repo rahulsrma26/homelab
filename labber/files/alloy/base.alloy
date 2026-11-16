@@ -71,6 +71,7 @@ prometheus.relabel "node" {
 prometheus.remote_write "central" {
   endpoint {
     url = "@PROMETHEUS@/api/v1/write"
+    // push token: @AUTH@
   }
 }
 
@@ -143,5 +144,6 @@ loki.source.journal "local" {
 loki.write "central" {
   endpoint {
     url = "@LOKI@/loki/api/v1/push"
+    // push token: @AUTH@
   }
 }

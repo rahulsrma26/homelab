@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+# Verify the seeded notes (default), or, with --live, only that the instance answers (read-only).
+import sys, urllib.parse
+sys.path.insert(0, __file__.rsplit('/', 1)[0]); from _api import req, etapi, wait_ready, token
+wait_ready()
+if '--live' in sys.argv:
+    if token(): print('check --live: answers, version', etapi('/app-info')['appVersion'])
+    else: print('check --live: health ok (no ETAPI token in .env: TRILIUM_ETAPI_TOKEN for a deeper check)')
+    sys.exit(0)
+titles = sorted(n['title'] for n in etapi('/notes?' + urllib.parse.urlencode({'search': 'labseed'}))['results'])
+assert titles == ['labseed-alpha', 'labseed-beta'], f'notes: {titles}'
+hits = [n['title'] for n in etapi('/notes?search=quokka')['results']]
+assert hits == ['labseed-alpha'], f'search quokka: {hits}'
+print('check: 2 notes, search finds alpha')

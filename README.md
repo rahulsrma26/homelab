@@ -41,11 +41,11 @@ Full guide: [labber/README.md](labber/README.md).
 
 | Area | Services |
 |---|---|
-| Access & security | Authelia + LLDAP (SSO), Vaultwarden, Traefik (LAN reverse proxy, or the public entry via Cloudflare Tunnel), Nginx Proxy Manager (being retired) |
+| Access & security | Authelia + LLDAP (SSO), Vaultwarden, Traefik (LAN reverse proxy, or the public entry via Cloudflare Tunnel) |
 | Monitoring | Prometheus, Grafana, Loki, Alertmanager (→ Telegram), InfluxDB, pve-exporter; Uptime Kuma (separate) |
 | Media & files | Jellyfin, Immich, Immich public proxy, Navidrome, SoulSync (+ slskd), FileBrowser Quantum, MeTube |
 | Documents | Paperless-ngx, Paperless-GPT |
-| AI | llama.cpp (CUDA, plus a TurboQuant build), LibreChat, voice assistant agent |
+| AI | llama.cpp (CUDA), LibreChat, voice assistant agent |
 | Cameras | Frigate |
 | Development | Forgejo (local Git, private repositories and CI/CD through labber), Garage (S3 storage for its artifacts and packages) |
 | Utilities | Homepage, Joplin Server, it-tools, omni-tools, BentoPDF, LibreSpeed, SearXNG, Termix |

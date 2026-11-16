@@ -43,8 +43,8 @@ setup() {
     [ "$(gen_value base64_32 | wc -c)" -eq 44 ]
     gen_valid uuid "$(gen_value uuid)"
     [ "$(gen_value hex64)" != "$(gen_value hex64)" ]
-    gen_valid hex4 beEF;  ! gen_valid hex4 beefa;  ! gen_valid hex4 zzzz
-    gen_valid '[A-Za-z0-9],16' 'any chars ok, 16+'; ! gen_valid '[A-Za-z0-9],16' short
+    gen_valid hex4 beEF;  ! gen_valid hex4 beefa || false;  ! gen_valid hex4 zzzz || false
+    gen_valid '[A-Za-z0-9],16' 'any chars ok, 16+'; ! gen_valid '[A-Za-z0-9],16' short || false
     ! gen_valid uuid not-a-uuid; ! gen_valid hex4 '' || false
     [ "$(gen_desc hex64)" = "64 hex characters" ]
     [ "$(gen_desc '[A-Za-z0-9],16')" = "at least 16 characters" ]
@@ -189,6 +189,20 @@ setup() {
     [ "${#lines[@]}" -eq 2 ]
 }
 
+@test "env_placeholders skips lines the template doesn't ask (e.g. Paperless's {{ title }} format)" {
+    mkdir -p svc
+    printf 'A={{ a }}\nB=fixed\n' > svc/.env.example
+    printf 'A={{ a }}\nB={{ b }}\nFMT={{ owner_username }}/{{ title }}\n' > svc/.env
+    run env_placeholders svc/.env
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "A" ]
+    [ "${#lines[@]}" -eq 1 ]
+    # without a template next to it: every placeholder, as before
+    rm svc/.env.example
+    run env_placeholders svc/.env
+    [ "${#lines[@]}" -eq 3 ]
+}
+
 @test "fill_env_placeholders changes nothing without a terminal" {
     printf 'B={{ b | generate(hex64) }}\n' > .env
     cp .env before
@@ -284,11 +298,14 @@ EOF
     }
     ss() { printf '%s\n' 'LISTEN 0 4096 0.0.0.0:8888 0.0.0.0:*' 'LISTEN 0 4096 [::]:8889 [::]:*' \
                          'LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:*' 'LISTEN 0 4096 [::]:18888 [::]:*'; }
-    [ -z "$(port_user 8888 ss)" ] && [ -z "$(port_user 8889 ss)" ] && [ -z "$(port_user 8008 ss)" ]
+    [ -z "$(port_user 8888 ss)" ]
+    [ -z "$(port_user 8889 ss)" ]
+    [ -z "$(port_user 8008 ss)" ]
     [ "$(port_user 7001 ss)" = "container other-1" ]      # inside another container's range
     [ -z "$(port_user 9000 ss)" ]                          # exposed, not published
     [ "$(port_user 5432 ss)" = "a process on this host" ]
-    [ -z "$(port_user 888 ss)" ] && [ -z "$(port_user 1888 ss)" ]   # no partial matches (18888)
+    [ -z "$(port_user 888 ss)" ]  # no partial matches (18888)
+    [ -z "$(port_user 1888 ss)" ]
     [ "$(port_user 18888 ss)" = "a process on this host" ]
     [ "$(printf '%s' '0.0.0.0:3080-3081->3080-3081/tcp, :::5030->5030/tcp' | host_ports | paste -sd' ')" = "3080 3081 5030" ]
 }
@@ -381,8 +398,10 @@ EOF
     _install_shell_fn >/dev/null; _install_completion_fn >/dev/null
     cp "$HOME/.bashrc" "$T/b0"; cp "$HOME/.zshrc" "$T/z0"
     RC_CHANGED=()
-    run _install_shell_fn;      [ "$status" -eq 0 ] && [ -z "$output" ]
-    run _install_completion_fn; [ "$status" -eq 0 ] && [ -z "$output" ]
+    run _install_shell_fn; [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    run _install_completion_fn; [ "$status" -eq 0 ]
+    [ -z "$output" ]
     _install_shell_fn; _install_completion_fn
     [ "${#RC_CHANGED[@]}" -eq 0 ]
     cmp "$HOME/.bashrc" "$T/b0" && cmp "$HOME/.zshrc" "$T/z0"
@@ -396,7 +415,7 @@ EOF
     [[ "$output" == *"shell function updated in $HOME/.bashrc"* ]]
     _install_shell_fn >/dev/null
     [ "$(grep -cx '# labber shell function' "$HOME/.bashrc")" -eq 1 ]
-    ! grep -q old "$HOME/.bashrc"
+    ! grep -q old "$HOME/.bashrc" || false
     grep -qx 'export A=1' "$HOME/.bashrc"
     RC_CHANGED=(); run _install_shell_fn; [ -z "$output" ]          # now current
 }
@@ -405,7 +424,8 @@ EOF
     HOME="$T/home"; mkdir -p "$HOME"; unset SUDO_USER
     getent() { echo "u:x:1:1::$HOME:$LOGIN_SHELL"; }
     LOGIN_SHELL=/usr/bin/zsh RC_CHANGED=("$HOME/.bashrc" "$HOME/.zshrc")
-    run _rc_hint; [[ "$output" == *"source ~/.zshrc"* ]] && [[ "$output" != *bashrc* ]]
+    run _rc_hint; [[ "$output" == *"source ~/.zshrc"* ]]
+    [[ "$output" != *bashrc* ]]
     LOGIN_SHELL=/bin/bash
     run _rc_hint; [[ "$output" == *"source ~/.bashrc"* ]]
     LOGIN_SHELL=/usr/bin/zsh RC_CHANGED=("$HOME/.bashrc")           # zsh user: a bashrc change doesn't matter
@@ -796,7 +816,7 @@ make_bundle() {
 @test "every @NAME@ in labber's files is one labber fills in" {
     # base.alloy: the names st_alloy_run passes; health-check.sh: SERVICE_BASE
     run grep -oh '@[A-Z_]*@' "$LABBER_FILES/alloy/base.alloy"
-    [ "$(printf '%s\n' "${lines[@]}" | sort -u | tr '\n' ' ')" = "@COLLECTORS@ @FS_EXCLUDE@ @LOKI@ @METRICS_DIR@ @PROMETHEUS@ @VIRT@ " ]
+    [ "$(printf '%s\n' "${lines[@]}" | sort -u | tr '\n' ' ')" = "@AUTH@ @COLLECTORS@ @FS_EXCLUDE@ @LOKI@ @METRICS_DIR@ @PROMETHEUS@ @VIRT@ " ]
     run grep -oh '@[A-Z_]*@' "$LABBER_FILES/health-check.sh"
     [ "$output" = "@SERVICE_BASE@" ]
     ! grep -q '@[A-Z_]*@' "$LABBER_FILES/alloy/docker.alloy" "$LABBER_FILES/motd-health.sh" "$LABBER_FILES/gpu-metrics.sh" || false
@@ -814,7 +834,8 @@ make_bundle() {
     labber_place "$dir"
     [ -L "$LABBER_BIN" ]
     [ "$(readlink "$LABBER_BIN")" = "$LABBER_LIB/labber" ]
-    [ -x "$LABBER_LIB/labber" ] && [ -f "$LABBER_LIB/files/alloy/base.alloy" ]
+    [ -x "$LABBER_LIB/labber" ]
+    [ -f "$LABBER_LIB/files/alloy/base.alloy" ]
     [ "$(stat -c '%U %a' "$LABBER_LIB/labber")" = "root 755" ]
     [ "$(stat -c '%a' "$LABBER_LIB/files/health-check.sh")" = "644" ]
     run bash "$LABBER_BIN" help
@@ -822,7 +843,9 @@ make_bundle() {
     # placing again (an update) swaps the folder and leaves nothing behind
     labber_place "$dir"
     [ -f "$LABBER_LIB/labber" ]
-    [ ! -e "$LABBER_LIB.new" ] && [ ! -e "$LABBER_LIB.old" ] && [ ! -e "$LABBER_BIN.new" ]
+    [ ! -e "$LABBER_LIB.new" ]
+    [ ! -e "$LABBER_LIB.old" ]
+    [ ! -e "$LABBER_BIN.new" ]
     # a bad download is an error, not a half install
     LABBER_URL="file://$T/nothing.tar.gz"
     run labber_download "$(mktemp -d)"
@@ -944,18 +967,25 @@ history_repo() {
     setup_svc() { rm -rf svc; mkdir svc; printf 'v: 1\nmine: yes\n' > svc/app.yml; printf 'x\n' > svc/other.yml; }
     # r: the repo's version, yours saved as .labber-bak
     setup_svc; run copy_svc_files "$SRC" svc <<< r
-    [ "$status" -eq 0 ] && [ "$(cat svc/app.yml)" = 'v: 2' ] && grep -q 'mine: yes' svc/app.yml.labber-bak
+    [ "$status" -eq 0 ]
+    [ "$(cat svc/app.yml)" = 'v: 2' ]
+    grep -q 'mine: yes' svc/app.yml.labber-bak
     [[ "$output" == *"+v: 2"* ]]                                   # it showed the diff
     # k: yours stays, the repo's goes next to it
     setup_svc; run copy_svc_files "$SRC" svc <<< k
-    [ "$status" -eq 0 ] && grep -q 'mine: yes' svc/app.yml && [ "$(cat svc/app.yml.labber-new)" = 'v: 2' ]
+    [ "$status" -eq 0 ]
+    grep -q 'mine: yes' svc/app.yml
+    [ "$(cat svc/app.yml.labber-new)" = 'v: 2' ]
     # c (and plain Enter): cancelled before anything was touched
     for a in c ''; do
         setup_svc; printf 'x2\n' > "$SRC/other.yml"               # a change that must NOT be applied either
         run copy_svc_files "$SRC" svc <<< "$a"
-        [ "$status" -eq 2 ] && [[ "$output" == *"cancelled"* ]]
-        grep -q 'mine: yes' svc/app.yml && [ "$(cat svc/other.yml)" = x ]
-        [ ! -e svc/app.yml.labber-new ] && [ ! -e svc/.labber-base ]
+        [ "$status" -eq 2 ]
+        [[ "$output" == *"cancelled"* ]]
+        grep -q 'mine: yes' svc/app.yml
+        [ "$(cat svc/other.yml)" = x ]
+        [ ! -e svc/app.yml.labber-new ]
+        [ ! -e svc/.labber-base ]
     done
 }
 
@@ -964,7 +994,8 @@ history_repo() {
     SETUP_PROM="" SETUP_LOKI=""
     setup_args --prometheus http://mon.example:9090/ --loki http://mon.example:3100
     run alloy_urls; [ "$status" -eq 0 ]; [[ "$output" != *ASKED* ]]
-    alloy_urls; [ "$ALLOY_PROM" = http://mon.example:9090 ] && [ "$ALLOY_LOKI" = http://mon.example:3100 ]
+    alloy_urls; [ "$ALLOY_PROM" = http://mon.example:9090 ]
+    [ "$ALLOY_LOKI" = http://mon.example:3100 ]
     # --prometheus alone: Loki on the same host, port 3100, still no question
     SETUP_PROM="" SETUP_LOKI=""; setup_args --prometheus http://10.9.9.9:9090
     run alloy_urls; [[ "$output" != *ASKED* ]]; alloy_urls; [ "$ALLOY_LOKI" = http://10.9.9.9:3100 ]
@@ -981,13 +1012,20 @@ history_repo() {
     SETUP_YES=0; SETUP_ANS=(); SETUP_WITH="" SETUP_WITHOUT=""
     setup_args --docker no --admin ops --hostname box1 --timezone Etc/GMT-1 --locale de_DE.UTF-8 \
         --ssh-key 'ssh-ed25519 AAAAC3Nza test' --swap 2 --network skip --virt lxc --with fail2ban,nfs --without zsh
-    [ "${SETUP_ANS[docker]}" = no ] && [ "${SETUP_ANS[admin]}" = ops ] && [ "${SETUP_ANS[timezone]}" = Etc/GMT-1 ]
-    [ "${SETUP_ANS[network]}" = 3 ] && [ "${SETUP_ANS[swap]}" = 2 ] && [[ " $SETUP_WITH " == *" fail2ban nfs "* && " $SETUP_WITH " == *" network "* && " $SETUP_WITH " == *" swap "* ]] && [ "$(echo $SETUP_WITHOUT)" = zsh ]
+    [ "${SETUP_ANS[docker]}" = no ]
+    [ "${SETUP_ANS[admin]}" = ops ]
+    [ "${SETUP_ANS[timezone]}" = Etc/GMT-1 ]
+    [ "${SETUP_ANS[network]}" = 3 ]
+    [ "${SETUP_ANS[swap]}" = 2 ]
+    [[ " $SETUP_WITH " == *" fail2ban nfs "* && " $SETUP_WITH " == *" network "* && " $SETUP_WITH " == *" swap "* ]]
+    [ "$(echo $SETUP_WITHOUT)" = zsh ]
     # a flag answers without asking, even without --yes
-    [ "$(answer hostname "hostname" old </dev/null 2>/dev/null)" = box1 ] && [ "$ask_read" = 0 ]
+    [ "$(answer hostname "hostname" old </dev/null 2>/dev/null)" = box1 ]
+    [ "$ask_read" = 0 ]
     # --yes: no flag → the default, without reading
-    SETUP_YES=1; [ "$(answer nothing "q" dflt </dev/null 2>/dev/null)" = dflt ] && [ "$ask_read" = 0 ]
-    yesno "q?" y </dev/null 2>/dev/null; ! yesno "q?" n </dev/null 2>/dev/null; [ "$ask_read" = 0 ]
+    SETUP_YES=1; [ "$(answer nothing "q" dflt </dev/null 2>/dev/null)" = dflt ]
+    [ "$ask_read" = 0 ]
+    yesno "q?" y </dev/null 2>/dev/null; ! yesno "q?" n </dev/null 2>/dev/null || false; [ "$ask_read" = 0 ]
     # refused, with a message
     for bad in "--docker maybe" "--swap 4" "--network static" "--virt docker" "--admin root" "--timezone Mars/Base" \
                "--ssh-key notakey" "--with fail2ban,nosuchstep" "--admin" "--frobnicate x"; do
@@ -997,9 +1035,11 @@ history_repo() {
 
 @test "a global command after a word is refused, not run as if the word weren't there" {
     run labber_main tools ls
-    [ "$status" -ne 0 ] && [[ "$output" == *"'ls' takes no service name ('tools')"*"labber tool ls"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'ls' takes no service name ('tools')"*"labber tool ls"* ]]
     run labber_main somesvc check-updates
-    [ "$status" -ne 0 ] && [[ "$output" == *"'check-updates' takes no service name ('somesvc')"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"'check-updates' takes no service name ('somesvc')"* ]]
 }
 
 @test "ls -r: the repo's services (installed ones marked) and tools, with descriptions" {
@@ -1017,7 +1057,7 @@ history_repo() {
     [[ "$out" == *"● alpha"*"Alpha does things"* ]]                 # installed here, README's prose line
     grep -qE '^    beta +image: example/beta:1$' <<< "$out"         # not installed, no README: its image
     grep -qE '^    gamma +Gamma — a handy tool$' <<< "$out"         # a tool, its header comment
-    ! grep -qE '^    zsh' <<< "$out"                                # config folders aren't listed as tools
+    ! grep -qE '^    zsh' <<< "$out" || false                            # config folders aren't listed as tools
     run labber_main ls -x; [ "$status" -ne 0 ]
 }
 
@@ -1035,13 +1075,16 @@ history_repo() {
     out=$(sed 's/\x1b\[[0-9;]*m//g' <<< "$output")
     grep -qE '^  gamma +Gamma — a handy tool$' <<< "$out"
     grep -qE '^  bad +$' <<< "$out"                                 # no header comment: name only
-    ! grep -q zsh <<< "$out"
+    ! grep -q zsh <<< "$out" || false
     run do_tool gamma
-    [ "$status" -eq 0 ] && [ "$(cat "$T/ran")" = gamma-data ]
+    [ "$status" -eq 0 ]
+    [ "$(cat "$T/ran")" = gamma-data ]
     run do_tool bad
-    [ "$status" -ne 0 ] && [[ "$output" == *"bad: install.sh failed (exit 3)"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"bad: install.sh failed (exit 3)"* ]]
     run do_tool zsh
-    [ "$status" -ne 0 ] && [[ "$output" == *"tool 'zsh' not found"* ]]
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"tool 'zsh' not found"* ]]
     for n in ../scripts/x . .. 'a/b' '-x' ''; do run do_tool "$n"; [ "$status" -ne 0 ]; done
     [ ! -e "$T/escaped" ]
 }
@@ -1051,7 +1094,8 @@ history_repo() {
     git -C "$T/origin" add -A && git -C "$T/origin" -c user.name=t -c user.email=t@t commit -qm init
     REPO="file://$T/origin"; CLONE_RETRY_DELAY=0
     run do_tool ls
-    [ "$status" -eq 0 ] && [[ "$output" == *"no tools found"* ]]
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no tools found"* ]]
 }
 
 @test "preflight creates .env from .env.example when there's none yet" {
@@ -1081,8 +1125,10 @@ history_repo() {
     labber_place "$(dirname "$LABBER")"
     run labber_place "$T/no-such-dir"
     [ "$status" -eq 1 ]
-    [ -f "$LABBER_LIB/labber" ] && [ -d "$LABBER_LIB/files" ]
-    [ ! -e "$LABBER_LIB.new" ] && [ ! -e "$LABBER_LIB.old" ]
+    [ -f "$LABBER_LIB/labber" ]
+    [ -d "$LABBER_LIB/files" ]
+    [ ! -e "$LABBER_LIB.new" ]
+    [ ! -e "$LABBER_LIB.old" ]
 }
 
 @test "check-updates results stay writable for the services folder's owner, even after a run as root" {
@@ -1122,7 +1168,8 @@ make_repo() {   # a local git repo with services/<name>/, served as file://
     make_repo; CLONE_RETRY_DELAY=0
     git() { if [[ "$1" == clone && ! -f "$T/failed-once" ]]; then touch "$T/failed-once"; echo "fatal: unable to access: timeout" >&2; return 128; fi; command git "$@"; }
     run clone_repo_dir services/
-    [ "$status" -eq 0 ] && [ -f "$T/failed-once" ]
+    [ "$status" -eq 0 ]
+    [ -f "$T/failed-once" ]
     [[ "$output" == *"retrying"* ]]
     [ -f "${lines[-1]}/services/demo/f" ]
 }
@@ -1167,4 +1214,406 @@ make_repo() {   # a local git repo with services/<name>/, served as file://
     [ "$(env_get "$e" G)" = "http://{{ g_host }}:80" ]        # the default part of a mixed value
     [[ "$output" == *"filled in the defaults of a b g_port"* ]]
     [[ "$output" == *"4 unset value(s)"* ]]
+}
+
+# ── A5: hardening ─────────────────────────────────────────────────────────────
+
+@test "env_set/env_get: a value with both ' and \$ (and \\ and \") round-trips" {
+    printf 'K=old\n' > "$T/.env"
+    for v in "it's \$HOME" 'a\b "q" it'"'"'s $X' "plain" "has space" "\$only"; do
+        env_set "$T/.env" K "$v"
+        [ "$(env_get "$T/.env" K)" = "$v" ]
+    done
+    env_set "$T/.env" K "it's \$HOME"
+    grep -qx 'K="it'"'"'s \\$HOME"' "$T/.env"
+}
+
+@test "rand_chars and gen_valid read lengths as base 10 (hex064 is 64, not octal)" {
+    v=$(gen_value hex064); [ "${#v}" -eq 64 ]
+    gen_valid hex064 "$v"
+    v=$(gen_value '[a-z],010'); [ "${#v}" -eq 10 ]
+    gen_valid '[a-z],010' "$v"
+    run rand_chars 08x 'a-z'
+    [ "$status" -ne 0 ]
+}
+
+@test "secret_name: secret-looking placeholders are read hidden" {
+    for n in db_password API_KEY telegram_bot_token client_secret private_key smtp_passwd; do secret_name "$n"; done
+    for n in domain host port owner_username timezone keyboard; do ! secret_name "$n"; done
+}
+
+@test "sync_lock fails closed: no lock, no change" {
+    SYNC_LOCK="$T/lockdir"; mkdir "$SYNC_LOCK"          # a folder can't be opened as the lock
+    unset LABBER_SYNC_LOCKED
+    run sync_lock
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"can't open the guest's lock"* ]]
+    # and every command that changes something takes it (stop here; the lock fails first)
+    export LABBER_SYNC_LOCK="$SYNC_LOCK"
+    run bash "$LABBER" demo stop
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"can't open the guest's lock"* ]]
+    run bash "$LABBER" help
+    [ "$status" -eq 0 ]
+}
+
+@test "sync_lock: a free lock is taken, made group-writable, and a held one is waited for" {
+    SYNC_LOCK="$T/lock"; unset LABBER_SYNC_LOCKED
+    ( sync_lock; [ "$LABBER_SYNC_LOCKED" = 1 ] )
+    [ "$(stat -c %a "$SYNC_LOCK")" = 664 ]
+    flock "$SYNC_LOCK" sleep 3 &
+    sleep 0.5
+    start=$(date +%s)
+    ( sync_lock ) >/dev/null
+    [ $(( $(date +%s) - start )) -ge 2 ]
+    wait
+}
+
+@test "state_paths: only the instance, its volumes and its bind mounts; never a mount point" {
+    d="$T/svc"; mkdir -p "$d/data" "$T/outside/db"
+    MNT=$(findmnt -rn -o TARGET | awk -F/ 'NF >= 3' | head -1)     # a real mount point, two levels down
+    [ -n "$MNT" ]
+    compose_cfg() { printf '    volumes:\n      - type: bind\n        source: %s\n        target: /db\n      - type: bind\n        source: %s\n        target: /p\n' "$T/outside" "$(dirname "$MNT")"; }
+    printf 'state: [./data]\n' > "$d/labber.yml"
+    run state_paths "$d"; [ "$status" -eq 0 ]
+    [ "$output" = "$d/data" ]
+    printf 'state: ["${DB}/db"]\nX\n' > "$d/labber.yml"; printf 'DB=%s\n' "$T/outside" > "$d/.env"
+    run state_paths "$d"; [ "$status" -eq 0 ]
+    [ "$output" = "$T/outside/db" ]
+    printf 'DB=%s\n' "$T/elsewhere" > "$d/.env"; mkdir -p "$T/elsewhere/db"
+    run state_paths "$d"; [ "$status" -ne 0 ]
+    [[ "$output" == *"outside $d"* ]]
+    printf 'state: [%s]\n' "$MNT" > "$d/labber.yml"
+    run state_paths "$d"; [ "$status" -ne 0 ]
+    [[ "$output" == *"mount point"* ]]
+}
+
+@test "backups: kept under the backup folder (not /tmp), .env included and restored" {
+    export LABBER_BAK_DIR="$T/baks"
+    src="$T/src"; dest="$T/dest"; mkdir -p "$src" "$dest"
+    printf 'new\n' > "$src/compose.yml"; printf 'old\n' > "$dest/compose.yml"; printf 'K=1\n' > "$dest/.env"
+    bak=$(backup_svc_files "$src" "$dest")
+    [[ "$bak" == "$T/baks/rollback-"* ]]
+    [ "$(stat -c %a "$T/baks")" = 700 ]
+    printf 'K=2\n' > "$dest/.env"; cp "$src/compose.yml" "$dest/compose.yml"
+    restore_svc_files "$bak" "$dest" >/dev/null
+    [ "$(cat "$dest/.env")" = K=1 ]
+    [ "$(cat "$dest/compose.yml")" = old ]
+}
+
+@test "copies never write through a planted symlink" {
+    src="$T/src"; dest="$T/dest"; mkdir -p "$src/conf" "$dest" "$T/target"
+    printf 'repo\n' > "$src/conf/a.txt"; printf 'repo\n' > "$src/b.txt"
+    ln -s "$T/target" "$dest/conf"                       # a folder leading out
+    run copy_svc_files "$src" "$dest" install
+    [ "$status" -ne 0 ]
+    [ ! -e "$T/target/a.txt" ]
+    rm "$dest/conf"; mkdir "$dest/conf"
+    rm -f "$dest/b.txt"; printf 'secret\n' > "$T/victim"; ln -s "$T/victim" "$dest/b.txt"   # a file link
+    inside "$dest" b.txt
+    safe_cp "$src/b.txt" "$dest/b.txt"
+    [ "$(cat "$T/victim")" = secret ]
+    [ ! -L "$dest/b.txt" ]
+    [ "$(cat "$dest/b.txt")" = repo ]
+    # a regular file is written in place (same inode): no need to write its folder
+    ino=$(stat -c %i "$dest/b.txt"); printf 'new\n' > "$src/b.txt"
+    safe_cp "$src/b.txt" "$dest/b.txt"
+    [ "$(stat -c %i "$dest/b.txt")" = "$ino" ]
+}
+
+@test "target_home works without HOME (systemd: labber sync's self-update)" {
+    run env -u HOME -u SUDO_USER bash -c "source '$LABBER'; set +u; target_home"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$(getent passwd "$(id -u)" | cut -d: -f6)" ]
+}
+
+# ── the no-backup disk (/opt/generated) ───────────────────────────────────────
+
+@test "generated_dir: the service's folder on the disk, else ./generated; filled without a terminal" {
+    mkdir -p "$T/svc/paperless" && cd "$T/svc/paperless"
+    printf 'M={{ models_dir | generated_dir(models) }}\nC={{ c | generated_dir(cache/thumbs) }}\nX=keep\n' > .env
+    generated_mounted() { return 1; }
+    run fill_env_placeholders "$PWD/.env" </dev/null
+    [ "$status" -eq 0 ]
+    [ "$(env_get .env M)" = ./generated/models ]
+    [ "$(env_get .env C)" = ./generated/cache/thumbs ]
+    [ "$(env_get .env X)" = keep ]
+    printf 'M={{ models_dir | generated_dir(models) }}\n' > .env
+    GEN_DIR="$T/gen"; generated_mounted() { return 0; }
+    run fill_env_placeholders "$PWD/.env" </dev/null
+    [ "$(env_get .env M)" = "$T/gen/services/paperless/models" ]
+    # never changed once set: a disk added later doesn't move a service's files
+    run fill_env_placeholders "$PWD/.env" </dev/null
+    [ "$(env_get .env M)" = "$T/gen/services/paperless/models" ]
+}
+
+@test "generated_dir: only a relative folder of plain names" {
+    for s in models cache/thumbs a.b_c-d x/y.z; do generated_sub_ok "$s"; done
+    for s in "" /abs ../up a/../b ./a a/./b "a b" 'a$b' .hidden a//b a/; do ! generated_sub_ok "$s"; done
+    printf 'B={{ b | generated_dir(../etc) }}\n' > .env
+    run fill_env_placeholders "$PWD/.env" </dev/null
+    [ "$(env_get .env B)" = "{{ b | generated_dir(../etc) }}" ]
+    [[ "$output" == *"needs a relative folder name"* ]]
+}
+
+@test "generated_dir: tpl_list knows it; asked interactively like a default" {
+    command -v script >/dev/null || skip "needs script(1)"
+    run tpl_list '{{ m | generated_dir(models) }}'
+    [ "$output" = "m	generated_dir	models" ]
+    mkdir -p "$T/svc/llm" && cd "$T/svc/llm"
+    printf 'M={{ m | generated_dir(models) }}\nN={{ n | generated_dir(other) }}\n' > .env
+    printf 'source "%s"; set +u\ngenerated_mounted() { return 1; }\nfill_env_placeholders "$PWD/.env"\n' "$LABBER" > fill.sh
+    run script -qefc "bash fill.sh" /dev/null <<< $'\n/srv/models\n'
+    [[ "$output" == *"m [./generated/models]"* ]]
+    [ "$(env_get .env M)" = ./generated/models ]
+    [ "$(env_get .env N)" = /srv/models ]
+}
+
+lsblk_fixture() {   # a VM: root disk, an empty disk, an unmounted ext4, LVM, swap, ZFS, a CD-ROM, ...
+    cat <<'JSON'
+{"blockdevices":[
+ {"name":"sr0","path":"/dev/sr0","type":"rom","size":1073741312,"fstype":null,"pttype":null,"label":null,"uuid":null,"mountpoints":[null],"ro":true,"rm":true},
+ {"name":"vda","path":"/dev/vda","type":"disk","size":68719476736,"fstype":null,"pttype":"gpt","label":null,"uuid":null,"mountpoints":[null],"ro":false,"rm":false,
+  "children":[{"name":"vda1","path":"/dev/vda1","type":"part","size":1048576000,"fstype":"vfat","pttype":"gpt","label":null,"uuid":"AB-CD","mountpoints":["/boot/efi"],"ro":false,"rm":false},
+              {"name":"vda2","path":"/dev/vda2","type":"part","size":60000000000,"fstype":"ext4","pttype":"gpt","label":null,"uuid":"root-uuid","mountpoints":["/"],"ro":false,"rm":false},
+              {"name":"vda3","path":"/dev/vda3","type":"part","size":4000000000,"fstype":"ext4","pttype":"gpt","label":"spare","uuid":"spare-uuid","partuuid":"p-spare","mountpoints":[null],"ro":false,"rm":false},
+              {"name":"vda4","path":"/dev/vda4","type":"part","size":2000000000,"fstype":"swap","pttype":"gpt","label":null,"uuid":"swap-uuid","mountpoints":["[SWAP]"],"ro":false,"rm":false}]},
+ {"name":"vdb","path":"/dev/vdb","type":"disk","size":274877906944,"fstype":null,"pttype":null,"label":null,"uuid":null,"mountpoints":[null],"ro":false,"rm":false},
+ {"name":"vdc","path":"/dev/vdc","type":"disk","size":107374182400,"fstype":"ext4","pttype":null,"label":"generated","uuid":"gen-uuid","mountpoints":[null],"ro":false,"rm":false},
+ {"name":"vdd","path":"/dev/vdd","type":"disk","size":107374182400,"fstype":"LVM2_member","pttype":null,"label":null,"uuid":"lvm-uuid","mountpoints":[null],"ro":false,"rm":false,
+  "children":[{"name":"vg-lv","path":"/dev/mapper/vg-lv","type":"lvm","size":107374182400,"fstype":"ext4","pttype":null,"label":null,"uuid":"lv-uuid","mountpoints":[null],"ro":false,"rm":false}]},
+ {"name":"vde","path":"/dev/vde","type":"disk","size":107374182400,"fstype":"zfs_member","pttype":null,"label":"tank","uuid":"zfs-uuid","mountpoints":[null],"ro":false,"rm":false},
+ {"name":"vdf","path":"/dev/vdf","type":"disk","size":536870912,"fstype":null,"pttype":null,"label":null,"uuid":null,"mountpoints":[null],"ro":false,"rm":false},
+ {"name":"vdg","path":"/dev/vdg","type":"disk","size":107374182400,"fstype":null,"pttype":"dos","label":null,"uuid":null,"mountpoints":[null],"ro":false,"rm":false},
+ {"name":"vdh","path":"/dev/vdh","type":"disk","size":107374182400,"fstype":null,"pttype":null,"label":null,"uuid":null,"mountpoints":[null],"ro":"1","rm":"0"},
+ {"name":"vdi","path":"/dev/vdi","type":"disk","size":107374182400,"fstype":"ext4","pttype":null,"label":"data","uuid":"data-uuid","mountpoints":[null],"ro":false,"rm":false},
+ {"name":"loop0","path":"/dev/loop0","type":"loop","size":107374182400,"fstype":null,"pttype":null,"label":null,"uuid":null,"mountpoints":[null],"ro":false,"rm":false}
+]}
+JSON
+}
+
+@test "disk_candidates: empty disks and unmounted filesystems only" {
+    command -v jq >/dev/null || skip "needs jq"
+    run disk_candidates "UUID=data-uuid" < <(lsblk_fixture)
+    [ "$status" -eq 0 ]
+    echo "$output"
+    [ "${#lines[@]}" -eq 3 ]
+    [ "${lines[0]}" = "fs	/dev/vda3	4000000000	ext4	spare" ]     # unmounted partition of the root disk
+    [ "${lines[1]}" = "empty	/dev/vdb	274877906944		" ]
+    [ "${lines[2]}" = "fs	/dev/vdc	107374182400	ext4	generated" ]
+    # not: sr0 (CD-ROM), vda1/vda2/vda4 (mounted, swap), vdd (LVM), vde (ZFS), vdf (< 1 GiB),
+    # vdg (a partition table), vdh (read-only, "1" as older lsblk prints it), vdi (in fstab), loop0
+    run disk_candidates "" < <(lsblk_fixture)
+    [[ "$output" == *"/dev/vdi"* ]]
+    run disk_candidates $'LABEL=generated\n/dev/vda3' < <(lsblk_fixture)
+    [[ "$output" != *"/dev/vdc"* && "$output" != *"/dev/vda3"* ]]
+    run disk_candidates "PARTUUID=p-spare" < <(lsblk_fixture)
+    [[ "$output" != *"/dev/vda3"* ]]
+}
+
+@test "disk_candidates_here: fstab's sources, quoted or not, are in use" {
+    command -v jq >/dev/null || skip "needs jq"
+    lsblk() { lsblk_fixture; }; wipefs() { :; }
+    mkdir -p "$T/etc"; printf '# c\nUUID="spare-uuid" /x ext4 defaults 0 2\n' > "$T/etc/fstab"
+    awk() { if [[ "$*" == *"/etc/fstab"* ]]; then command awk "${@:1:$#-1}" "$T/etc/fstab"; else command awk "$@"; fi; }
+    run disk_candidates_here
+    [[ "$output" != *"/dev/vda3"* && "$output" == *"/dev/vdb"* ]]
+}
+
+@test "uninstall's generated folder: under services/, never Docker's containerd/" {
+    GEN_DIR=/opt/generated; generated_mounted() { return 0; }
+    [ "$(generated_value /opt/homelab/services/containerd models)" = /opt/generated/services/containerd/models ]
+    [ "$(generated_value /opt/homelab/services/immich ml-cache)" = /opt/generated/services/immich/ml-cache ]
+}
+
+@test "containerd drop-in: the unit's own command plus --root, and the mount required" {
+    GEN_DIR=/opt/generated
+    run containerd_dropin_text "/usr/bin/containerd --log-level warn"
+    [[ "$output" == *$'\nRequiresMountsFor=/opt/generated\n'* ]]
+    [[ "$output" == *$'\nExecStart=\nExecStart=/usr/bin/containerd --log-level warn --root /opt/generated/containerd'* ]]
+    # RequiresMountsFor falls back to / without a mount unit: the start guard refuses then
+    [[ "$output" == *"ExecStartPre=/bin/sh -c 'mountpoint -q /opt/generated || {"* ]]
+    run docker_dropin_text
+    [[ "$output" == *$'RequiresMountsFor=/opt/generated\n'* && "$output" == *"ExecStartPre=/bin/sh -c 'mountpoint -q /opt/generated"* ]]
+    # the guard itself: fails on a plain folder, passes on a mount point
+    GEN_DIR="$T/plain"; mkdir -p "$GEN_DIR"; g2=$(mount_guard); g2=${g2#ExecStartPre=}
+    eval "run ${g2}"; [ "$status" -eq 1 ]
+    [[ "$output" == *"is not mounted: refusing to start"* ]]
+    GEN_DIR=/proc; g3=$(mount_guard); g3=${g3#ExecStartPre=}
+    eval "run ${g3}"; [ "$status" -eq 0 ]
+}
+
+@test "st_generated_status: a VM's disk mounted but missing from /etc/fstab is todo" {
+    GEN_DIR="$T/gen"; SETUP_VIRT=vm
+    findmnt() { echo 64G; }; generated_mounted() { return 0; }
+    generated_in_fstab() { return 1; }
+    [ "$(st_generated_status)" = "todo: mounted, but not in /etc/fstab" ]
+    generated_in_fstab() { return 0; }
+    [ "$(st_generated_status)" = "done: 64G at $T/gen" ]
+    SETUP_VIRT=lxc; generated_in_fstab() { return 1; }     # an LXC's mount point comes from the host
+    [ "$(st_generated_status)" = "done: 64G at $T/gen" ]
+}
+
+@test "generated_in_fstab: the mount point with or without a trailing slash, comments ignored" {
+    GEN_DIR=/opt/generated
+    awk() { command awk "${@:1:$#-1}" "$T/fstab"; }
+    printf '# /dev/x /opt/generated ext4\nUUID=a / ext4 defaults 0 1\n' > "$T/fstab"; ! generated_in_fstab || false
+    printf 'LABEL=generated /opt/generated/ ext4 defaults 0 2\n' > "$T/fstab"; generated_in_fstab
+    printf 'LABEL=generated /opt/generated ext4 defaults 0 2\n' > "$T/fstab"; generated_in_fstab
+    printf 'LABEL=x /opt/generated-old ext4 defaults 0 2\n' > "$T/fstab"; ! generated_in_fstab || false
+}
+
+@test "setup steps: generated before docker, dockerstore after it" {
+    s=" ${SETUP_STEPS[*]} "
+    [[ "$s" == *" swap generated docker dockerstore dockerlogs "* ]]
+    SETUP_VIRT=lxc; step_applies generated
+    SETUP_VIRT=bare; ! step_applies generated || false
+    SETUP_DOCKER=0; ! step_applies dockerstore || false
+    SETUP_DOCKER=1; step_applies dockerstore
+}
+
+@test "st_generated_status: a mount point wins over an earlier 'no disk'" {
+    GEN_DIR="$T/gen"; SETUP_VIRT=vm
+    generated_mounted() { return 1; }
+    [[ "$(st_generated_status)" == todo* ]]
+    state_set generated none
+    [ "$(st_generated_status)" = "done: none (answered: no disk)" ]
+    findmnt() { echo 64G; }; generated_mounted() { return 0; }; generated_in_fstab() { return 0; }
+    [ "$(st_generated_status)" = "done: 64G at $T/gen" ]
+}
+
+@test "alloy_token: asked when setting up (hidden, checked), a local monitoring too; --yes warns" {
+    PUSH_TOKEN_FILE="$T/push-token"; tok=0123456789abcdef0123456789abcdef
+    ALLOY_PROM=http://mon.example:9090; SETUP_PUSHTOKEN=""; SETUP_YES=0
+    alloy_token <<< $'too-short\n'"$tok" >/dev/null
+    [ "$SETUP_PUSHTOKEN" = "$tok" ]                               # a wrong one is asked again
+    SETUP_PUSHTOKEN=""; out=$(alloy_token <<< '' 2>&1)            # Enter: none, with a warning
+    [ -z "$SETUP_PUSHTOKEN" ]; [[ "$out" == *"no push token"* ]]
+    echo "$tok" > "$PUSH_TOKEN_FILE"; out=$(alloy_token <<< '' 2>&1)   # Enter keeps the one there
+    [ -z "$SETUP_PUSHTOKEN" ]; [[ "$out" != *"no push token"* ]]
+    rm "$PUSH_TOKEN_FILE"; SETUP_YES=1; out=$(alloy_token 2>&1 </dev/null)   # --yes: never asks, warns
+    [[ "$out" == *"no push token"* ]]
+    SETUP_YES=0; ALLOY_PROM=http://localhost:9090; out=$(alloy_token 2>&1 </dev/null)   # its own monitoring: through the push-gate too
+    [[ "$out" == *"no push token"* ]]
+    SETUP_PUSHTOKEN=""; alloy_token <<< "$tok" >/dev/null; [ "$SETUP_PUSHTOKEN" = "$tok" ]
+    SETUP_PUSHTOKEN="$tok"; ALLOY_PROM=http://mon.example:9090; out=$(alloy_token 2>&1 </dev/null)   # given by flag
+    [ -z "$out" ]
+}
+
+@test "update: unticked where the kernel drives an NVIDIA GPU (not in an LXC); keeps the kernel's headers" {
+    PCI_DEVICES="$T/pci"; mkdir -p "$T/pci/0000:01:00.0" "$T/bin"; d="$T/pci/0000:01:00.0"
+    echo 0x1af4 > "$d/vendor"; echo 0x030000 > "$d/class"            # another vendor's display
+    PATH="$T/bin:/usr/bin:/bin"
+    SETUP_VIRT=vm; ! step_optional update || false; [ "$(st_update_status)" = todo ]
+    echo 0x10de > "$d/vendor"; echo 0x040300 > "$d/class"            # NVIDIA, but its audio function
+    ! step_optional update || false
+    echo 0x030000 > "$d/class"                                       # NVIDIA display, no driver yet
+    step_optional update; [[ "$(st_update_status)" == "todo: off by default (NVIDIA GPU"* ]]
+    SETUP_VIRT=lxc; ! step_optional update || false; [ "$(st_update_status)" = todo ]   # the host's kernel, not its own
+    rm -r "$T/pci"; mkdir "$T/pci"; printf '#!/bin/sh\n' > "$T/bin/nvidia-smi"; chmod +x "$T/bin/nvidia-smi"
+    SETUP_VIRT=vm; step_optional update                              # the driver's tool alone
+    # the run: the kernel's own headers package first, then the upgrade
+    uname() { echo 6.12.117+deb13-amd64; }
+    apt_get() { echo "apt-get $*" >> "$T/apt"; }
+    dpkg() { return 1; }
+    st_update_run
+    [ "$(head -n 1 "$T/apt")" = "apt-get -y -q install linux-headers-amd64" ]
+    grep -q full-upgrade "$T/apt"
+    rm "$T/apt"; dpkg() { return 0; }; st_update_run                # already in: not installed again
+    ! grep -q linux-headers "$T/apt" || false
+    rm "$T/apt"; rm "$T/bin/nvidia-smi"; st_update_run              # no GPU: no headers
+    ! grep -q linux-headers "$T/apt" || false
+}
+
+@test "step_optional: the no-backup disk is ticked only with something to do" {
+    SETUP_VIRT=lxc; GEN_DIR="$T/gen"
+    generated_mounted() { return 1; }
+    step_optional generated; step_optional dockerstore             # no mount point: unticked, like fail2ban
+    st_generated_status() { echo "todo: unused disk /dev/sdb"; }
+    ! step_optional generated || false                               # a VM's unused disk: ticked
+    generated_mounted() { return 0; }
+    ! step_optional generated || false; ! step_optional dockerstore || false        # mounted: ticked (images to move)
+    ! step_optional docker || false                               # the rest as before
+}
+
+@test "pushtoken step: todo without a token (a local monitoring too), done with one; run puts it in" {
+    ALLOY_CFG="$T/config.alloy"; PUSH_TOKEN_FILE="$T/push-token"; tok=0123456789abcdef0123456789abcdef
+    [[ " ${SETUP_STEPS[*]} " == *" alloy pushtoken "* ]]                      # right after Alloy
+    [ "$(st_pushtoken_status)" = "todo: after Alloy" ]                          # no Alloy yet
+    printf 'url = "http://mon.example:9090/api/v1/write"\nurl = "http://mon.example:3100/loki/api/v1/push"\n' > "$ALLOY_CFG"
+    [[ "$(st_pushtoken_status)" == "todo: none yet"* ]]
+    [ "$(alloy_cfg_url /api/v1/write)" = http://mon.example:9090 ]
+    [ "$(alloy_cfg_url /loki/api/v1/push)" = http://mon.example:3100 ]
+    # run: asked (a bad one again), then Alloy's config redone with the same URLs and the token
+    st_alloy_run() { echo "$SETUP_PROM $SETUP_LOKI $SETUP_PUSHTOKEN" > "$T/ran"; echo "$SETUP_PUSHTOKEN" > "$PUSH_TOKEN_FILE"
+                     printf '  bearer_token_file = "x"\n  bearer_token_file = "x"\n' >> "$ALLOY_CFG"; }
+    SETUP_YES=0; SETUP_PUSHTOKEN=""; SETUP_PROM=""; SETUP_LOKI=""
+    st_pushtoken_run <<< $'short\n'"$tok" >/dev/null
+    [ "$(cat "$T/ran")" = "http://mon.example:9090 http://mon.example:3100 $tok" ]
+    [ -z "$SETUP_PROM" ]                                                        # its own answers untouched
+    [ "$(st_pushtoken_status)" = done ]
+    # Enter with none there: nothing changes, stays todo
+    rm "$T/ran" "$PUSH_TOKEN_FILE"; printf 'url = "http://mon.example:9090/api/v1/write"\nurl = "http://mon.example:3100/loki/api/v1/push"\n' > "$ALLOY_CFG"
+    SETUP_PUSHTOKEN=""; st_pushtoken_run <<< '' >/dev/null
+    [ ! -e "$T/ran" ]; [[ "$(st_pushtoken_status)" == "todo: none yet"* ]]
+    # --yes: never asks
+    SETUP_YES=1; st_pushtoken_run </dev/null >/dev/null; [ ! -e "$T/ran" ]
+    # a monitoring on this machine: its Alloy pushes through the push-gate too, so the same
+    printf 'url = "http://localhost:9090/api/v1/write"\nurl = "http://localhost:3100/loki/api/v1/push"\n' > "$ALLOY_CFG"
+    [[ "$(st_pushtoken_status)" == "todo: none yet"* ]]
+    SETUP_YES=0; SETUP_PUSHTOKEN=""; st_pushtoken_run <<< "$tok" >/dev/null
+    [ "$(cat "$T/ran")" = "http://localhost:9090 http://localhost:3100 $tok" ]
+    [ "$(st_pushtoken_status)" = done ]
+}
+
+# ── consistency: help, dispatch, setup flags and steps agree ───────────────────
+
+@test "every command in labber help is dispatched" {
+    local help cmds main c missing=""
+    # the "Commands:" section only, up to the next blank line
+    help=$(usage 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | sed -n '/^Commands:/,/^$/p')
+    # "  [svc] install …", "  setup …", "  ls -r|--remote …": the first word of each command line
+    cmds=$(sed -nE 's/^  (\[svc\] )?([a-z][a-z-]+)( .*|$)/\2/p' <<< "$help" | sort -u)
+    [ "$(wc -l <<< "$cmds")" -ge 15 ]                                       # the parse found the list
+    main=$(declare -f labber_main)
+    for c in $cmds; do
+        grep -qE "(^|[[:space:]|(\"])${c}(\||\)|\"|[[:space:]]+\)?)" <<< "$main" || missing+=" $c"
+    done
+    [ -z "$missing" ] || { echo "in help, not dispatched:$missing"; false; }
+}
+
+@test "setup: every flag in its usage is parsed, and every parsed flag is in its usage and in help" {
+    local parsed usage help f missing=""
+    # the parser's case labels only (not flags named in its messages): "--yes | -y)", "--with | --without)"
+    parsed=$(declare -f setup_args | grep -E '^\s*--[a-z][a-z-]*( *\| *-[-a-z]+)* *\)' | grep -oE -- '--[a-z][a-z-]+' | sort -u)
+    usage=$(grep -oE -- '--[a-z][a-z-]+' <<< "$SETUP_USAGE" | sort -u)
+    help=$(usage 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | sed -n '/^  setup /,/^  disks /p' | grep -oE -- '--[a-z][a-z-]+' | sort -u)
+    for f in $usage; do grep -qx -- "$f" <<< "$parsed" || missing+=" usage-not-parsed:$f"; done
+    for f in $parsed; do
+        [[ "$f" == --without || "$f" == --dry-run ]] && continue           # parsed together with --with / -n
+        grep -qx -- "$f" <<< "$usage" || missing+=" parsed-not-in-usage:$f"
+        grep -qx -- "$f" <<< "$help"  || missing+=" parsed-not-in-help:$f"
+    done
+    [ -z "$missing" ] || { echo "$missing"; false; }
+}
+
+@test "every setup step has a title, a status and a run, and appears once" {
+    local id bad=""
+    [ "$(printf '%s\n' "${SETUP_STEPS[@]}" | sort | uniq -d)" = "" ]
+    for id in "${SETUP_STEPS[@]}"; do
+        [ -n "$(step_title "$id")" ] || bad+=" $id:no-title"
+        declare -F "st_${id}_status" >/dev/null || bad+=" $id:no-status"
+        declare -F "st_${id}_run" >/dev/null || bad+=" $id:no-run"
+    done
+    [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "push-tokens.sh reads labber's step list: every step but alloy" {
+    local script="$BATS_TEST_DIRNAME/../../services/monitoring/utils/push-tokens.sh" others want
+    [ -f "$script" ] || skip "no push-tokens.sh"
+    # the same sed the script runs inside a guest, on this labber
+    others=$(sed -n "s/^SETUP_STEPS=(\(.*\)).*/\1/p" "$LABBER" | head -n 1 | tr " " "\n" | grep -vx alloy | paste -sd, -)
+    want=$(printf '%s\n' "${SETUP_STEPS[@]}" | grep -vx alloy | paste -sd, -)
+    [ "$others" = "$want" ]
+    grep -qF 'sed -n "s/^SETUP_STEPS=(\(.*\)).*/\1/p"' "$script"         # and the script still uses it
 }

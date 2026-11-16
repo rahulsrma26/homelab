@@ -2,7 +2,7 @@
 services:
   # IT-Tools, the maintained fork
   it-tools:
-    image: ghcr.io/sharevb/it-tools:${IT_TOOLS_VERSION:-2026.9.27}
+    image: ghcr.io/sharevb/it-tools:${IT_TOOLS_VERSION:-2026.9.27@sha256:a49111cc027bbd04110beb2a3baf5ebc84e07f1f97589919efba619798215e6c}
     container_name: it-tools
     restart: unless-stopped
     healthcheck:
@@ -15,7 +15,7 @@ services:
       - "${IT_TOOLS_PORT:-7001}:8080"
 
   omni-tools:
-    image: iib0011/omni-tools:${OMNI_TOOLS_VERSION:-0.7.0}
+    image: iib0011/omni-tools:${OMNI_TOOLS_VERSION:-0.7.0@sha256:85f0e052a97326396c753e39de0ef74631c0783999ccca81ebc36262903ec9fa}
     container_name: omni-tools
     restart: unless-stopped
     healthcheck:
@@ -29,7 +29,7 @@ services:
 
   # BentoPDF, the self-hosted build
   bentopdf:
-    image: ghcr.io/alam00000/bentopdf-simple:${BENTOPDF_VERSION:-v2.8.10}
+    image: ghcr.io/alam00000/bentopdf-simple:${BENTOPDF_VERSION:-v2.8.10@sha256:b5227a308e796d2bd00d2eb6da9d7296093107a8be7efef38a006d06506dc3c0}
     container_name: bentopdf
     restart: unless-stopped
     healthcheck:
@@ -44,7 +44,7 @@ services:
   # LibreSpeed: its upload endpoint reads the whole upload, so it measures right behind
   # a reverse proxy too
   librespeed:
-    image: ghcr.io/librespeed/speedtest:${SPEEDTEST_VERSION:-6.3.1}
+    image: ghcr.io/librespeed/speedtest:${SPEEDTEST_VERSION:-6.3.1@sha256:bc34bf69b6c102b23ab81b6e77beb7cce321fb0d3be33ec6e80edef3e9dd8bab}
     container_name: librespeed
     restart: unless-stopped
     environment:

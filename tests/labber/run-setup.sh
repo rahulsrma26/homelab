@@ -55,9 +55,10 @@ docker build -q -t "$image" "$here/setup" >/dev/null
 # run (deleted with $tmp) — no fixed key in the repo, nobody else holds the private half
 ssh-keygen -q -t ed25519 -N '' -C labber-setup-test -f "$tmp/id_ed25519"
 key=$(cat "$tmp/id_ed25519.pub")
+push_token=0123456789abcdef0123456789abcdef0123456789abcdef   # a test value, not a real token
 
-run_mode() {
-    local mode="$1" name="labber-setup-$1-$$" answers state
+start_container() {   # start_container NAME: systemd up, /t copied in and root's
+    local name="$1" state
     containers+=("$name")
     # Docker inside needs its own storage (overlay on overlay doesn't work)
     docker run -d --name "$name" --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
@@ -72,20 +73,70 @@ run_mode() {
         sleep 1
     done
     [[ "$state" == running || "$state" == degraded ]] || { echo "FAIL: systemd did not start"; return 1; }
+}
+
+# a guest set up by the labber on main (what guests run now), then given this one: a later setup
+# must find nothing new to do but steps this version adds. Needs main in this checkout (CI has it).
+run_upgrade() {
+    local name="labber-setup-upgrade-$$" ref old_steps new_steps todo_old todo_new extra
+    ref=$(cd "$repo" && for r in forgejo/main origin/main main; do git rev-parse -q --verify "$r^{commit}" && break; done 2>/dev/null | head -n 1) || true
+    if [[ -z "$ref" ]]; then echo "skip [upgrade]: no main branch in this checkout to start from"; return 0; fi
+    mkdir -p "$tmp/old/homelab-main"
+    (cd "$repo" && git archive "$ref" labber) | tar -x -C "$tmp/old/homelab-main"
+    tar -czf "$tmp/t/labber-old.tar.gz" -C "$tmp/old" homelab-main
+    cp "$tmp/old/homelab-main/labber/labber" "$tmp/t/labber-old-bootstrap"
+    start_container "$name" || return 1
+    local dryrun='labber setup --dry-run </dev/null 2>&1 | sed "s/\x1b\[[0-9;?]*[A-Za-z]//g"'
+    todos() { grep -E '^ +[0-9]+ \[[ x]\] ' | grep -E '  todo(: .*)?$' | sed -E 's/^ +[0-9]+ \[[ x]\] //; s/  +todo.*//' | sort; }
+    echo ":: [upgrade] setup with main's labber ($(cd "$repo" && git log -1 --format=%h "$ref"): $(grep -m1 '^VERSION=' "$tmp/t/labber-old-bootstrap"))"
+    docker exec -e LABBER_URL=file:///t/labber-old.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+        bash -c "bash <(cat /t/labber-old-bootstrap) setup --yes --virt lxc --docker yes --ssh-key '$key' \
+            --prometheus http://127.0.0.2:9090 --network skip </dev/null" > "$tmp/upgrade-old.log" 2>&1 \
+        || { tail -20 "$tmp/upgrade-old.log"; echo "FAIL: setup with main's labber"; return 1; }
+    todo_old=$(docker exec "$name" bash -c "$dryrun" | todos)
+    echo ":: [upgrade] this labber over it"
+    docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+        bash -c "bash <(cat /t/labber-bootstrap) install </dev/null" >/dev/null 2>&1 || { echo "FAIL: install over main's labber"; return 1; }
+    docker exec "$name" grep -m1 '^VERSION=' /usr/local/bin/labber
+    todo_new=$(docker exec "$name" bash -c "$dryrun" | todos)
+    # steps this version adds (by title) may be todo; anything else todo now but not before is a regression
+    old_steps=$(sed -n 's/^SETUP_STEPS=(\(.*\)).*/\1/p' "$tmp/t/labber-old-bootstrap" | head -n 1)
+    new_steps=$(sed -n 's/^SETUP_STEPS=(\(.*\)).*/\1/p' "$tmp/t/labber-bootstrap" | head -n 1)
+    local added="" st
+    for st in $new_steps; do
+        [[ " $old_steps " == *" $st "* ]] || added+="$(docker exec "$name" bash -c "source /usr/local/lib/labber/labber; step_title $st")"$'\n'
+    done
+    extra=$(comm -13 <(echo "$todo_old") <(echo "$todo_new") | grep -vxF -f <(printf '%s' "$added" | grep . || echo '@none@') || true)
+    if [[ -n "$extra" ]]; then
+        echo "FAIL [upgrade]: todo after the upgrade, done before it:"; echo "$extra" | sed 's/^/  /'; return 1
+    fi
+    echo "ok   [upgrade] nothing new to do after the upgrade$([[ -n "$added" ]] && printf ' but the new step(s): %s' "$(echo "$added" | grep . | paste -sd, -)")"
+    docker exec "$name" bash -c 'labber setup --yes --without update </dev/null' > "$tmp/upgrade-new.log" 2>&1 \
+        || { tail -20 "$tmp/upgrade-new.log"; echo "FAIL [upgrade]: setup with this labber on main's machine"; return 1; }
+    echo "ok   [upgrade] setup with this labber runs on a machine main's labber set up"
+}
+
+run_mode() {
+    local mode="$1" name="labber-setup-$1-$$" answers setup_flags=""
+    start_container "$name" || return 1
+    # monitoring's push token (its Alloy pushes through the push-gate even to a local monitoring)
+    docker exec "$name" sh -c "umask 077; echo '$push_token' > /t/push-token" || return 1
 
     if [[ "$mode" == lxc ]]; then
         # treat it as a VM? n (→ LXC) · Docker services? n · checklist: a (all), Enter (run)
-        # locale: Enter · timezone, hostname: Enter · SSH key: paste (an LXC has no test
-        # login) · Prometheus URL · Loki URL: Enter · network: 3 (skip)
-        answers=$'n\nn\na\n\n'$'\n'$'\n\n'"$key"$'\n'$'http://127.0.0.1:9090\n\n'$'3\n'
+        # package cache host: Enter (none: skipped) · locale: Enter · timezone, hostname: Enter ·
+        # SSH key: paste (an LXC has no test login) · no /opt/generated, go on without? Enter (yes) ·
+        # Prometheus URL · Loki URL: Enter · push token (hidden) · network: 3 (skip)
+        answers=$'n\nn\na\n\n'$'\n'$'\n'$'\n\n'"$key"$'\n'$'\n'$'http://127.0.0.1:9090\n\n'"$push_token"$'\n'$'3\n'
     else
         # the user the Debian installer creates on a VM; setup adds it to sudo
         docker exec "$name" useradd -m -s /bin/bash admin
-        # treat it as a VM? y · Docker services? Enter (yes) · checklist: the pre-selected
-        # steps, minus 6 (time sync: a container uses the host's clock) plus 20 (fail2ban),
-        # Enter (run) · locale: Enter · admin username · timezone, hostname: Enter ·
-        # SSH key: paste · logged in? y · Prometheus URL · Loki URL: Enter
-        answers=$'y\n\n6 20\n\n'$'\n'$'admin\n'$'\n\n'"$key"$'\ny\n'$'http://127.0.0.1:9090\n\n'
+        # every answer that has a flag is given as one (answers fed in order break whenever a question
+        # comes or goes); typed: treat it as a VM? y · Docker services? Enter (yes) · checklist: Enter
+        # (run) · logged in from a second terminal? y. Time sync off (a container uses the host's
+        # clock), fail2ban on: by name.
+        answers=$'y\n\n\ny\n'
+        setup_flags="--without timesync --with fail2ban --admin admin --ssh-key '$key' --locale en_US.UTF-8 --timezone Etc/UTC --hostname labber-vm-test --prometheus http://127.0.0.1:9090 --push-token-file /t/push-token"
     fi
     echo ":: [$mode] labber setup in a fresh container"
     if [[ "$mode" == auto ]]; then
@@ -106,16 +157,22 @@ run_mode() {
         # terminal and no input at all
         docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
             bash -c "bash <(cat /t/labber-bootstrap) setup --yes --virt lxc --docker no --with nfs,fail2ban \
-                --ssh-key '$key' --prometheus http://127.0.0.1:9090 --network skip </dev/null" 2>&1 \
+                --ssh-key '$key' --prometheus http://127.0.0.1:9090 --push-token-file /t/push-token --network skip --pkg-cache 127.0.0.9 </dev/null" 2>&1 \
             | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tee "$tmp/setup-$mode.log" | grep -E '^(::|✓|!|error)' \
             || { echo "FAIL: unattended setup exited with an error"; return 1; }
+        # --pkg-cache to an address nobody answers on: set up, and apt went direct (setup completed)
+        docker exec "$name" sh -c 'grep -q pkg-cache-detect /etc/apt/apt.conf.d/01pkg-cache && [ "$(/usr/local/bin/pkg-cache-detect)" = DIRECT ]' \
+            && echo "ok   --pkg-cache: set up; with the cache unreachable apt went direct" \
+            || { echo "FAIL: --pkg-cache"; return 1; }
         docker cp "$tmp/setup-$mode.log" "$name:/root/setup1.log"
         echo ":: [$mode] checking the result (the LXC checks)"
         docker exec "$name" bats "/t/setup-lxc.bats"
         return
     fi
+    # the command in a file: the flags hold the SSH key (spaces), and no quoting layers to get wrong
+    printf 'bash <(cat /t/labber-bootstrap) setup %s\n' "$setup_flags" | docker exec -i "$name" sh -c 'cat > /t/setup-cmd' || return 1
     docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo -i "$name" \
-        script -qefc 'bash -c "bash <(cat /t/labber-bootstrap) setup"' /dev/null <<< "$answers" \
+        script -qefc 'bash /t/setup-cmd' /dev/null <<< "$answers" \
         | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r' | tee "$tmp/setup-$mode.log" \
         | grep -E '^(::|✓|!|error)' || { echo "FAIL: setup exited with an error"; return 1; }
     docker cp "$tmp/setup-$mode.log" "$name:/root/setup1.log"
@@ -130,6 +187,9 @@ run_mode() {
             grep -q "prometheus.exporter.cadvisor" /etc/alloy/config.alloy &&
             grep -q "loki.source.docker" /etc/alloy/config.alloy &&
             grep -qx User=root /etc/systemd/system/alloy.service.d/labber.conf' || return 1
+        echo ":: [lxc] what a later setup may change (isolation, --dry-run, the push token)"
+        docker exec -e LABBER_URL=file:///t/labber.tar.gz -e LABBER_REPO=file:///t/repo "$name" \
+            bats /t/setup-after.bats || return 1
     fi
     if [[ "$mode" == vm && "${LABBER_TEST_LIFECYCLE:-0}" == 1 ]]; then
         echo ":: [vm] real service lifecycle in nested Docker (as admin)"
@@ -149,5 +209,6 @@ run_mode() {
 }
 
 rc=0
-for m in $modes; do run_mode "$m" || rc=1; done
+for m in $modes; do [[ "$m" == upgrade ]] || run_mode "$m" || rc=1; done
+if [[ "${LABBER_TEST_LIFECYCLE:-0}" == 1 || " $modes " == *" upgrade "* ]]; then run_upgrade || rc=1; fi
 exit "$rc"

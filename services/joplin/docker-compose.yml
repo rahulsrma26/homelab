@@ -2,7 +2,7 @@
 # service folder (PBS) or a pg_dumpall.
 services:
   joplin-db:
-    image: postgres:${POSTGRES_VERSION:-16-alpine}
+    image: postgres:${POSTGRES_VERSION:-16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab}
     container_name: joplin-db
     restart: unless-stopped
     environment:
@@ -17,12 +17,14 @@ services:
       retries: 5
 
   joplin:
-    image: joplin/server:${JOPLIN_VERSION:-3.7.3}
+    image: joplin/server:${JOPLIN_VERSION:-3.7.3@sha256:d951ce50b6d3d542393ebc4d08bd62d9a4fb0a6f6827abb861726c83560ecf97}
     container_name: joplin
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get({host:'127.0.0.1',port:22300,path:'/api/ping',headers:{host:new URL(process.env.APP_BASE_URL).host}},r=>process.exit(r.statusCode==200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 30s
+      # quick checks while starting, then every 2 min (each check is a line in the service's log)
+      interval: 2m
+      start_interval: 5s
       timeout: 5s
       retries: 3
       start_period: 60s

@@ -1,0 +1,11 @@
+#!/bin/bash
+# SearXNG answers its JSON API (LibreChat, Firecrawl and others need format=json)
+set -euo pipefail
+port=$(grep -E '^PORT=' .env | cut -d= -f2 | tr -d "'\"")
+for i in $(seq 30); do
+    if curl -sf "http://localhost:${port:-5080}/search?q=test&format=json" | python3 -c 'import sys,json; json.load(sys.stdin)["results"]'; then
+        echo "searxng: JSON API ok"; exit 0
+    fi
+    sleep 2
+done
+echo "searxng: no JSON answer on :${port:-5080}" >&2; exit 1

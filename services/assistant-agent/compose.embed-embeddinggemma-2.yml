@@ -1,0 +1,41 @@
+# Embeddings: EmbeddingGemma 2 (text, images, video, audio in one 768d space) on its own
+# llama.cpp server, OpenAI-compatible /v1/embeddings (e.g. Frigate's semantic search, Paperless,
+# n8n). Q8_0 model + Q8_0 projector (~1 GB VRAM); not F16 (the model card: NaN or degraded vectors).
+services:
+  embeddings:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-cuda-b11870@sha256:334ddc356f5ad08dbf7eb6c98d1739a72e15b5cf452d1aeeae740c6625eb1226}
+    container_name: assistant-embed
+    restart: unless-stopped
+    # an embedding input is processed in one step: the batch must hold the longest input
+    # (an image ~280 tokens, a video or long text more)
+    command: --host 0.0.0.0 --port 5051
+      --n-gpu-layers 999
+      --embeddings
+      --ctx-size ${EMBED_CONTEXT_SIZE:-16384}
+      --batch-size ${EMBED_BATCH_SIZE:-2048}
+      --ubatch-size ${EMBED_BATCH_SIZE:-2048}
+      --parallel ${EMBED_PARALLEL:-2}
+      --threads ${THREADS:-6}
+    environment:
+      LLAMA_CACHE: /models
+      HF_TOKEN: ${HF_TOKEN:-}
+      LLAMA_ARG_HF_REPO: unsloth/embeddinggemma-2-GGUF:Q8_0
+      LLAMA_ARG_MMPROJ_URL: https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-Q8_0.gguf
+      LLAMA_ARG_ALIAS: embeddinggemma-2
+    ports:
+      - "${EMBED_PORT:-5051}:5051"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10m
+      retries: 3
+    volumes:
+      - ${MODELS_DIR:-/opt/generated/models}:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
