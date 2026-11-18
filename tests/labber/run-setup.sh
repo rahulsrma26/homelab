@@ -121,6 +121,13 @@ run_mode() {
     start_container "$name" || return 1
     # monitoring's push token (its Alloy pushes through the push-gate even to a local monitoring)
     docker exec "$name" sh -c "umask 077; echo '$push_token' > /t/push-token" || return 1
+    if [[ "$mode" != vm ]]; then
+        # as in Proxmox's Debian 13 template: openssh installed, sshd started through ssh.socket
+        docker exec "$name" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-server >/dev/null \
+            && systemctl stop ssh.service && systemctl enable -q --now ssh.socket && systemctl start ssh.service \
+            && ss -ltnp | grep ":22 " | grep -q systemd' \
+            || { echo "FAIL: openssh under ssh.socket"; return 1; }
+    fi
 
     if [[ "$mode" == lxc ]]; then
         # treat it as a VM? n (→ LXC) · Docker services? n · checklist: a (all), Enter (run)

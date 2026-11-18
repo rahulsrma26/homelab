@@ -38,6 +38,13 @@ tty_run() {
     [ -d /opt/homelab/services ]
 }
 
+@test "SSH: sshd still answers after setup (ssh.socket, as in Proxmox's Debian template)" {
+    systemctl is-active ssh.service
+    ! journalctl -u ssh.service --no-pager | grep -q 'Cannot bind any address' || false
+    run timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/22 && head -c 7 <&3'
+    [ "$output" = "SSH-2.0" ]
+}
+
 @test "SSH: key-only, root by key (LXC)" {
     grep -qx 'PermitRootLogin prohibit-password' /etc/ssh/sshd_config.d/10-labber.conf
     grep -qx 'PasswordAuthentication no' /etc/ssh/sshd_config.d/10-labber.conf

@@ -5,7 +5,7 @@
 # shellcheck disable=SC2064
 set -euo pipefail
 
-VERSION="5.0.19"
+VERSION="5.0.20"
 # Supported source settings: --source/--ref, LABBER_SOURCE/LABBER_REF, or the
 # host's source.conf (in that order). LABBER_REPO/URL remain test transport hooks.
 REPO="${LABBER_REPO:-https://github.com/rahulsrma26/homelab.git}"
@@ -2545,6 +2545,18 @@ st_ssh_status() {
     elif has_ssh_key "$u"; then echo "todo"
     else echo "todo: no SSH key for $u yet"; fi
 }
+# sshd picks up a new config: a restart, never a reload. Under ssh.socket (on in Proxmox's
+# Debian 13 template) a reload makes sshd bind port 22 itself, which the socket holds: sshd
+# exits and SSH is gone. A restart keeps open sessions (Debian's unit: KillMode=process).
+ssh_restart() {
+    local u=ssh
+    systemctl cat ssh.service &>/dev/null || u=sshd
+    systemctl restart "$u" 2>/dev/null
+    sleep 1
+    systemctl is-active --quiet "$u" && return 0
+    warn "sshd isn't running after a restart: systemctl status $u"
+    return 1
+}
 st_ssh_run() {
     pkg_installed openssh-server || apt_install openssh-server || return 1
     if ! grep -qiE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
@@ -2587,7 +2599,7 @@ EOF
         warn "sshd rejected the config — nothing changed"
         return 1
     fi
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || systemctl restart ssh
+    ssh_restart || return 1
     # what sshd really uses: an earlier file (another drop-in) can win over this one
     local eff; eff=$(/usr/sbin/sshd -T 2>/dev/null | grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin) ' || true)
     local root_ok=0      # sshd -T spells prohibit-password as without-password
@@ -2606,16 +2618,16 @@ EOF
     # an LXC can't lock you out (pct enter on the host always works): no test needed
     if [[ "$SETUP_VIRT" == lxc ]]; then
         ok "SSH is key-only (root: $root_policy)"
-        SETUP_NOTES+=("SSH is key-only now. If your key doesn't get you in: on the Proxmox host, pct enter <CTID>, then rm $SETUP_SSH_CONF && systemctl reload ssh")
+        SETUP_NOTES+=("SSH is key-only now. If your key doesn't get you in: on the Proxmox host, pct enter <CTID>, then rm $SETUP_SSH_CONF && systemctl restart ssh")
     elif (( SETUP_YES )); then
         # --yes: no second terminal to test from; the Proxmox console is the way back in
         ok "SSH is key-only (root: $root_policy)"
-        SETUP_NOTES+=("SSH is key-only now (--yes: not test-logged-in). If your key doesn't get you in: Proxmox console → rm $SETUP_SSH_CONF && systemctl reload ssh")
+        SETUP_NOTES+=("SSH is key-only now (--yes: not test-logged-in). If your key doesn't get you in: Proxmox console → rm $SETUP_SSH_CONF && systemctl restart ssh")
     elif yesno "did that log in without asking for a password?" n; then
         ok "SSH is key-only (root: $root_policy)"
     else
         rm -f "$SETUP_SSH_CONF"
-        systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+        ssh_restart || true
         warn "reverted — password logins are back on"
     fi
 }
